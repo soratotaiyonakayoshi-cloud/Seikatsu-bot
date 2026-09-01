@@ -251,6 +251,7 @@ async def main():
     class G:
         roles = [R("🛏\ufe0f寮"), R("1年"), R("🏭 工学部")]
     check("find_role: VS16違いでも一致", B.find_role(G(), "🛏寮").name, "🛏\ufe0f寮")
+    check("寮・下宿 に改名済み", any(n == "🛏寮・下宿" for _, items in B.ROLE_GROUPS.values() for _, n, _ in items), True)
     check("find_role: 空白違いでも一致", B.find_role(G(), "🏭工学部").name, "🏭 工学部")
     check("find_role: 無ければNone", B.find_role(G(), "2年"), None)
     emojis = [B._norm_role(e) for items in B.ROLE_GROUPS.values() for e, _, _ in items[1]]

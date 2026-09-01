@@ -1730,9 +1730,10 @@ async def on_member_join(member):
 ROLE_GROUPS = {
     "gakubu": ("🎓 学部", [("🏭", "🏭工学部", 0x3b82f6), ("🌱", "🌱農学部", 0x22c55e)]),
     "gakunen": ("📚 学年", [("1️⃣", "1年", 0xf59e0b), ("2️⃣", "2年", 0xef4444), ("3️⃣", "3年", 0xa855f7), ("4️⃣", "4年+", 0x06b6d4)]),
-    "seikatsu": ("🏠 生活形態", [("🏠", "🏠一人暮らし", 0xf97316), ("👪", "👪実家", 0xec4899), ("🛌", "🛏寮", 0x14b8a6)]),
+    "seikatsu": ("🏠 生活形態", [("🏠", "🏠一人暮らし", 0xf97316), ("👪", "👪実家", 0xec4899), ("🛌", "🛏寮・下宿", 0x14b8a6)]),
 }
 ROLE_MSG_IDS = {}   # message_id -> group key
+OLD_ROLE_NAMES = {"🛏寮・下宿": ("🛏寮",)}   # 改名前の名前（/setup が既存ロールを改名して引き継ぐ）
 
 def _norm_role(s):
     return re.sub(r"[\s️]", "", s or "")
@@ -1746,6 +1747,14 @@ async def ensure_roles(guild):
     for gk, (title, items) in ROLE_GROUPS.items():
         for emoji, name, color in items:
             if find_role(guild, name) is None:
+                old = next((r for on in OLD_ROLE_NAMES.get(name, ()) if (r := find_role(guild, on))), None)
+                if old is not None:
+                    try:
+                        await old.edit(name=name, reason="ロール名の変更（/setup）")
+                        created.append(f"{old.name}→{name}（改名）")
+                        continue
+                    except Exception as e:
+                        print(f"ロール改名失敗 {old.name}: {e!r}", flush=True)
                 try:
                     await guild.create_role(name=name, colour=discord.Colour(color), mentionable=True, reason="自己紹介ロール（/setup）")
                     created.append(name)
