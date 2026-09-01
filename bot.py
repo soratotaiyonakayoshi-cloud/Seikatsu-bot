@@ -234,7 +234,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(MealView())
         self.add_view(ChoreView())
         self.add_view(BathView())
-        await self.tree.sync()
+        # コマンドの同期はグローバルではなくサーバー単位で行う（即時反映）。on_ready 参照。
 
 bot = SeikatsuBot()
 
@@ -487,13 +487,49 @@ async def judge_loop():
         except Exception as e:
             print(f"judge error: {e}", flush=True)
 
+# ------------------------------------------------------------
+#  スラッシュコマンドの同期（サーバー単位＝即時反映。グローバル登録は最長1時間かかるので使わない）
+# ------------------------------------------------------------
+GLOBAL_CMDS = None   # デコレータで登録されたコマンド定義の退避先
+
+async def sync_guild_commands(guild):
+    for c in GLOBAL_CMDS:
+        bot.tree.add_command(c, guild=guild, override=True)
+    try:
+        synced = await bot.tree.sync(guild=guild)
+        print(f"コマンド同期 {guild.name}: {', '.join('/' + c.name for c in synced)}", flush=True)
+    except discord.Forbidden:
+        print(f"❌ コマンド同期失敗 {guild.name}: Botの招待URLに applications.commands スコープが無い可能性。"
+              "OAuth2 URL Generator で bot + applications.commands を選んで再招待してください。", flush=True)
+    except Exception as e:
+        print(f"❌ コマンド同期エラー {guild.name}: {e!r}", flush=True)
+
+_synced_once = False
+
 @bot.event
 async def on_ready():
+    global GLOBAL_CMDS, _synced_once
     print("====================================", flush=True)
     print(f"ログイン成功: {bot.user.name}", flush=True)
+    if not _synced_once:
+        _synced_once = True
+        GLOBAL_CMDS = list(bot.tree.get_commands())
+        for g in bot.guilds:
+            await sync_guild_commands(g)
+        # 以前のグローバル登録が残っていると候補が二重に出るので空にする
+        bot.tree.clear_commands(guild=None)
+        try:
+            await bot.tree.sync()
+        except Exception as e:
+            print(f"グローバルコマンド削除エラー: {e!r}", flush=True)
     if not judge_loop.is_running():
         judge_loop.start()
     print("====================================", flush=True)
+
+@bot.event
+async def on_guild_join(guild):
+    if GLOBAL_CMDS is not None:
+        await sync_guild_commands(guild)
 
 # ============================================================
 #  スラッシュコマンド
