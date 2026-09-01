@@ -32,7 +32,7 @@ check("食事推定 19:00", B.infer_meal_sub(datetime(2026,8,5,19,0,tzinfo=JST))
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー4種 登録OK", True, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["hantei", "help", "jikanwari", "kadai", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "tsushinbo"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["hantei", "help", "jikanwari", "jikoshokai", "kadai", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "tsushinbo"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n
@@ -244,6 +244,30 @@ async def main():
     check("チュートリアル 6枚", len(embs), 6)
     check("各embedがDiscord上限内", all(len(e) <= 6000 and all(len(f.value) <= 1024 for f in e.fields) for e in embs), True)
     check("判定時刻が埋め込まれる", f"{B.JUDGE_HOUR}:00" in (embs[0].description or ""), True)
+
+    # ロール名の照合（絵文字の異体字セレクタや空白を無視）とリアクション絵文字の一意性
+    class R:
+        def __init__(s, n): s.name = n
+    class G:
+        roles = [R("🛏\ufe0f寮"), R("1年"), R("🏭 工学部")]
+    check("find_role: VS16違いでも一致", B.find_role(G(), "🛏寮").name, "🛏\ufe0f寮")
+    check("find_role: 空白違いでも一致", B.find_role(G(), "🏭工学部").name, "🏭 工学部")
+    check("find_role: 無ければNone", B.find_role(G(), "2年"), None)
+    emojis = [B._norm_role(e) for items in B.ROLE_GROUPS.values() for e, _, _ in items[1]]
+    check("リアクション絵文字が重複しない", len(emojis), len(set(emojis)))
+    check("ロールは9個", sum(len(items[1]) for items in B.ROLE_GROUPS.values()), 9)
+    # 自己紹介カード
+    class Av:
+        url = "https://example.invalid/a.png"
+    class Mem:
+        id, display_name, display_avatar, roles = 7, "G", Av(), [R("🏭工学部"), R("その他")]
+    await B.db.execute("INSERT OR REPLACE INTO intros(user_id,f1,f2,f3,f4,f5,updated_at) VALUES('7','ひさ／工学部 2年','夜型','うどん','ガツンと','1限に行く',0)"); await B.db.commit()
+    async with B.db.execute("SELECT * FROM intros WHERE user_id='7'") as c:
+        irow = await c.fetchone()
+    card = await B.intro_card(Mem(), irow)
+    check("カード 5項目", len(card.fields), 5)
+    check("カード footer に起床目標とロール", "起床目標 07:00" in card.footer.text and "🏭工学部" in card.footer.text and "その他" not in card.footer.text, True)
+    check("テンプレ embed 上限内", len(B.intro_template_embed()) <= 6000, True)
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")

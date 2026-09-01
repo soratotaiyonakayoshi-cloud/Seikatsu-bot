@@ -30,6 +30,7 @@ TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 DB_PATH = os.getenv("DB_PATH", "seikatsu.db")
 JUDGE_HOUR = int(os.getenv("JUDGE_HOUR", "23"))
 KORA_EMOJI_NAME = os.getenv("KORA_EMOJI", "こら")
+ERAI_EMOJI_NAME = os.getenv("ERAI_EMOJI", "えらい")   # 達成した人に付ける絵文字（無ければ ✨）
 RADIO_TIME = os.getenv("RADIO_TIME", "06:30")          # ラジオ体操の開始時刻(HH:MM)
 RADIO_MP3 = os.getenv("RADIO_MP3", "radio.mp3")        # 音源ファイル（リポジトリには含めない。VMに直接置く）
 FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg")
@@ -51,6 +52,7 @@ CATEGORY_NAME = "最低限生活リズム"
 # key -> (チャンネル名, パネルの説明)
 CH = {
     "hajimeni": ("はじめに📖", "参加者向けのガイド。困ったら `/help`。"),
+    "jikoshokai": ("自己紹介🙋", "📝 ボタンでフォームから自己紹介カードを投稿。リアクションで学部・学年・生活形態のロール。"),
     "wake": ("起床🌅", "☀️ 起きたら押す／🌙 寝る前に押す。睡眠時間は自動で計算されます。\n🏃 で毎朝のラジオ体操の呼び出し（メンション）をON/OFF。"),
     "meal": ("ごはん🍚", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。"),
     "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
@@ -149,6 +151,7 @@ CREATE TABLE IF NOT EXISTS assignments(
 CREATE TABLE IF NOT EXISTS assignment_done(assignment_id INTEGER NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY(assignment_id, user_id));
 CREATE TABLE IF NOT EXISTS assignment_reminded(assignment_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(assignment_id, stage));
 CREATE TABLE IF NOT EXISTS daily_results(day TEXT NOT NULL, user_id TEXT NOT NULL, achieved INTEGER NOT NULL, misses TEXT, PRIMARY KEY(day, user_id));
+CREATE TABLE IF NOT EXISTS intros(user_id TEXT PRIMARY KEY, f1 TEXT, f2 TEXT, f3 TEXT, f4 TEXT, f5 TEXT, msg_id TEXT, updated_at INTEGER);
 CREATE TABLE IF NOT EXISTS off_days(day TEXT NOT NULL, user_id TEXT NOT NULL, reason TEXT, PRIMARY KEY(day, user_id));
 CREATE TABLE IF NOT EXISTS custom_items(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER);
 CREATE TABLE IF NOT EXISTS custom_checks(day TEXT NOT NULL, user_id TEXT NOT NULL, item_id INTEGER NOT NULL, PRIMARY KEY(day, user_id, item_id));
@@ -310,6 +313,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(ChoreView())
         self.add_view(BathView())
         self.add_view(SetteiView())
+        self.add_view(IntroView())
         self.add_dynamic_items(DoneButton)
         # コマンドの同期はグローバルではなくサーバー単位で行う（即時反映）。on_ready 参照。
 
@@ -318,6 +322,10 @@ bot = SeikatsuBot()
 def kora_emoji(guild):
     e = discord.utils.get(guild.emojis, name=KORA_EMOJI_NAME) if guild else None
     return str(e) if e else "👹"
+
+def erai_emoji(guild):
+    e = discord.utils.get(guild.emojis, name=ERAI_EMOJI_NAME) if guild else None
+    return str(e) if e else "✨"
 
 async def get_ch(key):
     cid = await meta_get("ch_" + key)
@@ -609,20 +617,20 @@ async def judge(guild, manual=False):
         else:
             achievers.append((u, streak))
             if streak in MILESTONES:
-                celebrate.append(f"🎊 <@{u['id']}> が **{streak}日連続** 達成！")
+                celebrate.append(f"🎊 <@{u['id']}> が **{streak}日連続** 達成！ {erai_emoji(guild)}")
         await gakushu_report(u["id"], u["name"] or "", day, achieved, streak, len(misses))
     tag = "（手動判定）" if manual else ""
     if not users:
         await kora_ch.send(f"📋 {day} の判定{tag}：まだ誰も最低限を設定していません。`/saitei` で決めよう。")
     elif not results:
-        await kora_ch.send(f"🎉 {day} の判定{tag}：**全員が最低限を守りました！** えらい！！")
+        await kora_ch.send(f"{erai_emoji(guild)} {day} の判定{tag}：**全員が最低限を守りました！** えらい！！")
     else:
         await kora_ch.send(f"📋 {day} の判定{tag}：{len(results)}/{len(users)} 人が最低限を守れませんでした。")
         for u, misses in results:
             await kora_ch.send(f"{emoji} <@{u['id']}> **こら！**\n" + "\n".join("・" + m for m in misses))
     if achievers:
         achievers.sort(key=lambda x: -x[1])
-        await kora_ch.send("✨ 達成：" + "、".join(f"**{u['name']}**" + (f" 🔥{st}日" if st >= 2 else "") for u, st in achievers))
+        await kora_ch.send(f"{erai_emoji(guild)} 達成：" + "、".join(f"**{u['name']}**" + (f" 🔥{st}日" if st >= 2 else "") for u, st in achievers))
     for line in celebrate:
         await kora_ch.send(line)
     if resting:
@@ -916,6 +924,7 @@ async def on_ready():
         radio_loop.start()
     if not remind_loop.is_running():
         remind_loop.start()
+    await load_role_msgs()
     print("====================================", flush=True)
 
 @bot.event
@@ -1493,17 +1502,17 @@ bot.tree.add_command(kojin)
 # ============================================================
 #  参加者向けチュートリアル（#はじめに📖 に常設・/help でいつでも）
 # ============================================================
-async def upsert_message(key, ch, embed):
+async def upsert_message(key, ch, embed, view=None):
     """meta に保存したメッセージがあれば編集、無ければ投稿（/setup を何度実行しても増えない）"""
     mid = await meta_get(key)
     if mid:
         try:
             m = await ch.fetch_message(int(mid))
-            await m.edit(embed=embed)
+            await (m.edit(embed=embed, view=view) if view is not None else m.edit(embed=embed))
             return m
         except Exception:
             pass
-    m = await ch.send(embed=embed)
+    m = await (ch.send(embed=embed, view=view) if view is not None else ch.send(embed=embed))
     await meta_set(key, m.id)
     return m
 
@@ -1519,6 +1528,8 @@ def tutorial_embeds():
             "記録はぜんぶ **自己申告**。正直に押すのがこのサークルの流儀です。"
         ), color=gold)
     e2 = discord.Embed(title="🚀 はじめの5分でやること", color=gold)
+    e2.add_field(name="⓪ 自己紹介とロール", inline=False, value=(
+        "#自己紹介🙋 の 📝 ボタンでカードを投稿（あとから更新OK）。上のリアクションで学部・学年・生活形態のロールも付けよう。"))
     e2.add_field(name="① 自分の「最低限」を決める", inline=False, value=(
         "#設定🔧 で `/saitei` を実行。例：\n`/saitei kishou:8:00 suimin:6 nyuyoku:True shokuji:2`\n"
         "→ 8時までに起きる・6時間寝る・毎日お風呂・1日2食。**全部決めなくてOK**、決めた項目だけ判定されます。"
@@ -1540,6 +1551,7 @@ def tutorial_embeds():
         "**日曜の夜**　#つうしんぼ📮 に今週の通信簿（達成率ランキング・各賞・起床/睡眠グラフ）。月末は 🏆 月間MVP"))
     e4 = discord.Embed(title="🗺 チャンネル案内", color=gold, description=(
         "#はじめに📖　このガイド\n"
+        "#自己紹介🙋　📝 自己紹介カード／リアクションでロール\n"
         "#起床🌅　☀️起きた／🌙おやすみ／🏃ラジオ体操の呼び出しON/OFF\n"
         "#ごはん🍚　🍚朝 🍱昼 🍽️夜 🍩間食（写真でも記録）\n"
         "#家事🧹　🍳料理 🧹掃除 🍽️皿洗い ＋ 洗濯5工程\n"
@@ -1555,6 +1567,7 @@ def tutorial_embeds():
         "**科目**　`/jikanwari add` 登録／`list` 一覧／`remove` 外す\n"
         "**課題**　`/kadai add` 登録／`list` 一覧／`done` 完了／`delete` 取り下げ\n"
         "**自分の項目**　`/kojin add` 追加／`list` チェックリスト／`remove` 削除\n"
+        "**自己紹介**　`/jikoshokai`（#自己紹介🙋 の 📝 ボタンでも）\n"
         "**このガイド**　`/help`"))
     e6 = discord.Embed(title="🤝 ルールと心がまえ", color=gold, description=(
         "・晒しはネタ。叱るときは愛をこめて（こら！スタンプ推奨）\n"
@@ -1579,6 +1592,204 @@ async def on_member_join(member):
             await haj.send(f"👋 ようこそ {member.mention}！まずは ① #設定🔧 で `/saitei` を実行して自分の最低限を決めて、② #起床🌅 で ☀️ を押してみよう。詳しくはこのチャンネルの上のガイドを読んでね。")
         except Exception as e:
             print(f"歓迎メッセージ失敗: {e!r}", flush=True)
+
+
+# ============================================================
+#  自己紹介（フォーム→カード）とリアクションロール
+# ============================================================
+ROLE_GROUPS = {
+    "gakubu": ("🎓 学部", [("🏭", "🏭工学部", 0x3b82f6), ("🌱", "🌱農学部", 0x22c55e)]),
+    "gakunen": ("📚 学年", [("1️⃣", "1年", 0xf59e0b), ("2️⃣", "2年", 0xef4444), ("3️⃣", "3年", 0xa855f7), ("4️⃣", "4年+", 0x06b6d4)]),
+    "seikatsu": ("🏠 生活形態", [("🏠", "🏠一人暮らし", 0xf97316), ("👪", "👪実家", 0xec4899), ("🛌", "🛏寮", 0x14b8a6)]),
+}
+ROLE_MSG_IDS = {}   # message_id -> group key
+
+def _norm_role(s):
+    return re.sub(r"[\s️]", "", s or "")
+
+def find_role(guild, name):
+    n = _norm_role(name)
+    return next((r for r in guild.roles if _norm_role(r.name) == n), None)
+
+async def ensure_roles(guild):
+    created = []
+    for gk, (title, items) in ROLE_GROUPS.items():
+        for emoji, name, color in items:
+            if find_role(guild, name) is None:
+                try:
+                    await guild.create_role(name=name, colour=discord.Colour(color), mentionable=True, reason="自己紹介ロール（/setup）")
+                    created.append(name)
+                except Exception as e:
+                    print(f"ロール作成失敗 {name}: {e!r}", flush=True)
+    return created
+
+async def post_role_panels(ch):
+    for gk, (title, items) in ROLE_GROUPS.items():
+        emb = discord.Embed(title=title, color=discord.Color.gold(),
+                            description="自分に合うリアクションを押すとロールが付きます（別のを押すと切替、外すとロールも外れます）\n\n"
+                                        + "　".join(f"{e} {n}" for e, n, _ in items))
+        msg = await upsert_message(f"rolemsg_{gk}", ch, emb)
+        ROLE_MSG_IDS[msg.id] = gk
+        for e, _, _ in items:
+            try:
+                await msg.add_reaction(e)
+            except Exception as ex:
+                print(f"リアクション追加失敗 {e}: {ex!r}", flush=True)
+
+async def load_role_msgs():
+    for gk in ROLE_GROUPS:
+        mid = await meta_get(f"rolemsg_{gk}")
+        if mid:
+            ROLE_MSG_IDS[int(mid)] = gk
+
+async def _reaction_role(payload, add):
+    gk = ROLE_MSG_IDS.get(payload.message_id)
+    if not gk or not payload.guild_id or (bot.user and payload.user_id == bot.user.id):
+        return
+    guild = bot.get_guild(payload.guild_id)
+    if not guild:
+        return
+    em = _norm_role(str(payload.emoji))
+    items = ROLE_GROUPS[gk][1]
+    target = next((n for e, n, _ in items if _norm_role(e) == em), None)
+    if not target:
+        return
+    role = find_role(guild, target)
+    if not role:
+        return
+    member = guild.get_member(payload.user_id)
+    if member is None:
+        try:
+            member = await guild.fetch_member(payload.user_id)
+        except Exception:
+            return
+    if member.bot:
+        return
+    try:
+        if add:
+            others = [r for r in (find_role(guild, n) for _, n, _ in items if n != target) if r and r in member.roles]
+            if others:
+                await member.remove_roles(*others, reason="ロール切替")
+            if role not in member.roles:
+                await member.add_roles(role, reason="リアクションロール")
+        elif role in member.roles:
+            await member.remove_roles(role, reason="リアクション解除")
+    except discord.Forbidden:
+        print("❌ ロール付与に失敗：Botのロールが対象ロールより上にあるか、「ロールの管理」権限を確認してください", flush=True)
+    except Exception as e:
+        print(f"ロール操作エラー: {e!r}", flush=True)
+
+@bot.event
+async def on_raw_reaction_add(payload):
+    await _reaction_role(payload, True)
+
+@bot.event
+async def on_raw_reaction_remove(payload):
+    await _reaction_role(payload, False)
+
+# ---- 自己紹介 ----
+INTRO_FIELDS = [
+    ("👤 呼び名・学部学科・学年・生活形態", "例：ひさ／工学部 生命工学科 2年／一人暮らし", discord.TextStyle.short, True, 100),
+    ("😵 生活で苦手なこと・朝型/夜型・寝がちな時間", "例：皿が溜まる。完全に夜型で2時就寝", discord.TextStyle.paragraph, False, 200),
+    ("🍚 いつものごはん・得意料理・ハマってること", "例：冷凍うどん。カレーは得意。最近はスプラ", discord.TextStyle.paragraph, False, 200),
+    ("👹 叱られ方の希望／🤝 できること・してほしいこと", "例：ガツンと来てOK／モーニングコールできます", discord.TextStyle.paragraph, False, 200),
+    ("🎯 今学期の一言目標", "例：1限に生きて行く", discord.TextStyle.short, False, 100),
+]
+
+def intro_template_embed():
+    return discord.Embed(
+        title="🙋 自己紹介のテンプレ",
+        color=discord.Color.gold(),
+        description=(
+            "下の **📝 自己紹介を書く／更新する** を押すとフォームが出ます。あとから何度でも更新OK（カードが上書きされます）。\n\n"
+            "**① 呼び名・学部学科・学年・生活形態**　例：ひさ／工学部 生命工学科 2年／一人暮らし\n"
+            "**② 生活で苦手なこと・朝型/夜型・寝がちな時間**　例：皿が溜まる。完全に夜型で2時就寝\n"
+            "**③ いつものごはん・得意料理・最近ハマってること**　例：冷凍うどん。カレーは得意。スプラ\n"
+            "**④ 叱られ方の希望／できること・してほしいこと**　例：ガツンと来てOK／モーニングコールできます\n"
+            "**⑤ 今学期の一言目標**　例：1限に生きて行く\n\n"
+            "カードには起床目標・連続達成・履修科目数・ロールが自動で添えられます。"
+            "書き終わったら、上のリアクションで **学部・学年・生活形態のロール** も付けてね。\n"
+            "※ 本名・住所・連絡先は書かないでね。"
+        ))
+
+async def intro_card(member, row):
+    emb = discord.Embed(title=f"🙋 {member.display_name}", color=discord.Color.gold())
+    try:
+        emb.set_thumbnail(url=member.display_avatar.url)
+    except Exception:
+        pass
+    for (label, _, _, _, _), key in zip(INTRO_FIELDS, ("f1", "f2", "f3", "f4", "f5")):
+        v = (row[key] or "").strip()
+        if v:
+            emb.add_field(name=label, value=v[:1024], inline=False)
+    u = await get_user(member.id)
+    day = day_str(now_jst())
+    streak = await streak_of(member.id, day)
+    n = len(await user_course_rows(member.id))
+    tags = [r.name for r in getattr(member, "roles", []) if any(_norm_role(r.name) == _norm_role(nm) for _, items in ROLE_GROUPS.values() for _, nm, _ in items)]
+    foot = f"☀️ 起床目標 {u['wake_deadline'] if u and u['wake_deadline'] else '未設定'} ・ 🔥 {streak}日連続 ・ 📚 履修 {n}科目"
+    if tags:
+        foot += " ・ 🏷 " + " ".join(tags)
+    emb.set_footer(text=foot)
+    return emb
+
+async def post_intro_card(member):
+    async with db.execute("SELECT * FROM intros WHERE user_id=?", (str(member.id),)) as c:
+        row = await c.fetchone()
+    ch = await get_ch("jikoshokai")
+    if not row or not ch:
+        return None
+    emb = await intro_card(member, row)
+    if row["msg_id"]:
+        try:
+            m = await ch.fetch_message(int(row["msg_id"]))
+            await m.edit(embed=emb)
+            return m
+        except Exception:
+            pass
+    m = await ch.send(embed=emb)
+    await db.execute("UPDATE intros SET msg_id=? WHERE user_id=?", (str(m.id), str(member.id)))
+    await db.commit()
+    return m
+
+class IntroModal(discord.ui.Modal, title="🙋 自己紹介"):
+    def __init__(self, defaults=None):
+        super().__init__()
+        defaults = defaults or {}
+        self.inputs = []
+        for i, (label, ph, style, req, mx) in enumerate(INTRO_FIELDS, 1):
+            ti = discord.ui.TextInput(label=label[:45], placeholder=ph[:100], style=style, required=req, max_length=mx,
+                                      default=(defaults.get(f"f{i}") or None))
+            self.add_item(ti)
+            self.inputs.append(ti)
+
+    async def on_submit(self, interaction):
+        member = interaction.user
+        await ensure_user(member)
+        vals = [t.value.strip() for t in self.inputs]
+        await db.execute("INSERT INTO intros(user_id,f1,f2,f3,f4,f5,updated_at) VALUES(?,?,?,?,?,?,?) "
+                         "ON CONFLICT(user_id) DO UPDATE SET f1=excluded.f1,f2=excluded.f2,f3=excluded.f3,f4=excluded.f4,f5=excluded.f5,updated_at=excluded.updated_at",
+                         (str(member.id), *vals, int(now_jst().timestamp())))
+        await db.commit()
+        m = await post_intro_card(member)
+        await interaction.response.send_message("✅ 自己紹介を投稿しました！" + (f" → {m.jump_url}" if m else "（#自己紹介🙋 が未設定です。/setup を実行してください）"), ephemeral=True)
+
+async def open_intro_modal(interaction):
+    async with db.execute("SELECT * FROM intros WHERE user_id=?", (str(interaction.user.id),)) as c:
+        row = await c.fetchone()
+    await interaction.response.send_modal(IntroModal(dict(row) if row else None))
+
+class IntroView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="📝 自己紹介を書く／更新する", style=discord.ButtonStyle.primary, custom_id="sk_intro")
+    async def intro(self, interaction, button):
+        await open_intro_modal(interaction)
+
+@bot.tree.command(name="jikoshokai", description="自己紹介を書く／更新する（#自己紹介🙋 にカードが投稿されます）")
+async def jikoshokai_command(interaction):
+    await open_intro_modal(interaction)
 
 # ============================================================
 #  スラッシュコマンド
@@ -1623,6 +1834,13 @@ async def setup_command(interaction):
             print(f"#はじめに📖 の権限設定失敗: {e!r}", flush=True)
         for i, emb in enumerate(tutorial_embeds()):
             await upsert_message(f"tutorial_{i}", haj, emb)
+    role_note = ""
+    jik = await get_ch("jikoshokai")
+    if jik:
+        created = await ensure_roles(guild)
+        await post_role_panels(jik)
+        await upsert_message("intro_panel", jik, intro_template_embed(), view=IntroView())
+        role_note = "ロール：" + (f"作成 {', '.join(created)}" if created else "既存を利用") + "\n"
     audio_state = "あり ✅" if os.path.exists(RADIO_MP3) else f"なし ⚠️ VMに {RADIO_MP3} を置いてください"
     await meta_set("guild_id", guild.id)
     for key in VIEW_FACTORY:
@@ -1656,6 +1874,7 @@ async def setup_command(interaction):
         "✅ セットアップ完了\n" + (f"改名：{', '.join(renamed)}\n" if renamed else "") + (f"新規作成：{', '.join('#' + n for n in made)}\n" if made else "既存チャンネルを再利用しました\n")
         + f"判定時刻：毎晩 {JUDGE_HOUR}:00 → #叱責👹\n"
         + f"叱り絵文字：`:{KORA_EMOJI_NAME}:`（{kora_emoji(guild)}）\n"
+        + role_note
         + f"ラジオ体操：毎朝 {RADIO_TIME} に {vc.mention} で再生（音源 {audio_state}）", ephemeral=True)
 
 async def nakama_of(uid, wake_deadline):
