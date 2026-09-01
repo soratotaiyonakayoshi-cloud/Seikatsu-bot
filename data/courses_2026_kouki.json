@@ -1,0 +1,8553 @@
+[
+{
+"name": "教育課程論",
+"teacher": "降旗",
+"room": "L1321",
+"code": "V0203",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木6"
+]
+},
+{
+"name": "道徳教育論",
+"teacher": "三浦",
+"room": "L1321",
+"code": "V0208",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火6"
+]
+},
+{
+"name": "幾何学",
+"teacher": "有馬",
+"room": "L1341",
+"code": "a1603",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "A1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "物理学基礎",
+"teacher": "張・(小島)",
+"room": "L1341",
+"code": "a1604",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "A1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "プログラミングII",
+"teacher": "藤田桂",
+"room": "L0012",
+"code": "a1612",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "A1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月4"
+]
+},
+{
+"name": "プログラミングII",
+"teacher": "清水郁",
+"room": "L0013",
+"code": "a1613",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "A2",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月4"
+]
+},
+{
+"name": "プログラミングII演習",
+"teacher": "(未定)・(櫛山)",
+"room": "L0012",
+"code": "a1614",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "A1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月5"
+]
+},
+{
+"name": "プログラミングII演習",
+"teacher": "中川・瀋",
+"room": "L0013",
+"code": "a1615",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "A2",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月5"
+]
+},
+{
+"name": "基礎電気回路",
+"teacher": "上野",
+"room": "L0811",
+"code": "a1618",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "A1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "論理回路",
+"teacher": "近藤",
+"room": "L0821",
+"code": "a1619",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "A1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "論理回路",
+"teacher": "藤吉",
+"room": "L1331",
+"code": "a1620",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "A2",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "基礎回路演習",
+"teacher": "梅林・久保",
+"room": "グリーンホール",
+"code": "a1621",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "A1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木4"
+]
+},
+{
+"name": "先進知能情報システム工学実験I",
+"teacher": "各教員",
+"room": "",
+"code": "a1624",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "A1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "基礎電気回路",
+"teacher": "高瀬",
+"room": "L0821",
+"code": "a1626",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "A2",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "線形代数学II",
+"teacher": "(澤田)",
+"room": "L0035",
+"code": "a1923",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "A1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "線形代数学II",
+"teacher": "原",
+"room": "L1321",
+"code": "a1924",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "A2",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "微分積分学IIおよび演習",
+"teacher": "村田実",
+"room": "L1331",
+"code": "a1931",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "A1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "微分積分学IIおよび演習",
+"teacher": "(田中順)",
+"room": "L0031",
+"code": "a1932",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "A2",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "工学基礎実験",
+"teacher": "",
+"room": "",
+"code": "b0008",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "工学応用数学",
+"teacher": "三沢",
+"room": "L0035",
+"code": "b1202",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "力学I",
+"teacher": "山本",
+"room": "L0022",
+"code": "b1205",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "電磁気学Iおよび演習",
+"teacher": "伊藤輝",
+"room": "L0023",
+"code": "b1206",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "生理学",
+"teacher": "(笠原)",
+"room": "L0023",
+"code": "b1209",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "線形代数学II",
+"teacher": "(與口)",
+"room": "L0032",
+"code": "b1918",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "微分積分学IIおよび演習",
+"teacher": "(大久保)",
+"room": "L0035",
+"code": "b1926",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "工学基礎実験",
+"teacher": "",
+"room": "",
+"code": "c0009",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "振動・波動の物理",
+"teacher": "(臼井)",
+"room": "L1341",
+"code": "c1303",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "物理化学I",
+"teacher": "齋藤拓",
+"room": "L0016",
+"code": "c1305",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "物理化学I",
+"teacher": "熊谷",
+"room": "L0017",
+"code": "c1306",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C2",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "無機化学I",
+"teacher": "森田",
+"room": "L0016",
+"code": "c1309",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "無機化学I",
+"teacher": "兼橋",
+"room": "L0017",
+"code": "c1310",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C2",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "有機化学II",
+"teacher": "齊藤亜・村岡",
+"room": "L0831",
+"code": "c1313",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "化学英語",
+"teacher": "(基本)・ルイス",
+"room": "L1151",
+"code": "c1316",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "化学英語(アドバンスクラス)",
+"teacher": "ルイス",
+"room": "L1151",
+"code": "c1318",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月4"
+]
+},
+{
+"name": "線形代数学II",
+"teacher": "(澤田)",
+"room": "L0035",
+"code": "c1919",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木4"
+]
+},
+{
+"name": "微分積分学IIおよび演習",
+"teacher": "直井",
+"room": "L1321",
+"code": "c1927",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "野口雄",
+"room": "L0024",
+"code": "el0046",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "(及川)",
+"room": "L0014",
+"code": "el0047",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "宇野",
+"room": "L1217",
+"code": "el0048",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "(宇佐見)",
+"room": "L0016",
+"code": "el0049",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "陳",
+"room": "L1211",
+"code": "el0050",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "浅井",
+"room": "L1111",
+"code": "el0051",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "(栗原)",
+"room": "L0017",
+"code": "el0052",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "石塚",
+"room": "L1216",
+"code": "el0053",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "田中太",
+"room": "L0711",
+"code": "el0054",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "陳",
+"room": "L1211",
+"code": "el0055",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "宇野",
+"room": "L1217",
+"code": "el0056",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "岡野一",
+"room": "L0024",
+"code": "el0057",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "(宇佐見)",
+"room": "L0016",
+"code": "el0058",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "畠山雄",
+"room": "L1111",
+"code": "el0059",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "(及川)",
+"room": "L0014",
+"code": "el0060",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "(栗原)",
+"room": "L0017",
+"code": "el0061",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "石塚",
+"room": "L1216",
+"code": "el0062",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "田中太",
+"room": "L0711",
+"code": "el0063",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "(スレイボー)",
+"room": "L1212",
+"code": "el0064",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "アジマン",
+"room": "L0711",
+"code": "el0065",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "(トラウブ)",
+"room": "L0016",
+"code": "el0066",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "ムーア",
+"room": "L1216",
+"code": "el0067",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "(坂本)",
+"room": "L0024",
+"code": "el0068",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "(コプロフスキー)",
+"room": "L1211",
+"code": "el0069",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "(ヒグチ)",
+"room": "L0014",
+"code": "el0070",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "(ヴァンベ)",
+"room": "L1217",
+"code": "el0071",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "(ボールドウィン)",
+"room": "L0017",
+"code": "el0072",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "(スレイボー)",
+"room": "L1212",
+"code": "el0073",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "アジマン",
+"room": "L0711",
+"code": "el0074",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "(トラウブ)",
+"room": "L0016",
+"code": "el0075",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "ムーア",
+"room": "L1216",
+"code": "el0076",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "(坂本)",
+"room": "L0024",
+"code": "el0077",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "(コプロフスキー)",
+"room": "L1211",
+"code": "el0078",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "(ヒグチ)",
+"room": "L0014",
+"code": "el0079",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "(ヴァンベ)",
+"room": "L1217",
+"code": "el0080",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "English Discussion",
+"teacher": "(ボールドウィン)",
+"room": "L0017",
+"code": "el0081",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "中国語II",
+"teacher": "④(孫)",
+"room": "L0711",
+"code": "fl0099",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "ドイツ語II",
+"teacher": "①リーザ",
+"room": "L0017",
+"code": "fl0101",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "ドイツ語II",
+"teacher": "②(山口)",
+"room": "L1216",
+"code": "fl0102",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "ドイツ語II",
+"teacher": "③リーザ",
+"room": "L0017",
+"code": "fl0103",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "異文化理解のためのドイツ語",
+"teacher": "リーザ",
+"room": "L0017",
+"code": "fl0105",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火5"
+]
+},
+{
+"name": "フランス語II",
+"teacher": "①飛嶋",
+"room": "L0024",
+"code": "fl0108",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "フランス語II",
+"teacher": "②飛嶋",
+"room": "L0024",
+"code": "fl0109",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "異文化理解のためのフランス語",
+"teacher": "飛嶋",
+"room": "L0024",
+"code": "fl0110",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火5"
+]
+},
+{
+"name": "スペイン語II",
+"teacher": "①(高野)",
+"room": "L1211",
+"code": "fl0113",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "スペイン語II",
+"teacher": "②(高野)",
+"room": "L1211",
+"code": "fl0114",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "異文化理解のためのスペイン語",
+"teacher": "(高野)",
+"room": "L1211",
+"code": "fl0115",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火5"
+]
+},
+{
+"name": "中国語II",
+"teacher": "②任",
+"room": "L0016",
+"code": "fl0122",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "中国語II",
+"teacher": "⑥(李)",
+"room": "L1217",
+"code": "fl0123",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "中国語II",
+"teacher": "⑤任",
+"room": "L0016",
+"code": "fl0125",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "異文化理解のための中国語",
+"teacher": "任",
+"room": "L0016",
+"code": "fl0127",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火5"
+]
+},
+{
+"name": "中国語II",
+"teacher": "①(孫)",
+"room": "L0711",
+"code": "fl0292",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "中国語II",
+"teacher": "③(李)",
+"room": "L1217",
+"code": "fl0293",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "現代倫理論",
+"teacher": "大倉",
+"room": "L1331",
+"code": "hs0014",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "現代宗教論",
+"teacher": "(春近)",
+"room": "L0035",
+"code": "hs0016",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "多文化共生論",
+"teacher": "岩田",
+"room": "L0014",
+"code": "hs0018",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "日本国憲法",
+"teacher": "(山根)",
+"room": "L1341",
+"code": "hs0020",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "経済学",
+"teacher": "草処・丸",
+"room": "L0013",
+"code": "hs0022",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "社会学",
+"teacher": "竹本",
+"room": "L0031",
+"code": "hs0024",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "歴史学",
+"teacher": "高橋美",
+"room": "L0026",
+"code": "hs0026",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "統計学",
+"teacher": "(宮田)",
+"room": "L0023",
+"code": "l1101",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "物理学I",
+"teacher": "養王田",
+"room": "L1321",
+"code": "l1104",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金5"
+]
+},
+{
+"name": "物理学II",
+"teacher": "太田",
+"room": "L0811",
+"code": "l1105",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "基礎生物学実験",
+"teacher": "各教員",
+"room": "",
+"code": "l1109",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "生命有機化学I",
+"teacher": "櫻井",
+"room": "L1153",
+"code": "l1111",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "生命化学I",
+"teacher": "池袋・浅野",
+"room": "L1153",
+"code": "l1112",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "分子生物学I",
+"teacher": "新垣",
+"room": "L1153",
+"code": "l1113",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月4"
+]
+},
+{
+"name": "線形代数学II",
+"teacher": "(柴田)",
+"room": "L1321",
+"code": "l1917",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "微分積分学IIおよび演習",
+"teacher": "平野雄",
+"room": "L1331",
+"code": "l1925",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "熱工学I",
+"teacher": "岩本",
+"room": "L0026",
+"code": "m1506",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "材料力学I",
+"teacher": "高田智",
+"room": "L0026",
+"code": "m1507",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "機械力学I",
+"teacher": "倉科",
+"room": "L0026",
+"code": "m1508",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "機械電子工学I",
+"teacher": "岩見",
+"room": "L0026",
+"code": "m1509",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "機械システム特別研究I",
+"teacher": "中本・大下",
+"room": "L0022",
+"code": "m1517",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "機械システム特別研究I",
+"teacher": "中本・大下",
+"room": "L0631",
+"code": "m1518",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M2",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "線形代数学II",
+"teacher": "(與口)",
+"room": "L0032",
+"code": "m1921",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "線形代数学II",
+"teacher": "合田",
+"room": "L0033",
+"code": "m1922",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M2",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "微分積分学IIおよび演習",
+"teacher": "(岡崎)",
+"room": "L0022",
+"code": "m1929",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "微分積分学IIおよび演習",
+"teacher": "(高野)",
+"room": "L0023",
+"code": "m1930",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M2",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "若月・福本・下田・(大島)",
+"room": "",
+"code": "sp0297",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "横山 ・(小谷)・(奥村)・(大島)",
+"room": "",
+"code": "sp0298",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "横山・田中秀・(小谷)・(奥村)",
+"room": "",
+"code": "sp0299",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "化学物理基礎",
+"teacher": "伏見・長津",
+"room": "L0821",
+"code": "u1404",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "生物学基礎",
+"teacher": "寺田",
+"room": "L1331",
+"code": "u1405",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "情報プログラミング",
+"teacher": "池上",
+"room": "L0811",
+"code": "u1409",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "有機化学基礎",
+"teacher": "(飯島)",
+"room": "L1321",
+"code": "u1411",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金5"
+]
+},
+{
+"name": "ケミカルエンジニアリング基礎",
+"teacher": "稲澤・滝山",
+"room": "L0811",
+"code": "u1412",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木5"
+]
+},
+{
+"name": "情報応用プログラミング",
+"teacher": "池上",
+"room": "L0811",
+"code": "u1413",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "力学および演習",
+"teacher": "嘉治・蓮見",
+"room": "L0831",
+"code": "u1414",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "線形代数学II",
+"teacher": "(木原)",
+"room": "L0811",
+"code": "u1920",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木4"
+]
+},
+{
+"name": "微分積分学IIおよび演習",
+"teacher": "中園",
+"room": "L0831",
+"code": "u1928",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "代数学",
+"teacher": "原",
+"room": "L1321",
+"code": "a2653",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "情報理論",
+"teacher": "渡辺峻・中山",
+"room": "L0026",
+"code": "a2656",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "情報化社会と職業",
+"teacher": "岡野一",
+"room": "L0811",
+"code": "a2660",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "社会言語情報論",
+"teacher": "宇野・野口",
+"room": "L0811",
+"code": "a2661",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "計算機アーキテクチャ",
+"teacher": "中條",
+"room": "L1321",
+"code": "a2665",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "計算機アーキテクチャ演習",
+"teacher": "丹羽",
+"room": "7号館3K・4K",
+"code": "a2666",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "電磁気学II",
+"teacher": "有馬",
+"room": "L1331",
+"code": "a2668",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AE",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "基礎電子回路",
+"teacher": "上野",
+"room": "L0811",
+"code": "a2669",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AE",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "電子デバイスI",
+"teacher": "白樫",
+"room": "L0811",
+"code": "a2670",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AE",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "信号処理論",
+"teacher": "田中聡",
+"room": "L0026",
+"code": "a2671",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木4"
+]
+},
+{
+"name": "基礎情報数学",
+"teacher": "早川",
+"room": "L0026",
+"code": "a2672",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "アルゴリズム論",
+"teacher": "金子",
+"room": "L0026",
+"code": "a2673",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "先進知能情報システム工学実験III",
+"teacher": "各教員",
+"room": "",
+"code": "a2675",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "オブジェクト指向プログラミング",
+"teacher": "近藤",
+"room": "L1331",
+"code": "a2676",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木5"
+]
+},
+{
+"name": "知能情報システム工学実験1A",
+"teacher": "各教員",
+"room": "",
+"code": "a2677",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "マイクロプロセッサ",
+"teacher": "岩崎",
+"room": "L1321",
+"code": "a2680",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AE",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月4"
+]
+},
+{
+"name": "知能情報システム工学実験1B",
+"teacher": "各教員",
+"room": "",
+"code": "a2681",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AE",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "熱統計力学",
+"teacher": "村山",
+"room": "L0811",
+"code": "b2254",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "振動・波動",
+"teacher": "生嶋",
+"room": "L0012",
+"code": "b2256",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "電子回路",
+"teacher": "前橋",
+"room": "L0035",
+"code": "b2259",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "生物学",
+"teacher": "田畑",
+"room": "L0032",
+"code": "b2260",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "生体医用工学I",
+"teacher": "西舘",
+"room": "L1341",
+"code": "b2261",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月4"
+]
+},
+{
+"name": "計測・制御",
+"teacher": "石田",
+"room": "L0035",
+"code": "b2262",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "医用画像工学",
+"teacher": "桝田",
+"room": "L1341",
+"code": "b2263",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "AI入門",
+"teacher": "高木",
+"room": "L0013",
+"code": "b2264",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "臨床医学基礎II",
+"teacher": "吉野大",
+"room": "L0013",
+"code": "b2268",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "生体医用システム工学実験I",
+"teacher": "各教員",
+"room": "",
+"code": "b2271",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "微分方程式II",
+"teacher": "(岡崎)",
+"room": "L0024",
+"code": "c2352",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "関数論",
+"teacher": "(木原)",
+"room": "L0016",
+"code": "c2355",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "光学基礎",
+"teacher": "渡邊",
+"room": "L0032",
+"code": "c2358",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "生体材料化学I",
+"teacher": "村上義",
+"room": "L0013",
+"code": "c2359",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "環境物質化学概論",
+"teacher": "(岩崎)",
+"room": "L1321",
+"code": "c2360",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水4"
+]
+},
+{
+"name": "反応速度論",
+"teacher": "村岡",
+"room": "L0032",
+"code": "c2363",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木4"
+]
+},
+{
+"name": "反応速度論",
+"teacher": "森啓",
+"room": "L0033",
+"code": "c2364",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C2",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木4"
+]
+},
+{
+"name": "無機化学III",
+"teacher": "(藤原)",
+"room": "L0032",
+"code": "c2372",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "無機化学III",
+"teacher": "岩間",
+"room": "L0033",
+"code": "c2373",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C2",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "無機化学演習",
+"teacher": "小峰",
+"room": "L0016",
+"code": "c2374",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "無機化学演習",
+"teacher": "沖田",
+"room": "L0017",
+"code": "c2375",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C2",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "有機化学演習",
+"teacher": "坪内",
+"room": "L0022",
+"code": "c2380",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "有機化学演習",
+"teacher": "(末木)",
+"room": "L0023",
+"code": "c2381",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C2",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "量子化学II",
+"teacher": "赤井",
+"room": "L0024",
+"code": "c2383",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "機器分析I",
+"teacher": "岡本",
+"room": "L1341",
+"code": "c2384",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "有機化学IV",
+"teacher": "齋藤亜",
+"room": "L1331",
+"code": "c2386",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "高分子化学I",
+"teacher": "中野",
+"room": "L0811",
+"code": "c2387",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "応用化学実験II",
+"teacher": "各教員",
+"room": "",
+"code": "c2389",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月3",
+"火3"
+]
+},
+{
+"name": "English Reading",
+"teacher": "未定",
+"room": "L1212",
+"code": "el0206",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "English Reading",
+"teacher": "畠山雄",
+"room": "L0017",
+"code": "el0207",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "English Reading",
+"teacher": "野口雄",
+"room": "L1217",
+"code": "el0208",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "English Reading",
+"teacher": "田中太",
+"room": "L1211",
+"code": "el0209",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "English Reading",
+"teacher": "岡野一",
+"room": "L0024",
+"code": "el0210",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "English Reading",
+"teacher": "宇野",
+"room": "L1111",
+"code": "el0211",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "English Reading",
+"teacher": "浅井",
+"room": "L0016",
+"code": "el0212",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "English Reading",
+"teacher": "(菱山)",
+"room": "L1216",
+"code": "el0213",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "English Reading",
+"teacher": "(水野)",
+"room": "L0711",
+"code": "el0214",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "English Reading",
+"teacher": "未定",
+"room": "L1212",
+"code": "el0215",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "English Reading",
+"teacher": "畠山雄",
+"room": "L0017",
+"code": "el0216",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "English Reading",
+"teacher": "野口雄",
+"room": "L1217",
+"code": "el0217",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "English Reading",
+"teacher": "石塚",
+"room": "L1211",
+"code": "el0218",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "English Reading",
+"teacher": "浅井",
+"room": "L0016",
+"code": "el0219",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "English Reading",
+"teacher": "宇野",
+"room": "L1111",
+"code": "el0220",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "English Reading",
+"teacher": "飛嶋",
+"room": "L0024",
+"code": "el0221",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "English Reading",
+"teacher": "(菱山)",
+"room": "L1216",
+"code": "el0222",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "English Reading",
+"teacher": "(水野)",
+"room": "L0711",
+"code": "el0223",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "バイオ統計学・アドバンスドバイオインフォマティクス",
+"teacher": "川野・津川裕",
+"room": "L1151",
+"code": "l2152",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "生命物理化学II",
+"teacher": "一川",
+"room": "L0023",
+"code": "l2156",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "生命分析化学",
+"teacher": "中澤",
+"room": "L0811",
+"code": "l2158",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "生命無機化学",
+"teacher": "新垣・篠原",
+"room": "L1151",
+"code": "l2159",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "細胞生物学II",
+"teacher": "齊藤美",
+"room": "L0022",
+"code": "l2164",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "ライフサイエンス基礎演習II",
+"teacher": "各教員",
+"room": "L1321",
+"code": "l2166",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "生命科学英語I",
+"teacher": "モリ",
+"room": "L0012",
+"code": "l2167",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "生命科学英語I",
+"teacher": "モリ",
+"room": "L0012",
+"code": "l2168",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L2",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "蛋白質・核酸科学",
+"teacher": "池袋・津川若・黒田",
+"room": "L1151",
+"code": "l2169",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "植物工学・蛋白質工学",
+"teacher": "山田晃",
+"room": "L1331",
+"code": "l2170",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火5"
+]
+},
+{
+"name": "先端機器分析学",
+"teacher": "太田・野口",
+"room": "L0023",
+"code": "l2171",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月4"
+]
+},
+{
+"name": "環境バイオテクノロジー・分子細胞工学",
+"teacher": "野口・篠原恭・福谷",
+"room": "L1153",
+"code": "l2172",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "バイオセンシング",
+"teacher": "池袋",
+"room": "L1331",
+"code": "l2173",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "メディシナルケミストリー",
+"teacher": "長澤・(広川)",
+"room": "L1151",
+"code": "l2174",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "マリンバイオテクノロジー",
+"teacher": "田中剛",
+"room": "L1331",
+"code": "l2175",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "生命工学実験II",
+"teacher": "各教員",
+"room": "L1151",
+"code": "l2177",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木3",
+"金3"
+]
+},
+{
+"name": "関数論",
+"teacher": "(陸名)",
+"room": "L1341",
+"code": "m2563",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "連続体力学亀田・花﨑",
+"teacher": "",
+"room": "L1341",
+"code": "m2568",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "生産加工学I",
+"teacher": "笹原・大和",
+"room": "L1341",
+"code": "m2573",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "伝熱学I",
+"teacher": "村田章",
+"room": "L1321",
+"code": "m2574",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "制御工学II",
+"teacher": "有泉",
+"room": "L1321",
+"code": "m2578",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "機械システム設計製図",
+"teacher": "(中畑)",
+"room": "L1217",
+"code": "m2579",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月4"
+]
+},
+{
+"name": "機械システム設計製図",
+"teacher": "(中畑)",
+"room": "L0711",
+"code": "m2581",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "機械システム設計製図",
+"teacher": "(佐々木)",
+"room": "L0711",
+"code": "m2582",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M2",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月4"
+]
+},
+{
+"name": "コンピュータプログラミングII",
+"teacher": "堀・髙田智",
+"room": "L1341",
+"code": "m2585",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "機械システム工学実験II",
+"teacher": "有泉・大島・佐藤慶・秀野・森・宮下・李鹿・河端・森下",
+"room": "",
+"code": "m2588",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "弾性力学",
+"teacher": "小笠原",
+"room": "L0821",
+"code": "m2589",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "機械電子工学II",
+"teacher": "前田孝",
+"room": "L1331",
+"code": "m2590",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M2",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "光工学",
+"teacher": "岩見",
+"room": "L0821",
+"code": "m2591",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M2",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "微分方程式II",
+"teacher": "(木原)",
+"room": "L0023",
+"code": "u2452",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "数理統計学",
+"teacher": "(與口)",
+"room": "L0831",
+"code": "u2454",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "生物化学",
+"teacher": "寺田",
+"room": "L1153",
+"code": "u2455",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木4"
+]
+},
+{
+"name": "工業熱力学",
+"teacher": "櫻井誠",
+"room": "L0821",
+"code": "u2459",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "量子力学および演習",
+"teacher": "畠山・阿部",
+"room": "L0821",
+"code": "u2462",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "システム工学基礎",
+"teacher": "池上",
+"room": "L0831",
+"code": "u2463",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "プロセス制御工学",
+"teacher": "金",
+"room": "L1321",
+"code": "u2464",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "化学物理工学先端プロジェクト",
+"teacher": "各教員",
+"room": "L1153",
+"code": "u2466",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "化学物理工学実験I",
+"teacher": "各教員",
+"room": "",
+"code": "u2467",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "化学物理工学実験II",
+"teacher": "各教員",
+"room": "",
+"code": "u2468",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "拡散分離工学",
+"teacher": "徳山",
+"room": "L0821",
+"code": "u2470",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "粉粒体プロセス工学",
+"teacher": "(北村)",
+"room": "L0023",
+"code": "u2471",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "電磁波工学",
+"teacher": "清水大",
+"room": "L0022",
+"code": "u2472",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "電気回路理論",
+"teacher": "室尾",
+"room": "L0022",
+"code": "u2473",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "電子デバイス工学",
+"teacher": "ビスリ",
+"room": "L0022",
+"code": "u2474",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "VLSI設計",
+"teacher": "中條",
+"room": "L0016",
+"code": "a3665",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木4"
+]
+},
+{
+"name": "計測・制御工学",
+"teacher": "鄧",
+"room": "L1331",
+"code": "a3666",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "先進知能情報システム工学実験IV",
+"teacher": "各教員",
+"room": "",
+"code": "a3669",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金5"
+]
+},
+{
+"name": "研究室体験配属",
+"teacher": "各教員",
+"room": "",
+"code": "a3670",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "先端数理情報数学",
+"teacher": "中山",
+"room": "L0032",
+"code": "a3672",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "計算機ネットワーク",
+"teacher": "中山・山井",
+"room": "L0811",
+"code": "a3678",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "データベース",
+"teacher": "山田浩・並木",
+"room": "L0035",
+"code": "a3679",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "関数プログラミング",
+"teacher": "(前田)",
+"room": "L0023",
+"code": "a3680",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "数理最適化",
+"teacher": "宮代",
+"room": "L1321",
+"code": "a3681",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "先端電子情報数学",
+"teacher": "瀧山",
+"room": "L0032",
+"code": "a3683",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AE",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "サステイナブルエネルギー工学",
+"teacher": "瀋",
+"room": "L0811",
+"code": "a3686",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火5"
+]
+},
+{
+"name": "熱統計力学",
+"teacher": "瀧山",
+"room": "L1321",
+"code": "a3691",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AE",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "パワーエレクトロニクス",
+"teacher": "鄧",
+"room": "L0035",
+"code": "a3692",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AE",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "先端電子デバイス",
+"teacher": "張",
+"room": "L0014",
+"code": "a3693",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AE",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "知能情報システム工学特別講義専門科学技術英語",
+"teacher": "ボールドウィン",
+"room": "L1217",
+"code": "a3695",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "知能情報システム工学特別講義",
+"teacher": "(自然言語処理)・古宮",
+"room": "L1321",
+"code": "a3696",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "知能情報システム工学特別講義専門科学技術英語",
+"teacher": "ボールドウィン",
+"room": "L1217",
+"code": "a3697",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AS",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水4"
+]
+},
+{
+"name": "研究室体験配属",
+"teacher": "各教員",
+"room": "",
+"code": "a3698",
+"faculty": "工",
+"dept": "知能情報システム工学科",
+"cls": "AE",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "医用計測・機器",
+"teacher": "田中洋",
+"room": "L0033",
+"code": "b3261",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "生体フォトニクス",
+"teacher": "西舘",
+"room": "L0033",
+"code": "b3262",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "医用デバイス工学",
+"teacher": "前橋",
+"room": "L0033",
+"code": "b3263",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "病理学・薬理学",
+"teacher": "赤木・(非常勤)",
+"room": "L0012",
+"code": "b3264",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "研究室体験配属",
+"teacher": "各教員",
+"room": "",
+"code": "b3266",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月3",
+"木2",
+"金3"
+]
+},
+{
+"name": "流体力学吉野大02",
+"teacher": "",
+"room": "L0022",
+"code": "b3268",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "化学工学",
+"teacher": "未定",
+"room": "L0012",
+"code": "c3356",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "高分子物性II",
+"teacher": "富永",
+"room": "L0035",
+"code": "c3358",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "物性化学",
+"teacher": "帯刀",
+"room": "L0013",
+"code": "c3359",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "半導体化学",
+"teacher": "村上尚",
+"room": "L0013",
+"code": "c3361",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "有機工業化学",
+"teacher": "加納",
+"room": "L0033",
+"code": "c3364",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "有機金属化学",
+"teacher": "平野雅",
+"room": "L0013",
+"code": "c3365",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "応用化学特別講義(フロンティア)集中講義",
+"teacher": "(各教員)",
+"room": "",
+"code": "c3370",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "応用化学特別実験",
+"teacher": "各教員",
+"room": "",
+"code": "c3372",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月5",
+"火5"
+]
+},
+{
+"name": "研究室体験配属",
+"teacher": "各教員",
+"room": "",
+"code": "c3373",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月3",
+"火3"
+]
+},
+{
+"name": "Academic Communication",
+"teacher": "ムーア",
+"room": "L0016",
+"code": "el0226",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木5"
+]
+},
+{
+"name": "フランス語II",
+"teacher": "飛嶋",
+"room": "L0032",
+"code": "fl0300",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "研究室体験配属",
+"teacher": "各教員",
+"room": "",
+"code": "l3151",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月1",
+"火1"
+]
+},
+{
+"name": "生命科学英語II",
+"teacher": "(ロリツェン)",
+"room": "L0017",
+"code": "l3154",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "生命技術英語II",
+"teacher": "畠山",
+"room": "L1153",
+"code": "l3163",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "食品・医薬品開発工学",
+"teacher": "津川若・稲田・浅野",
+"room": "L1153",
+"code": "l3166",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "レギュラトリーサイエンス",
+"teacher": "斉藤",
+"room": "L0031",
+"code": "l3168",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "生命工学実験IV",
+"teacher": "各教員",
+"room": "",
+"code": "l3172",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月3",
+"火2"
+]
+},
+{
+"name": "生命工学研究概論",
+"teacher": "各教員",
+"room": "",
+"code": "l3173",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水4",
+"水6",
+"木3",
+"金3",
+"金5"
+]
+},
+{
+"name": "生命科学英語II",
+"teacher": "(ロリツェン)",
+"room": "L0017",
+"code": "l3180",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L2",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "研究室体験配属",
+"teacher": "各教員",
+"room": "",
+"code": "m3560",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火5"
+]
+},
+{
+"name": "数値流体力学および演習",
+"teacher": "岩本",
+"room": "L0012",
+"code": "m3565",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "機械材料工学II",
+"teacher": "木村",
+"room": "L0631",
+"code": "m3566",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "宇宙推進工学",
+"teacher": "西田",
+"room": "L0631",
+"code": "m3569",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "航空宇宙流体力学",
+"teacher": "西田",
+"room": "L0631",
+"code": "m3570",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "有限要素法および演習",
+"teacher": "山中",
+"room": "L0631",
+"code": "m3571",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "ガスタービン",
+"teacher": "(山根)",
+"room": "L0033",
+"code": "m3572",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M1",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "車両工学",
+"teacher": "ポンサトーン",
+"room": "L0631",
+"code": "m3578",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M2",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "生産システム工学",
+"teacher": "笹原",
+"room": "L0631",
+"code": "m3580",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M2",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "人間科学計測法",
+"teacher": "田中秀・横山",
+"room": "L0033",
+"code": "m3581",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M2",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "振動制御および演習",
+"teacher": "鎌田",
+"room": "L0016",
+"code": "m3582",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M2",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "メカトロニクスおよび演習",
+"teacher": "水内",
+"room": "L0631",
+"code": "m3583",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M2",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "研究室体験配属",
+"teacher": "各教員",
+"room": "",
+"code": "m3587",
+"faculty": "工",
+"dept": "機械システム工学科",
+"cls": "M2",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金5"
+]
+},
+{
+"name": "画像情報工学",
+"teacher": "(鈴木)",
+"room": "L0022",
+"code": "u3453",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "エネルギー変換工学",
+"teacher": "伏見・池上・嘉治・利谷",
+"room": "L0031",
+"code": "u3455",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木4"
+]
+},
+{
+"name": "エネルギーシステム工学",
+"teacher": "秋澤",
+"room": "L0023",
+"code": "u3456",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "バイオプロセス工学",
+"teacher": "利谷",
+"room": "L0031",
+"code": "u3458",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "光エレクトロニクス",
+"teacher": "嘉治・宮地",
+"room": "L0032",
+"code": "u3461",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "電子物性工学",
+"teacher": "香取",
+"room": "L0012",
+"code": "u3463",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "エンジニアリング製図演習",
+"teacher": "(鈴木)",
+"room": "L0014",
+"code": "u3464",
+"faculty": "工",
+"dept": "化学物理工学科",
+"cls": "U",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "教職実践演習",
+"teacher": "三浦",
+"room": "L1321",
+"code": "V0209",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"月6"
+]
+},
+{
+"name": "応用化学セミナーII",
+"teacher": "各教員",
+"room": "",
+"code": "c4303",
+"faculty": "工",
+"dept": "応用化学科",
+"cls": "C",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "ベンチャービジネス論",
+"teacher": "(深沼)・(桑本)",
+"room": "L0026",
+"code": "ia0204",
+"faculty": "工",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "理系人材のためのマーケティング",
+"teacher": "(中村)",
+"room": "L0026",
+"code": "ia0253",
+"faculty": "工",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"水5"
+]
+},
+{
+"name": "日本語初級",
+"teacher": "本郷",
+"room": "13号館505室",
+"code": "jp0128",
+"faculty": "工",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "日本語中級",
+"teacher": "本郷",
+"room": "13号館505室",
+"code": "jp0131",
+"faculty": "工",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"月4"
+]
+},
+{
+"name": "日本語上級ステップアップ",
+"teacher": "本郷",
+"room": "13号館505室",
+"code": "jp0133",
+"faculty": "工",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "Intercultural Communication",
+"teacher": "本郷 ほか",
+"room": "L1342",
+"code": "md0247",
+"faculty": "工",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"月5"
+]
+},
+{
+"name": "三大学連携特別講義II(Communicating Science)",
+"teacher": "安村",
+"room": "13号館505室",
+"code": "md0310",
+"faculty": "工",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"水4"
+]
+},
+{
+"name": "技術者倫理",
+"teacher": "(八角)",
+"room": "L0035",
+"code": "sg0197",
+"faculty": "工",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "キャリア・プランニング",
+"teacher": "藤井",
+"room": "L0026",
+"code": "sg0233",
+"faculty": "工",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"木5"
+]
+},
+{
+"name": "知的財産権・特許法",
+"teacher": "(矢野)",
+"room": "L0026",
+"code": "sg0285",
+"faculty": "工",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"火6"
+]
+},
+{
+"name": "地学",
+"teacher": "(青塚)",
+"room": "L0026",
+"code": "t1934",
+"faculty": "工",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"水4"
+]
+},
+{
+"name": "工学部特別講義I英語で学ぶ生物学~細胞間コミュニケーション",
+"teacher": "安村",
+"room": "13号館505室",
+"code": "t5006",
+"faculty": "工",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"火5"
+]
+},
+{
+"name": "生物生産学原論",
+"teacher": "An教員",
+"room": "1講─24",
+"code": "AN1001",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "フィールド実験実習II",
+"teacher": "FS教員ほか",
+"room": "",
+"code": "AN1019",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "植物分子遺伝学",
+"teacher": "山田哲",
+"room": "1講─16",
+"code": "AN1021",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "畜産学総論",
+"teacher": "青木ほか",
+"room": "1講─24",
+"code": "AN1027",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "(浅岡)",
+"room": "2─22",
+"code": "EL1012a",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "(安達)",
+"room": "2講─11",
+"code": "EL1012b",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "アジマン",
+"room": "2講─31",
+"code": "EL1012c",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "(山下)",
+"room": "2講─12",
+"code": "EL1012d",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "岡野",
+"room": "2講─22",
+"code": "EL1012e",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "野口",
+"room": "2講─21",
+"code": "EL1012f",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "畠山",
+"room": "1講─23",
+"code": "EL1012g",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "石塚",
+"room": "1講─16",
+"code": "EL1012h",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "田中太",
+"room": "2─23",
+"code": "EL1012i",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "Academic WritingI",
+"teacher": "浅井",
+"room": "1講─21",
+"code": "EL1012j",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "ドイツ語II",
+"teacher": "リーザ",
+"room": "2講─12",
+"code": "FL1002a",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "ドイツ語II",
+"teacher": "リーザ",
+"room": "2講─12",
+"code": "FL1002b",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木4"
+]
+},
+{
+"name": "異文化理解のためのドイツ語",
+"teacher": "リーザ",
+"room": "2講─12",
+"code": "FL1003",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木5"
+]
+},
+{
+"name": "フランス語II",
+"teacher": "飛嶋",
+"room": "1講─16",
+"code": "FL1005a",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "フランス語II",
+"teacher": "飛嶋",
+"room": "1講─16",
+"code": "FL1005b",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木4"
+]
+},
+{
+"name": "異文化理解のためのフランス語",
+"teacher": "飛嶋",
+"room": "1講─16",
+"code": "FL1006",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木5"
+]
+},
+{
+"name": "スペイン語II",
+"teacher": "(渋下)",
+"room": "1講─12",
+"code": "FL1008a",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "スペイン語II",
+"teacher": "(渋下)",
+"room": "1講─12",
+"code": "FL1008b",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木4"
+]
+},
+{
+"name": "異文化理解のためのスペイン語",
+"teacher": "(渋下)",
+"room": "1講─12",
+"code": "FL1009",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木5"
+]
+},
+{
+"name": "中国語II",
+"teacher": "任",
+"room": "2講─22",
+"code": "FL1011a",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "中国語II",
+"teacher": "(倪)",
+"room": "2講─11",
+"code": "FL1011b",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "中国語II",
+"teacher": "任",
+"room": "2講─22",
+"code": "FL1011c",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木4"
+]
+},
+{
+"name": "中国語II",
+"teacher": "(倪)",
+"room": "2講─11",
+"code": "FL1011d",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木4"
+]
+},
+{
+"name": "異文化理解のための中国語",
+"teacher": "任",
+"room": "2講─22",
+"code": "FL1012",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木5"
+]
+},
+{
+"name": "現代倫理論",
+"teacher": "大倉",
+"room": "1講─25",
+"code": "HS1001",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "多文化共生論",
+"teacher": "(金理)",
+"room": "1講─24",
+"code": "HS1003",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "日本国憲法",
+"teacher": "(山根)",
+"room": "2─11",
+"code": "HS1010b",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "経 済 学",
+"teacher": "新井・曲木",
+"room": "2─23",
+"code": "HS1011b",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "社 会 学",
+"teacher": "竹本",
+"room": "2─21",
+"code": "HS1012",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "三大学連携特別講義I(Sustainable Global Food Production Systems)",
+"teacher": "アジマン",
+"room": "",
+"code": "MD1108",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "三大学連携特別講義II(Perspective of the Humanitites and Social Science on \"Kyosei Society\")",
+"teacher": "吉田央ほか",
+"room": "",
+"code": "MD1502",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "三大学連携特別講義II(Advanced Biology)",
+"teacher": "古谷・安村・(グホ)",
+"room": "",
+"code": "MD1504",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "地域生態システム学II",
+"teacher": "学科教員",
+"room": "1講─24",
+"code": "RN1002",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火5"
+]
+},
+{
+"name": "地域生態システム学実習II",
+"teacher": "学科教員",
+"room": "",
+"code": "RN1005",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "生物多様性保全学",
+"teacher": "岩井・諸澤",
+"room": "1─11",
+"code": "RN1014",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "水資源管理論",
+"teacher": "ブランジェ・浅田・斎藤・島本・南光・(加藤)",
+"room": "1─11",
+"code": "RN1015",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "地域社会システム計画論",
+"teacher": "大倉・榎本・中島・聶・竹本・高橋・澤・平原・汪",
+"room": "1講─24",
+"code": "RN1016",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "人と動物の関係論",
+"teacher": "澤ほか",
+"room": "1講─25",
+"code": "RN1017",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "動物福祉論",
+"teacher": "鈴木馨・大倉",
+"room": "1講─25",
+"code": "RN1018",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "下田・横山・若月・(山田美)",
+"room": "体育館ほか",
+"code": "SP1003a",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "横山・若月・(山田美)",
+"room": "体育館ほか",
+"code": "SP1003b",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "有機化学II",
+"teacher": "梶田",
+"room": "2─11",
+"code": "bn1004",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "分子生物学",
+"teacher": "佐々木信",
+"room": "1講─24",
+"code": "bn1005",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "植物生理学",
+"teacher": "(金勝)",
+"room": "2─21",
+"code": "bn1006",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水4"
+]
+},
+{
+"name": "植物保護学",
+"teacher": "森山・(髙木)ほか・学科教員",
+"room": "2─11",
+"code": "bn1007",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "動物・植物科学",
+"teacher": "杉村・渡辺誠・大川・横山・森・遠藤・田中知・村上・臼井・濱部・木賀田",
+"room": "1講─25・1講─16",
+"code": "bo1002",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "生態・進化学",
+"teacher": "佐藤俊・本林・小林勇",
+"room": "1講─24・",
+"code": "bo1004",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "生物学実験",
+"teacher": "An教員",
+"room": "",
+"code": "bo1005a",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "生物学実験",
+"teacher": "小松ほか・学科教員",
+"room": "1講─15",
+"code": "bo1005b",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "生物学実験",
+"teacher": "多羅尾ほか・学科教員",
+"room": "1講─15",
+"code": "bo1005c",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "物理化学Aクラス",
+"teacher": "中田",
+"room": "1講─25",
+"code": "ch1001a",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "物理化学Bクラス",
+"teacher": "殿塚・鈴木絵・宮田",
+"room": "2─21",
+"code": "ch1001b",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "物理化学Cクラス",
+"teacher": "(四方)",
+"room": "2─11",
+"code": "ch1001c",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "物理化学Dクラス",
+"teacher": "(片島)",
+"room": "1講─24",
+"code": "ch1001d",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "化学実験",
+"teacher": "小松ほか・学科教員",
+"room": "1講─14",
+"code": "ch1004a",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "化学実験",
+"teacher": "",
+"room": "",
+"code": "ch1004b",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "化学実験",
+"teacher": "中嶋ほか・学科教員",
+"room": "1講─14",
+"code": "ch1004c",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "環境分析化学",
+"teacher": "(髙栁)",
+"room": "1─11",
+"code": "en1005",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "環境計測学",
+"teacher": "(須田)",
+"room": "2─22",
+"code": "en1006",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "資源リサイクル学",
+"teacher": "小瀬",
+"room": "2講─31",
+"code": "en1030",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "地圏環境学",
+"teacher": "梅澤有",
+"room": "1講─24",
+"code": "en1031",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月4"
+]
+},
+{
+"name": "大気環境学",
+"teacher": "松田",
+"room": "2─11",
+"code": "en1032",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "海洋環境学",
+"teacher": "大地",
+"room": "1講─24",
+"code": "en1033",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "地 学",
+"teacher": "梅澤有・鈴木馨・(濵名)",
+"room": "1講─25",
+"code": "go1001",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "Introduction to Charcoal Application",
+"teacher": "及川",
+"room": "",
+"code": "ia1010",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "微分積分学I Aクラス",
+"teacher": "(木原)",
+"room": "1講─25",
+"code": "ma1002a",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "微分積分学I Bクラス",
+"teacher": "(坂井)",
+"room": "1─11",
+"code": "ma1002b",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "微分積分学I Cクラス",
+"teacher": "(木原)",
+"room": "1講─25",
+"code": "ma1002c",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水4"
+]
+},
+{
+"name": "微分積分学I Dクラス",
+"teacher": "(坂井)",
+"room": "1─11",
+"code": "ma1002d",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水4"
+]
+},
+{
+"name": "物理学実験",
+"teacher": "山下・中島",
+"room": "1講─13",
+"code": "ph1003b",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "運動器・神経系解剖学",
+"teacher": "木賀田・(柴田遠隔)",
+"room": "1講─22",
+"code": "vn1105",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "解剖学実習I",
+"teacher": "金田・木賀田・(柴田)",
+"room": "",
+"code": "vn1107",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "生理学II",
+"teacher": "(岩)木崎・大沼",
+"room": "1講─22",
+"code": "vn1112",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "生理学実習",
+"teacher": "永岡・山本ゆ",
+"room": "",
+"code": "vn1113",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "獣医代謝生化学",
+"teacher": "永岡",
+"room": "4─32",
+"code": "vn1115",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木4"
+]
+},
+{
+"name": "生化学実習",
+"teacher": "永岡・山本",
+"room": "",
+"code": "vn1116",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "畜産学概論",
+"teacher": "青木ほか",
+"room": "1講─24",
+"code": "vn1117",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "微生物学総論",
+"teacher": "村越",
+"room": "4─32",
+"code": "vn1201",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "農学部特別講義I(住民参加型計画立案手法)",
+"teacher": "小池",
+"room": "",
+"code": "AG1023",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "農学部特別講義I(自然保護と自然資源管理I)",
+"teacher": "平原",
+"room": "",
+"code": "AG1025",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "農学部特別講義I(自然保護と自然資源管理II)",
+"teacher": "諸澤",
+"room": "",
+"code": "AG1026",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "農学部特別講義II(野生動物保全管理学)",
+"teacher": "諸澤・髙田隼",
+"room": "",
+"code": "AG1042",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "農学部特別講義II(野生動物被害管理学)",
+"teacher": "小池",
+"room": "",
+"code": "AG1043",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "農学部特別講義II(鳥獣・環境関連法規・政策)",
+"teacher": "諸澤・髙田",
+"room": "",
+"code": "AG1045",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "生物生産学実験基礎",
+"teacher": "An教員",
+"room": "",
+"code": "AN2008",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月3",
+"金3"
+]
+},
+{
+"name": "植物栄養・肥料学",
+"teacher": "大津",
+"room": "2講─22",
+"code": "AN2015",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "作 物 学",
+"teacher": "大川・安達",
+"room": "1─11",
+"code": "AN2023",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "園芸学I",
+"teacher": "鈴木栄・伴・(望月)",
+"room": "1講─24",
+"code": "AN2024",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "家畜形態・生理学",
+"teacher": "新村・(新井克)",
+"room": "1講─24",
+"code": "AN2029",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "農業昆虫学II",
+"teacher": "伊藤克・横山・本林・阿部・天竺桂",
+"room": "2─21",
+"code": "AN2030",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "農業経営学",
+"teacher": "草処・(千年)",
+"room": "2─21",
+"code": "AN2038",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "食料システム経済学",
+"teacher": "(中嶋・菊島)",
+"room": "2─11",
+"code": "AN2039",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水4"
+]
+},
+{
+"name": "English Reading",
+"teacher": "(安達)",
+"room": "2講─11",
+"code": "EL2006a",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "English Reading",
+"teacher": "(浅岡)",
+"room": "2─22",
+"code": "EL2006b",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "English Reading",
+"teacher": "畠山",
+"room": "1講─23",
+"code": "EL2006c",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "English Reading",
+"teacher": "(山下)",
+"room": "2講─12",
+"code": "EL2006d",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "English Reading",
+"teacher": "岡野",
+"room": "2講─22",
+"code": "EL2006e",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "English Reading",
+"teacher": "野口",
+"room": "2講─21",
+"code": "EL2006f",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "English Reading",
+"teacher": "石塚",
+"room": "1講─16",
+"code": "EL2006g",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "English Reading",
+"teacher": "浅井",
+"room": "1講─21",
+"code": "EL2006h",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "English Reading",
+"teacher": "田中太",
+"room": "2─23",
+"code": "EL2006i",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "English Reading",
+"teacher": "",
+"room": "1講─17",
+"code": "EL2006j",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "English Exam Preparation CourseII",
+"teacher": "(松尾)",
+"room": "",
+"code": "EL2008b",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "アントレプレナーシップ入門",
+"teacher": "跡部",
+"room": "",
+"code": "IA2101",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "共生福祉論",
+"teacher": "",
+"room": "2─11",
+"code": "RN2028",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木4"
+]
+},
+{
+"name": "環境生理生態学",
+"teacher": "下田・福本",
+"room": "2講─21",
+"code": "RN2029",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "野生動物保全学",
+"teacher": "金子",
+"room": "2─11",
+"code": "RN2030",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火5"
+]
+},
+{
+"name": "森林計画学",
+"teacher": "加用",
+"room": "2─11",
+"code": "RN2031",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "空間情報学",
+"teacher": "山下",
+"room": "1講─25",
+"code": "RN2032",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "土壌生態管理学",
+"teacher": "豊田",
+"room": "2講─21",
+"code": "RN2033",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月5"
+]
+},
+{
+"name": "山地保全学",
+"teacher": "白木",
+"room": "1講─12",
+"code": "RN2034",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "森林生産システム学",
+"teacher": "岩岡",
+"room": "2講─12",
+"code": "RN2035",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "GISの基礎と演習",
+"teacher": "赤坂・小林・(真砂・若月)",
+"room": "2─23",
+"code": "RN2036",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "樹木学",
+"teacher": "崔",
+"room": "2講─31",
+"code": "RN2037",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "力学I",
+"teacher": "島本・渡辺将",
+"room": "2講─11",
+"code": "RN2038",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "土質力学",
+"teacher": "斎藤・(中島亨)",
+"room": "2─22",
+"code": "RN2039",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木4"
+]
+},
+{
+"name": "水理学",
+"teacher": "浅田",
+"room": "2講─12",
+"code": "RN2040",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "農村地域計画学",
+"teacher": "中島",
+"room": "2講─11",
+"code": "RN2041",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火5"
+]
+},
+{
+"name": "農業技術論",
+"teacher": "帖佐",
+"room": "1講─22",
+"code": "RN2042",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "応用解析・情報学",
+"teacher": "ブランジェ・浅田・斎藤・渡辺将",
+"room": "2講─21",
+"code": "RN2043",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "環境文化史",
+"teacher": "高橋",
+"room": "1講─22",
+"code": "RN2044",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木5"
+]
+},
+{
+"name": "環境公法",
+"teacher": "榎本",
+"room": "2─22",
+"code": "RN2045",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月4"
+]
+},
+{
+"name": "環境経済学",
+"teacher": "吉田央",
+"room": "2─11",
+"code": "RN2046",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "農業経営学",
+"teacher": "草処・(千年)",
+"room": "2─21",
+"code": "RN2047",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "造園学",
+"teacher": "赤坂・(桝井)",
+"room": "1講─12",
+"code": "RN2072",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "森林計画学実習",
+"teacher": "加用・平原",
+"room": "",
+"code": "RN2088",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "山地測量学実習",
+"teacher": "白木・南光",
+"room": "",
+"code": "RN2089",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "空間情報学実習",
+"teacher": "山下",
+"room": "2講─12",
+"code": "RN2090",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "植生管理学実習",
+"teacher": "吉川",
+"room": "",
+"code": "RN2091",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "有機合成化学",
+"teacher": "岡田",
+"room": "2─11",
+"code": "bn2013",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "微生物生化学",
+"teacher": "山形・田中瑞",
+"room": "2─21",
+"code": "bn2014",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "天然物有機化学",
+"teacher": "川出",
+"room": "2─11",
+"code": "bn2015",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月4"
+]
+},
+{
+"name": "機器分析化学",
+"teacher": "岩上",
+"room": "2─21",
+"code": "bn2016",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "食品化学I",
+"teacher": "(服部)",
+"room": "2─11",
+"code": "bn2017",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "生物相関学",
+"teacher": "井上・(佐藤令)",
+"room": "2─11",
+"code": "bn2018",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "バイオロジカルコントロール",
+"teacher": "仲井",
+"room": "2─21",
+"code": "bn2019",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "応用生物科学共通実験I",
+"teacher": "小松ほか",
+"room": "",
+"code": "bn2037",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火3",
+"木3",
+"金3"
+]
+},
+{
+"name": "応用生物科学共通実験II",
+"teacher": "学科教員",
+"room": "",
+"code": "bn2038",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火3",
+"木3",
+"金3"
+]
+},
+{
+"name": "応用生物科学専門実験I",
+"teacher": "",
+"room": "",
+"code": "bn2039",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火3",
+"木3",
+"金3"
+]
+},
+{
+"name": "無機化学",
+"teacher": "(杉江)",
+"room": "1─11",
+"code": "ch2003a",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "無機化学",
+"teacher": "(渡辺秀)",
+"room": "1講─24",
+"code": "ch2003b",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水4"
+]
+},
+{
+"name": "無機化学",
+"teacher": "赤井",
+"room": "1講─16",
+"code": "ch2003c",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "物質生化学",
+"teacher": "(芳賀)",
+"room": "2─21",
+"code": "en2011",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "資源材料力学",
+"teacher": "松原",
+"room": "1─11",
+"code": "en2012",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "環境資源科学実験I(物理学応用)",
+"teacher": "安藤ほか・学科教員",
+"room": "",
+"code": "en2025",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月3",
+"木3"
+]
+},
+{
+"name": "環境資源科学実験II(化学応用)",
+"teacher": "堀川ほか・学科教員",
+"room": "",
+"code": "en2026",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月3",
+"木3"
+]
+},
+{
+"name": "陸水環境学",
+"teacher": "(山中)",
+"room": "2─21",
+"code": "en2036",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火5"
+]
+},
+{
+"name": "資源高分子化学",
+"teacher": "松下泰",
+"room": "2講─21",
+"code": "en2038",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "植物組織形態制御学",
+"teacher": "半",
+"room": "2─21(遠隔)",
+"code": "en2039",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "エコマテリアル学",
+"teacher": "近江・(瓦田)",
+"room": "1─11",
+"code": "en2040",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "環境土壌学",
+"teacher": "橋本",
+"room": "2講─22",
+"code": "en2041",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "環境汚染化学",
+"teacher": "水川",
+"room": "2─21",
+"code": "en2042",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "環境微生物学",
+"teacher": "多羅尾",
+"room": "2講─22",
+"code": "en2043",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "生態系生態学",
+"teacher": "渡辺誠・渡邉泉",
+"room": "2─11",
+"code": "en2044",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "環境分子生物学",
+"teacher": "(堀・佐々)",
+"room": "",
+"code": "en3054",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "環境資源科学特別講義I",
+"teacher": "(高田)",
+"room": "",
+"code": "en3056",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "環境資源科学特別講義II",
+"teacher": "(鈴木史)",
+"room": "",
+"code": "en3057",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "環境資源科学特別講義III",
+"teacher": "(増冨)",
+"room": "",
+"code": "en3058",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "環境資源科学特別講義IV",
+"teacher": "(今井)",
+"room": "",
+"code": "en3059",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "地球環境地学",
+"teacher": "白木・川端・橋本・中嶋吉・水川",
+"room": "2─11",
+"code": "go2002",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "線形代数学II",
+"teacher": "(木村)",
+"room": "1講─16",
+"code": "ma2003",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水5"
+]
+},
+{
+"name": "数理統計学",
+"teacher": "(與口)",
+"room": "1講─25",
+"code": "ma2005a",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "数理統計学",
+"teacher": "(沢辺)",
+"room": "1講─24",
+"code": "ma2005b",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "数理統計学",
+"teacher": "(井草)",
+"room": "2講─31",
+"code": "ma2005c",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "実験動物学実習",
+"teacher": "大松・オブライエン・鈴木馨・大場",
+"room": "",
+"code": "vn2120",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "統合薬理学",
+"teacher": "",
+"room": "1講─22",
+"code": "vn2123",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "薬理学実習",
+"teacher": "佐々木一・臼井",
+"room": "",
+"code": "vn2124",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "基礎放射線学",
+"teacher": "岸本",
+"room": "1講─23",
+"code": "vn2125",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "微生物学実習II",
+"teacher": "オブライエン",
+"room": "",
+"code": "vn2204",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "寄生虫学I",
+"teacher": "",
+"room": "1講─22",
+"code": "vn2206",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "動物感染症学",
+"teacher": "オブライエン・古谷",
+"room": "1講─23",
+"code": "vn2209",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "動物病理学総論",
+"teacher": "吉田敏・町田・村上・鈴木和",
+"room": "2講─21",
+"code": "vn2211",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "公衆衛生学総論",
+"teacher": "石原・播磨",
+"room": "1講─23",
+"code": "vn2301",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "動物園動物学",
+"teacher": "永岡・山本・(綿貫・馬島)",
+"room": "",
+"code": "vn2606",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 2,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "農産物製造学",
+"teacher": "伴 ほか",
+"room": "1講─18",
+"code": "AN3005",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "蚕 糸 学",
+"teacher": "横山・伊藤克",
+"room": "2─14",
+"code": "AN3034",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "家畜衛生学",
+"teacher": "鈴木康・(高松)",
+"room": "4─32(遠隔)",
+"code": "AN3036",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "農業数量経済分析",
+"teacher": "草処",
+"room": "2─14",
+"code": "AN3042",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "農業資源経済学",
+"teacher": "",
+"room": "2講─22(遠隔)",
+"code": "AN3043",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "農村社会調査実習",
+"teacher": "草処・丸・観山・曲木",
+"room": "2─320",
+"code": "AN3045",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "食料リスクアナリシス",
+"teacher": "(横田)",
+"room": "",
+"code": "AN3047",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "生物生産学特別講義I(環境系)",
+"teacher": "(安藤薫)",
+"room": "",
+"code": "AN3060",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "生物生産学特別講義II(植物系)",
+"teacher": "(金鍾)",
+"room": "",
+"code": "AN3070",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "Academic Communication",
+"teacher": "アジマン",
+"room": "2講─12",
+"code": "EL3011",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水5"
+]
+},
+{
+"name": "哲 学",
+"teacher": "澤",
+"room": "1講─25",
+"code": "HS3006b",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "文学・芸術学",
+"teacher": "(村山)",
+"room": "1講─24",
+"code": "HS3007",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "心 理 学",
+"teacher": "甲田",
+"room": "2─11",
+"code": "HS3008a",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "地域生態システム学特別演習I",
+"teacher": "学科教員",
+"room": "",
+"code": "RN3007",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "植生管理学",
+"teacher": "吉川",
+"room": "2─23",
+"code": "RN3023",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "農地環境工学",
+"teacher": "渡邉裕",
+"room": "2─22",
+"code": "RN3057",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "森林立地学",
+"teacher": "戸田",
+"room": "2─11",
+"code": "RN3068",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "環境倫理学",
+"teacher": "大倉",
+"room": "本─22",
+"code": "RN3070",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月1"
+]
+},
+{
+"name": "野生動物管理技術論",
+"teacher": "高田・諸澤",
+"room": "1講─23",
+"code": "RN3071",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "森林保護学",
+"teacher": "小池・吉田智・戸田",
+"room": "1─11",
+"code": "RN3074",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "森林政策学",
+"teacher": "平原・Rn教員",
+"room": "2講─11",
+"code": "RN3075",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "木質資源利用学",
+"teacher": "小瀬ほか・En教員",
+"room": "1講─16",
+"code": "RN3076",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "農産プロセス工学",
+"teacher": "安永",
+"room": "本─22",
+"code": "RN3077",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "灌漑排水工学",
+"teacher": "浅田・(加藤)",
+"room": "2─22",
+"code": "RN3078",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "共生社会思想",
+"teacher": "(布施)",
+"room": "本─22",
+"code": "RN3079",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "国際農林開発論",
+"teacher": "及川",
+"room": "2講─22",
+"code": "RN3080",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "安藤・(竹内注6)ライフサイクルアセスメント",
+"teacher": "",
+"room": "1-11",
+"code": "RN3081",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "環境アセスメント学",
+"teacher": "(錦澤ほか)",
+"room": "1講─24",
+"code": "RN3082",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "森林土壌学実験・実習",
+"teacher": "戸田・崔・吉田智",
+"room": "1─419",
+"code": "RN3101",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "森林生産システム学実習",
+"teacher": "岩岡・松本",
+"room": "1─420",
+"code": "RN3102",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "農業環境工学演習",
+"teacher": "安永・西脇・浅田・斎藤・島本・帖佐・中島・山下・渡辺将",
+"room": "2講─31",
+"code": "RN3103",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "農業環境工学設計",
+"teacher": "中島・(佐々木)・(田島)",
+"room": "2─23",
+"code": "RN3104",
+"faculty": "農",
+"dept": "地域生態システム学科",
+"cls": "Rn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "科学史",
+"teacher": "(小山)",
+"room": "2講─11",
+"code": "SG3001",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "技術者倫理",
+"teacher": "(吉田)",
+"room": "1講─21",
+"code": "SG3005a",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "知的財産権・特許法",
+"teacher": "(鈴木・鷲尾・山下)",
+"room": "1講─25",
+"code": "SG3006a",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "生命倫理",
+"teacher": "(近藤)",
+"room": "2─21",
+"code": "SG3007a",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "動物と人間の行動",
+"teacher": "佐藤俊・小山",
+"room": "1─11",
+"code": "SG3008",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "統合薬理学",
+"teacher": "(岩)佐藤洋",
+"room": "1講─23",
+"code": "VN3123",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "免 疫 学",
+"teacher": "オブライエン・(田中あ・高橋武)",
+"room": "4─32",
+"code": "VN3204",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "蠕虫・蠕虫病・衛生動物学",
+"teacher": "(岩板垣)・(農)古谷",
+"room": "1講─23",
+"code": "VN3206",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "寄生虫学実習",
+"teacher": "古谷・(案浦)・村越",
+"room": "",
+"code": "VN3207",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "動物病理学各論A",
+"teacher": "(岩)佐々木淳",
+"room": "1講─23",
+"code": "VN3212",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "病理学実習I",
+"teacher": "吉田敏・町田・村上・鈴木和・岩出",
+"room": "",
+"code": "VN3217",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "人獣共通感染症学",
+"teacher": "(岩)藤原・(農)石原",
+"room": "4─32",
+"code": "VN3303",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "環境衛生学",
+"teacher": "(岩)佐藤至",
+"room": "4─32",
+"code": "VN3304",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金1"
+]
+},
+{
+"name": "公衆衛生学実習",
+"teacher": "石原・播磨",
+"room": "",
+"code": "VN3305",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "動物衛生学",
+"teacher": "鈴木康・(高松)",
+"room": "4─32(遠隔)",
+"code": "VN3308",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "動物衛生学実習",
+"teacher": "鈴木康・(林谷)・(渡辺)",
+"room": "",
+"code": "VN3309",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "野生動物学",
+"teacher": "鈴木馨",
+"room": "4─32",
+"code": "VN3310",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "内科学総論",
+"teacher": "西藤・井手・茂木",
+"room": "1講─22",
+"code": "VN3401",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "外科学総論",
+"teacher": "田中隆・島田・田中綾",
+"room": "4─32",
+"code": "VN3404",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "臨床病理学",
+"teacher": "呰上",
+"room": "1講─21",
+"code": "VN3416",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "国際感染症制御学",
+"teacher": "オブライエン・大場・古谷・大松・ (河井・林・白藤・浦辺)",
+"room": "",
+"code": "VN3607",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "現代農業論",
+"teacher": "観山・(佐藤)・(伊藤)",
+"room": "1講─18",
+"code": "ag3001",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "国際環境農学",
+"teacher": "ブランジェほか",
+"room": "2講─22",
+"code": "ag3003",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "環境生物相関論",
+"teacher": "渡邉泉・南光・仲井",
+"room": "1─11",
+"code": "ag3004",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "細胞工学",
+"teacher": "三浦・森山",
+"room": "2─21",
+"code": "bn3027",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "植物工学",
+"teacher": "川合",
+"room": "2講─31",
+"code": "bn3028",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "食品工学",
+"teacher": "野村",
+"room": "2─21",
+"code": "bn3029",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "食品製造学",
+"teacher": "(小林敏・卯川・米北)",
+"room": "2─21",
+"code": "bn3030",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月4"
+]
+},
+{
+"name": "食品衛生学",
+"teacher": "(下島)",
+"room": "1講─25",
+"code": "bn3031",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "農薬科学",
+"teacher": "笠原",
+"room": "2講─31",
+"code": "bn3032",
+"faculty": "農",
+"dept": "応用生物科学科",
+"cls": "Bn",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "機器分析学II",
+"teacher": "近江ほか",
+"room": "2─22",
+"code": "en3022",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "環境情報解析学",
+"teacher": "(楊)",
+"room": "2講─42",
+"code": "en3023",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "環境気候学",
+"teacher": "(木口)",
+"room": "2─21",
+"code": "en3024",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "紙パルプ科学",
+"teacher": "小瀬・松下泰",
+"room": "1講─18",
+"code": "en3049",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "住環境構造学",
+"teacher": "(北川)",
+"room": "1─303",
+"code": "en3050",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "ライフサイクルアセスメント",
+"teacher": "安藤・(竹内)",
+"room": "1─11",
+"code": "en3051",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "資源分解・廃棄学",
+"teacher": "(橘・金野)",
+"room": "",
+"code": "en3052",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "森林・林業論",
+"teacher": "白木ほか・Rn教員",
+"room": "2講─22",
+"code": "en3053",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "環境アセスメント学",
+"teacher": "錦澤・杉本・田中章・安元・長岡",
+"room": "1講─24",
+"code": "en3055",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 3,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "天然物有機化学",
+"teacher": "川出",
+"room": "2─11",
+"code": "AN4048",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"月4"
+]
+},
+{
+"name": "有機合成化学",
+"teacher": "岡田",
+"room": "2─11",
+"code": "AN4049",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "微生物生化学",
+"teacher": "山形・田中瑞",
+"room": "2─21",
+"code": "AN4050",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "地域生態システム学特別演習III",
+"teacher": "学科教員",
+"room": "",
+"code": "RN4009",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "獣医事法規",
+"teacher": "(対馬)",
+"room": "",
+"code": "VN4103",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "魚 病 学",
+"teacher": "竹前・(和田)",
+"room": "4─32",
+"code": "VN4210",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "毒 性 学",
+"teacher": "鈴木和",
+"room": "1講─22",
+"code": "VN4306",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "毒性学実習",
+"teacher": "村上",
+"room": "",
+"code": "VN4307",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "消化器病学",
+"teacher": "田中綾・大森・西藤・井手",
+"room": "1講─16",
+"code": "VN4403",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "軟部外科学",
+"teacher": "田中隆・島田・呰上",
+"room": "4─32",
+"code": "VN4406",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "小動物内科学実習・応用編",
+"teacher": "井手・茂木・西藤ほか",
+"room": "",
+"code": "VN4408",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "小動物外科学実習・応用編",
+"teacher": "田中隆・島田・呰上ほか",
+"room": "",
+"code": "VN4410",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "動物行動治療学",
+"teacher": "佐藤俊・小山・入交",
+"room": "4─32",
+"code": "VN4423",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "臨床繁殖学",
+"teacher": "田中知・遠藤",
+"room": "4─32",
+"code": "VN4502",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "臨床繁殖学実習",
+"teacher": "遠藤・田中知",
+"room": "",
+"code": "VN4504",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "産業動物臨床学II",
+"teacher": "(岩)高橋・岡田",
+"room": "4─32",
+"code": "VN4506",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"木1"
+]
+},
+{
+"name": "馬臨床学",
+"teacher": "(岩笠嶋)",
+"room": "",
+"code": "VN4507",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "動物病院経営学",
+"teacher": "(荻野・小沼・平尾・小椋)",
+"room": "",
+"code": "VN4608",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "獣医学演習",
+"teacher": "Vn教員",
+"room": "",
+"code": "VN4701",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "科学英語論文演習II",
+"teacher": "学科教員",
+"room": "",
+"code": "bn4035",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 4,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "代謝病・中毒学",
+"teacher": "西藤・大森・茂木",
+"room": "4─32",
+"code": "VN5412",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 5,
+"term": "2026後期",
+"slots": [
+"水3"
+]
+},
+{
+"name": "泌尿器病・生殖器病学",
+"teacher": "(岩)山﨑ほか",
+"room": "1講─23",
+"code": "VN5415",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 5,
+"term": "2026後期",
+"slots": [
+"木3"
+]
+},
+{
+"name": "臨床腫瘍学",
+"teacher": "(町田)",
+"room": "1講─23",
+"code": "VN5418",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 5,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "臨床栄養学",
+"teacher": "(森)",
+"room": "4─32",
+"code": "VN5419",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 5,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "眼科学",
+"teacher": "",
+"room": "4─32",
+"code": "VN5422",
+"faculty": "農",
+"dept": "共同獣医学科",
+"cls": "Vn",
+"year": 5,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "卒業研究",
+"teacher": "Vn教員",
+"room": "",
+"code": "VN5702",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": 5,
+"term": "2026後期",
+"slots": [
+"集中"
+]
+},
+{
+"name": "農学部特別講義III英語で学ぶ生物学~細胞間コミュニケーション~",
+"teacher": "安村",
+"room": "小金井キャンパス",
+"code": "AG1062",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"火5"
+]
+},
+{
+"name": "理系人材のためのマーケティング",
+"teacher": "(中根)",
+"room": "1講─25",
+"code": "IA2103",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"水5"
+]
+},
+{
+"name": "日本語初級",
+"teacher": "伊藤夏",
+"room": "本─22",
+"code": "JP1001",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "日本語中級",
+"teacher": "伊藤夏",
+"room": "1講─17",
+"code": "JP1002",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "日本語上級ステップアップ",
+"teacher": "伊藤夏",
+"room": "本─22",
+"code": "JP1004",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"木5"
+]
+},
+{
+"name": "Diversity and Inclusion through Japanese Culture",
+"teacher": "",
+"room": "2─22",
+"code": "MD1002",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"水5"
+]
+},
+{
+"name": "International Cooperation Studies",
+"teacher": "キャンパス",
+"room": "小金井",
+"code": "MD1004",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"水4"
+]
+},
+{
+"name": "三大学連携特別講義I Soil and Water",
+"teacher": "John・斎藤",
+"room": "2講─11",
+"code": "MD1105",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"月5",
+"金3"
+]
+},
+{
+"name": "キャリアプランニング",
+"teacher": "藤井恒",
+"room": "1講─24",
+"code": "SG1010",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"木2"
+]
+},
+{
+"name": "Food and Agricultural ScienceI",
+"teacher": "大川ほか",
+"room": "2講─41A",
+"code": "ia1001",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"月1",
+"木1"
+]
+},
+{
+"name": "Food and Agricultural ScienceII",
+"teacher": "大川ほか",
+"room": "2講─41A",
+"code": "ia1002",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"月1",
+"木1"
+]
+},
+{
+"name": "Principles and Potentials of Agribusiness",
+"teacher": "(千年)・草処",
+"room": "2講─41A",
+"code": "ia1003",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"月3"
+]
+},
+{
+"name": "Theory and Practices of Sustainable Agriculture",
+"teacher": "山田祐・及川",
+"room": "2講─41A",
+"code": "ia1009",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"水5"
+]
+},
+{
+"name": "Arid Land Agriculture",
+"teacher": "川端",
+"room": "2講─41A",
+"code": "ia1014",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"水2"
+]
+},
+{
+"name": "Plant Microbiology",
+"teacher": "岡崎",
+"room": "2講─41A",
+"code": "ia2007",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "Forest Ecology and Management",
+"teacher": "松本・戸田",
+"room": "2講─41A",
+"code": "ia2012",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"月4"
+]
+},
+{
+"name": "Ecology in Crop Production",
+"teacher": "未定",
+"room": "2講─41A",
+"code": "ia2013",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"火4"
+]
+},
+{
+"name": "Basic Meteorology and Natural Disasters2年",
+"teacher": "白木",
+"room": "2講─41A",
+"code": "ia2015",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"水1"
+]
+},
+{
+"name": "Food Chemistry",
+"teacher": "三浦・好田",
+"room": "2講─41A",
+"code": "ia3004",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"火1"
+]
+},
+{
+"name": "Food and Nutrition",
+"teacher": "三浦",
+"room": "2講─41A",
+"code": "ia3005",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"月4"
+]
+},
+{
+"name": "Horticultural Structures and Plant Factory",
+"teacher": "帖佐・安永",
+"room": "2講─41A",
+"code": "ia3006",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "Food Safety",
+"teacher": "未定",
+"room": "2講─41A",
+"code": "ia3008",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"月2"
+]
+},
+{
+"name": "Ecosystem Management",
+"teacher": "",
+"room": "2講─41A",
+"code": "ia3011",
+"faculty": "農",
+"dept": "",
+"cls": "",
+"year": null,
+"term": "2026後期",
+"slots": [
+"火2",
+"金5"
+]
+}
+]

@@ -9,8 +9,11 @@ from discord import app_commands
 from discord.ext import tasks
 import aiosqlite
 import asyncio
+import json
 import os
 import re
+import unicodedata
+import zlib
 from datetime import datetime, timezone, timedelta
 
 try:
@@ -30,6 +33,8 @@ RADIO_TIME = os.getenv("RADIO_TIME", "06:30")          # ラジオ体操の開�
 RADIO_MP3 = os.getenv("RADIO_MP3", "radio.mp3")        # 音源ファイル（リポジトリには含めない。VMに直接置く）
 FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg")
 RADIO_VC_NAME = "ラジオ体操"
+REMIND_HOUR = int(os.getenv("REMIND_HOUR", "8"))     # 課題リマインドを流す時刻（時）
+COURSES_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "courses_2026_kouki.json")
 JST = timezone(timedelta(hours=9))
 
 CATEGORY_NAME = "最低限生活リズム"
@@ -40,6 +45,7 @@ CH = {
     "chore": ("家事", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
     "bath": ("おふろ", "🛁 お風呂に入ったら押す。"),
     "kora": ("こら", "毎晩の判定で、最低限を守れなかった人が晒される場所。"),
+    "kadai": ("課題", "`/jikanwari add` で履修科目を登録 → 気づいた人が `/kadai add` → 同じ科目の履修者だけに通知＆リマインド。"),
     "settei": ("設定", "`/saitei` で自分の最低限を決める。`/nakama` で同じ時間の仲間を見る。"),
 }
 CHORES = [  # (key, ラベル, 絵文字, 行)
@@ -118,6 +124,18 @@ CREATE TABLE IF NOT EXISTS events(
 CREATE INDEX IF NOT EXISTS ev_user_day ON events(user_id, day);
 CREATE INDEX IF NOT EXISTS ev_user_kind_ts ON events(user_id, kind, ts);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS courses(
+  code TEXT PRIMARY KEY, name TEXT NOT NULL, nname TEXT NOT NULL, teacher TEXT, room TEXT,
+  faculty TEXT, dept TEXT, cls TEXT, year INTEGER, slots TEXT, term TEXT, custom INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS courses_nname ON courses(nname);
+CREATE TABLE IF NOT EXISTS user_courses(user_id TEXT NOT NULL, code TEXT NOT NULL, PRIMARY KEY(user_id, code));
+CREATE TABLE IF NOT EXISTS assignments(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL, title TEXT NOT NULL, note TEXT,
+  due_ts INTEGER NOT NULL, created_by TEXT, created_at INTEGER, closed INTEGER NOT NULL DEFAULT 0, msg_id TEXT
+);
+CREATE TABLE IF NOT EXISTS assignment_done(assignment_id INTEGER NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY(assignment_id, user_id));
+CREATE TABLE IF NOT EXISTS assignment_reminded(assignment_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(assignment_id, stage));
 """
 db = None
 
@@ -135,6 +153,7 @@ async def db_init():
             await db.commit()
         except Exception:
             pass
+    await load_courses_master()
 
 async def meta_get(key, default=None):
     async with db.execute("SELECT value FROM meta WHERE key=?", (key,)) as c:
@@ -252,6 +271,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(MealView())
         self.add_view(ChoreView())
         self.add_view(BathView())
+        self.add_dynamic_items(DoneButton)
         # コマンドの同期はグローバルではなくサーバー単位で行う（即時反映）。on_ready 参照。
 
 bot = SeikatsuBot()
@@ -621,12 +641,392 @@ async def on_ready():
         judge_loop.start()
     if not radio_loop.is_running():
         radio_loop.start()
+    if not remind_loop.is_running():
+        remind_loop.start()
     print("====================================", flush=True)
 
 @bot.event
 async def on_guild_join(guild):
     if GLOBAL_CMDS is not None:
         await sync_guild_commands(guild)
+
+
+# ============================================================
+#  履修科目と課題リマインド
+#  ・科目マスタ = data/courses_2026_kouki.json（時間割PDFから生成）。内部キーは時間割コード
+#  ・履修登録は科目名のオートコンプリート。マスタに無い科目は自由入力で追加できる（custom=1）
+#  ・課題は「同じ科目を履修している人」だけに通知（ロールは使わない）
+# ============================================================
+def norm_text(s):
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", s or "")).casefold()
+
+async def load_courses_master():
+    """JSONの科目マスタをDBへ取り込む（起動時・冪等）。自由入力の科目は残す。"""
+    if not os.path.exists(COURSES_JSON):
+        print(f"科目マスタが見つかりません: {COURSES_JSON}", flush=True)
+        return 0
+    with open(COURSES_JSON, encoding="utf-8") as f:
+        rows = json.load(f)
+    for r in rows:
+        await db.execute(
+            "INSERT INTO courses(code,name,nname,teacher,room,faculty,dept,cls,year,slots,term,custom) VALUES(?,?,?,?,?,?,?,?,?,?,?,0) "
+            "ON CONFLICT(code) DO UPDATE SET name=excluded.name,nname=excluded.nname,teacher=excluded.teacher,room=excluded.room,"
+            "faculty=excluded.faculty,dept=excluded.dept,cls=excluded.cls,year=excluded.year,slots=excluded.slots,term=excluded.term",
+            (r["code"], r["name"], norm_text(r["name"]), r.get("teacher") or "", r.get("room") or "", r.get("faculty") or "",
+             r.get("dept") or "", r.get("cls") or "", r.get("year"), ",".join(r.get("slots") or []), r.get("term") or ""))
+    await db.commit()
+    print(f"科目マスタ {len(rows)} 件を読み込みました", flush=True)
+    return len(rows)
+
+def course_label(c, with_code=False):
+    """オートコンプリート／表示用の1行ラベル（100字以内）"""
+    bits = []
+    if c["teacher"]:
+        bits.append(c["teacher"])
+    if c["slots"]:
+        bits.append(c["slots"])
+    tag = ""
+    if c["faculty"]:
+        tag = c["faculty"] + (f"{c['year']}年" if c["year"] else "") + (f" {c['cls']}" if c["cls"] else "")
+    s = c["name"] + (f"（{'・'.join(bits)}）" if bits else "") + (f" {tag}" if tag else "") + (f" [{c['code']}]" if with_code else "")
+    return s[:100]
+
+async def search_courses(q, limit=25):
+    nq = norm_text(q)
+    if not nq:
+        async with db.execute("SELECT * FROM courses ORDER BY custom DESC, faculty, year, name LIMIT ?", (limit,)) as c:
+            return await c.fetchall()
+    like = f"%{nq}%"
+    async with db.execute(
+        "SELECT * FROM courses WHERE nname LIKE ? OR code LIKE ? "
+        "ORDER BY CASE WHEN nname LIKE ? THEN 0 ELSE 1 END, custom DESC, faculty, year, name, code LIMIT ?",
+        (like, f"%{q.strip()}%", f"{nq}%", limit)) as c:
+        return await c.fetchall()
+
+async def get_course(code):
+    async with db.execute("SELECT * FROM courses WHERE code=?", (code,)) as c:
+        return await c.fetchone()
+
+async def user_course_rows(uid):
+    async with db.execute("SELECT c.* FROM user_courses u JOIN courses c ON c.code=u.code WHERE u.user_id=? ORDER BY c.slots, c.name",
+                          (str(uid),)) as c:
+        return await c.fetchall()
+
+async def takers_of(code):
+    async with db.execute("SELECT user_id FROM user_courses WHERE code=?", (code,)) as c:
+        return [r["user_id"] for r in await c.fetchall()]
+
+async def ensure_custom_course(name):
+    """自由入力の科目を登録（同名があればそれを返す）"""
+    nn = norm_text(name)
+    async with db.execute("SELECT * FROM courses WHERE nname=? ORDER BY custom LIMIT 1", (nn,)) as c:
+        r = await c.fetchone()
+    if r:
+        return r
+    code = "x%08x" % (zlib.crc32(nn.encode("utf-8")) & 0xffffffff)
+    await db.execute("INSERT OR IGNORE INTO courses(code,name,nname,teacher,room,faculty,dept,cls,year,slots,term,custom) VALUES(?,?,?,'','','','','',NULL,'','',1)",
+                     (code, name.strip()[:60], nn))
+    await db.commit()
+    return await get_course(code)
+
+def parse_due(s):
+    """'10/15' '10/15 23:59' '10月15日' '2026/10/15 17:00' → datetime(JST)。不正なら None。時刻省略は 23:59"""
+    t = unicodedata.normalize("NFKC", s or "").strip()
+    m = re.fullmatch(r"(?:(\d{4})[/年])?\s*(\d{1,2})[/月]\s*(\d{1,2})日?\s*(?:(\d{1,2})[:時]\s*(\d{2})?分?)?", t)
+    if not m:
+        return None
+    now = now_jst()
+    y = int(m.group(1)) if m.group(1) else now.year
+    mo, d = int(m.group(2)), int(m.group(3))
+    h = int(m.group(4)) if m.group(4) else 23
+    mi = int(m.group(5)) if m.group(5) else (59 if m.group(4) is None else 0)
+    try:
+        due = datetime(y, mo, d, h, mi, tzinfo=JST)
+    except ValueError:
+        return None
+    if not m.group(1) and due < now - timedelta(days=1):
+        due = due.replace(year=y + 1)  # 年を省略して過去日なら来年扱い
+    return due
+
+WEEKDAY_JA = "月火水木金土日"
+
+def fmt_due(dt):
+    return f"{dt.month}/{dt.day}({WEEKDAY_JA[dt.weekday()]}) {dt:%H:%M}"
+
+def days_left(due_dt, now=None):
+    now = now or now_jst()
+    return (due_dt.date() - now.date()).days
+
+async def assignment_row(aid):
+    async with db.execute("SELECT a.*, c.name AS cname FROM assignments a JOIN courses c ON c.code=a.code WHERE a.id=?", (aid,)) as c:
+        return await c.fetchone()
+
+async def done_set(aid):
+    async with db.execute("SELECT user_id FROM assignment_done WHERE assignment_id=?", (aid,)) as c:
+        return {r["user_id"] for r in await c.fetchall()}
+
+class DoneButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_kadai_done:(?P<id>\d+)"):
+    def __init__(self, aid):
+        super().__init__(discord.ui.Button(label="✅ 終わった", style=discord.ButtonStyle.success, custom_id=f"sk_kadai_done:{aid}"))
+        self.aid = aid
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(int(match["id"]))
+
+    async def callback(self, interaction):
+        a = await assignment_row(self.aid)
+        if not a:
+            await interaction.response.send_message("この課題は見つかりませんでした。", ephemeral=True)
+            return
+        uid = str(interaction.user.id)
+        done = await done_set(self.aid)
+        if uid in done:
+            await db.execute("DELETE FROM assignment_done WHERE assignment_id=? AND user_id=?", (self.aid, uid))
+            msg = f"⬜ 「{a['title']}」を未完了に戻しました。"
+        else:
+            await db.execute("INSERT OR IGNORE INTO assignment_done(assignment_id,user_id) VALUES(?,?)", (self.aid, uid))
+            await db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES(?,?)", (uid, a["code"]))  # 押した人は履修者扱い
+            msg = f"✅ 「{a['title']}」を完了にしました。おつかれさま！"
+        await db.commit()
+        await interaction.response.send_message(msg, ephemeral=True)
+        try:
+            takers = await takers_of(a["code"])
+            done = await done_set(self.aid)
+            emb = interaction.message.embeds[0] if interaction.message.embeds else None
+            if emb:
+                emb.set_footer(text=f"完了 {len([t for t in takers if t in done])}/{len(takers)} 人")
+                await interaction.message.edit(embed=emb)
+        except Exception:
+            pass
+
+def kadai_embed(a, course, takers, done):
+    due = datetime.fromtimestamp(a["due_ts"], JST)
+    left = days_left(due)
+    left_txt = "今日まで！" if left == 0 else ("期限切れ" if left < 0 else f"あと {left} 日")
+    emb = discord.Embed(title=f"📚 {course['name']}", description=f"**{a['title']}**" + (f"\n{a['note']}" if a["note"] else ""),
+                        color=discord.Color.red() if left <= 1 else discord.Color.gold())
+    emb.add_field(name="⏰ 期限", value=f"{fmt_due(due)}（{left_txt}）", inline=True)
+    if course["teacher"] or course["slots"]:
+        emb.add_field(name="科目", value=" / ".join(x for x in (course["teacher"], course["slots"]) if x), inline=True)
+    emb.set_footer(text=f"完了 {len([t for t in takers if t in done])}/{len(takers)} 人 ・ #{a['id']}")
+    return emb
+
+async def post_assignment(a, course, header):
+    ch = await get_ch("kadai")
+    if not ch:
+        return None
+    takers = await takers_of(a["code"])
+    done = await done_set(a["id"])
+    todo = [t for t in takers if t not in done]
+    mention = " ".join(f"<@{t}>" for t in todo) if todo else "（対象者なし）"
+    view = discord.ui.View(timeout=None)
+    view.add_item(DoneButton(a["id"]))
+    msg = await ch.send(f"{header}\n{mention}", embed=kadai_embed(a, course, takers, done), view=view)
+    return msg
+
+async def remind_assignments():
+    """3日前・前日・当日の朝にリマインド。期限を1日過ぎたら自動クローズ。"""
+    now = now_jst()
+    async with db.execute("SELECT a.*, c.name AS cname FROM assignments a JOIN courses c ON c.code=a.code WHERE a.closed=0 ORDER BY a.due_ts") as c:
+        rows = await c.fetchall()
+    for a in rows:
+        due = datetime.fromtimestamp(a["due_ts"], JST)
+        left = days_left(due, now)
+        if left < -1:
+            await db.execute("UPDATE assignments SET closed=1 WHERE id=?", (a["id"],))
+            await db.commit()
+            continue
+        stage = {3: "d3", 1: "d1", 0: "d0"}.get(left)
+        if not stage:
+            continue
+        async with db.execute("SELECT 1 FROM assignment_reminded WHERE assignment_id=? AND stage=?", (a["id"], stage)) as c2:
+            if await c2.fetchone():
+                continue
+        await db.execute("INSERT OR IGNORE INTO assignment_reminded(assignment_id,stage) VALUES(?,?)", (a["id"], stage))
+        await db.commit()
+        takers = await takers_of(a["code"])
+        done = await done_set(a["id"])
+        if not [t for t in takers if t not in done]:
+            continue
+        head = {"d3": "⏰ 3日前リマインド", "d1": "⏰ **明日が期限！**", "d0": "🚨 **今日が期限！！**"}[stage]
+        course = await get_course(a["code"])
+        await post_assignment(a, course, head)
+
+@tasks.loop(minutes=1)
+async def remind_loop():
+    now = now_jst()
+    if now.hour < REMIND_HOUR:
+        return
+    day = day_str(now)
+    if await meta_get("last_remind_day") == day:
+        return
+    await meta_set("last_remind_day", day)
+    try:
+        await remind_assignments()
+    except Exception as e:
+        print(f"remind error: {e!r}", flush=True)
+
+# ---- /jikanwari ----
+jikanwari = app_commands.Group(name="jikanwari", description="履修科目の登録・確認")
+
+async def ac_all_courses(interaction, current):
+    rows = await search_courses(current, 24)
+    choices = [app_commands.Choice(name=course_label(r), value=r["code"]) for r in rows]
+    q = (current or "").strip()
+    if q and not any(norm_text(r["name"]) == norm_text(q) for r in rows):
+        choices.insert(0, app_commands.Choice(name=f"＋「{q[:40]}」をマスタに無い科目として登録", value=("new:" + q)[:100]))
+    return choices[:25]
+
+async def ac_my_courses(interaction, current):
+    rows = await user_course_rows(interaction.user.id)
+    nq = norm_text(current)
+    out = [app_commands.Choice(name=course_label(r), value=r["code"]) for r in rows if not nq or nq in r["nname"] or nq in r["code"].casefold()]
+    return out[:25]
+
+async def resolve_course_value(v):
+    if v.startswith("new:"):
+        return await ensure_custom_course(v[4:])
+    return await get_course(v)
+
+@jikanwari.command(name="add", description="履修科目を登録（科目名で検索。最大5つまで一度に）")
+@app_commands.describe(kamoku="科目名で検索", kamoku2="2つ目", kamoku3="3つ目", kamoku4="4つ目", kamoku5="5つ目")
+@app_commands.autocomplete(kamoku=ac_all_courses, kamoku2=ac_all_courses, kamoku3=ac_all_courses, kamoku4=ac_all_courses, kamoku5=ac_all_courses)
+async def jikanwari_add(interaction, kamoku: str, kamoku2: str = None, kamoku3: str = None, kamoku4: str = None, kamoku5: str = None):
+    user = interaction.user
+    await ensure_user(user)
+    added, lines = 0, []
+    for v in (kamoku, kamoku2, kamoku3, kamoku4, kamoku5):
+        if not v:
+            continue
+        c = await resolve_course_value(v)
+        if not c:
+            lines.append(f"❓ `{v}` は見つかりませんでした（候補から選んでください）")
+            continue
+        await db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES(?,?)", (str(user.id), c["code"]))
+        added += 1
+        others = [t for t in await takers_of(c["code"]) if t != str(user.id)]
+        lines.append(f"✅ {course_label(c)}" + (f"　👥 他 {len(others)} 人" if others else "　👥 最初の一人！"))
+    await db.commit()
+    total = len(await user_course_rows(user.id))
+    await interaction.response.send_message("\n".join(lines) + f"\n\n📚 登録科目 {total} 件。`/jikanwari list` で確認、`/kadai add` で課題登録。", ephemeral=True)
+
+@jikanwari.command(name="list", description="自分の履修科目と、同じ科目の仲間の人数")
+async def jikanwari_list(interaction):
+    rows = await user_course_rows(interaction.user.id)
+    if not rows:
+        await interaction.response.send_message("まだ履修科目がありません。`/jikanwari add` で登録しよう！", ephemeral=True)
+        return
+    lines = []
+    for r in rows:
+        n = len(await takers_of(r["code"])) - 1
+        lines.append(f"・{course_label(r)}" + (f"　👥{n}" if n > 0 else ""))
+    await interaction.response.send_message(embed=discord.Embed(title=f"📚 {interaction.user.display_name} の履修科目（{len(rows)}）",
+                                            description="\n".join(lines)[:4000], color=discord.Color.gold()), ephemeral=True)
+
+@jikanwari.command(name="remove", description="履修科目を外す")
+@app_commands.describe(kamoku="外す科目")
+@app_commands.autocomplete(kamoku=ac_my_courses)
+async def jikanwari_remove(interaction, kamoku: str):
+    await db.execute("DELETE FROM user_courses WHERE user_id=? AND code=?", (str(interaction.user.id), kamoku))
+    await db.commit()
+    c = await get_course(kamoku)
+    await interaction.response.send_message(f"🗑 {course_label(c) if c else kamoku} を外しました。", ephemeral=True)
+
+bot.tree.add_command(jikanwari)
+
+# ---- /kadai ----
+kadai = app_commands.Group(name="kadai", description="課題の登録・確認（同じ科目の履修者に通知）")
+
+async def ac_open_assignments(interaction, current):
+    uid = str(interaction.user.id)
+    async with db.execute(
+        "SELECT a.id, a.title, a.due_ts, c.name FROM assignments a JOIN courses c ON c.code=a.code "
+        "WHERE a.closed=0 AND (a.created_by=? OR a.code IN (SELECT code FROM user_courses WHERE user_id=?)) ORDER BY a.due_ts LIMIT 25",
+        (uid, uid)) as c:
+        rows = await c.fetchall()
+    nq = norm_text(current)
+    out = []
+    for r in rows:
+        label = f"{r['name']}：{r['title']}（{fmt_due(datetime.fromtimestamp(r['due_ts'], JST))}）"
+        if not nq or nq in norm_text(label):
+            out.append(app_commands.Choice(name=label[:100], value=str(r["id"])))
+    return out
+
+@kadai.command(name="add", description="課題を登録して、同じ科目の履修者に通知")
+@app_commands.describe(kamoku="科目（自分の履修科目から）", kigen="期限 例: 10/15 ／ 10/15 17:00（時刻省略は23:59）", naiyou="課題の内容 例: レポート提出", memo="補足（任意）")
+@app_commands.autocomplete(kamoku=ac_my_courses)
+async def kadai_add(interaction, kamoku: str, kigen: str, naiyou: str, memo: str = None):
+    user = interaction.user
+    await ensure_user(user)
+    c = await get_course(kamoku)
+    if not c:
+        await interaction.response.send_message("科目は候補から選んでください（先に `/jikanwari add` で履修登録）。", ephemeral=True)
+        return
+    due = parse_due(kigen)
+    if not due:
+        await interaction.response.send_message("⚠️ 期限の形式が読めませんでした。例: `10/15` `10/15 17:00` `10月15日`", ephemeral=True)
+        return
+    await db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES(?,?)", (str(user.id), c["code"]))
+    cur = await db.execute("INSERT INTO assignments(code,title,note,due_ts,created_by,created_at) VALUES(?,?,?,?,?,?)",
+                           (c["code"], naiyou.strip()[:100], (memo or "").strip()[:300] or None, int(due.timestamp()), str(user.id), int(now_jst().timestamp())))
+    aid = cur.lastrowid
+    await db.commit()
+    a = await assignment_row(aid)
+    msg = await post_assignment(a, c, f"📌 **{user.display_name}** が課題を登録しました")
+    if msg:
+        await db.execute("UPDATE assignments SET msg_id=? WHERE id=?", (str(msg.id), aid))
+        await db.commit()
+    n = len(await takers_of(c["code"]))
+    await interaction.response.send_message(f"✅ 登録しました：**{c['name']}**「{naiyou}」 期限 {fmt_due(due)}（履修者 {n} 人に通知。3日前・前日・当日朝にもリマインドします）", ephemeral=True)
+
+@kadai.command(name="list", description="自分の履修科目の課題一覧（期限順）")
+async def kadai_list(interaction):
+    uid = str(interaction.user.id)
+    async with db.execute(
+        "SELECT a.*, c.name AS cname FROM assignments a JOIN courses c ON c.code=a.code "
+        "WHERE a.closed=0 AND (a.created_by=? OR a.code IN (SELECT code FROM user_courses WHERE user_id=?)) ORDER BY a.due_ts",
+        (uid, uid)) as c:
+        rows = await c.fetchall()
+    if not rows:
+        await interaction.response.send_message("いま登録されている課題はありません 🎉", ephemeral=True)
+        return
+    lines = []
+    for a in rows:
+        done = uid in await done_set(a["id"])
+        due = datetime.fromtimestamp(a["due_ts"], JST)
+        left = days_left(due)
+        lines.append(f"{'✅' if done else '⬜'} **{a['cname']}**：{a['title']}　{fmt_due(due)}" + ("" if done else f"（{'今日！' if left == 0 else f'あと{left}日'}）"))
+    await interaction.response.send_message(embed=discord.Embed(title="📚 課題一覧", description="\n".join(lines)[:4000], color=discord.Color.gold()), ephemeral=True)
+
+@kadai.command(name="done", description="課題を完了にする（投稿の✅ボタンでもOK）")
+@app_commands.describe(kadai_id="課題")
+@app_commands.autocomplete(kadai_id=ac_open_assignments)
+async def kadai_done(interaction, kadai_id: str):
+    a = await assignment_row(int(kadai_id))
+    if not a:
+        await interaction.response.send_message("課題が見つかりません。", ephemeral=True)
+        return
+    await db.execute("INSERT OR IGNORE INTO assignment_done(assignment_id,user_id) VALUES(?,?)", (a["id"], str(interaction.user.id)))
+    await db.commit()
+    await interaction.response.send_message(f"✅ 「{a['title']}」を完了にしました。", ephemeral=True)
+
+@kadai.command(name="delete", description="課題を取り下げる（登録者または同じ科目の履修者）")
+@app_commands.describe(kadai_id="課題")
+@app_commands.autocomplete(kadai_id=ac_open_assignments)
+async def kadai_delete(interaction, kadai_id: str):
+    a = await assignment_row(int(kadai_id))
+    if not a:
+        await interaction.response.send_message("課題が見つかりません。", ephemeral=True)
+        return
+    await db.execute("UPDATE assignments SET closed=1 WHERE id=?", (a["id"],))
+    await db.commit()
+    ch = await get_ch("kadai")
+    if ch:
+        await ch.send(f"🗑 **{a['cname']}**「{a['title']}」は **{interaction.user.display_name}** が取り下げました。")
+    await interaction.response.send_message("取り下げました。", ephemeral=True)
+
+bot.tree.add_command(kadai)
 
 # ============================================================
 #  スラッシュコマンド
@@ -667,6 +1067,8 @@ async def setup_command(interaction):
                 "・**kaji** 週の最低家事回数（0で解除。日曜夜に判定）\n"
                 "・**rajio** 毎朝のラジオ体操に参加する（True/False）\n\n"
                 f"🏃 ラジオ体操は毎朝 **{RADIO_TIME}** に 🔊ラジオ体操 で自動再生。#起床 の 🏃 ボタンで呼び出し（メンション）のON/OFF。\n"
+                "📚 **課題**：`/jikanwari add` で履修科目を登録（科目名で検索・最大5つずつ）→ 気づいた人が `/kadai add` で課題を登録すると、"
+                f"同じ科目の履修者だけに #課題 で通知。3日前・前日・当日 {REMIND_HOUR}:00 に未完了の人へリマインド。投稿の ✅ で完了。\n"
                 f"毎晩 **{JUDGE_HOUR}:00** に判定し、守れなかった人は #こら に名指しで晒されます。\n"
                 "`/nakama` で同じ起床時刻の仲間が見られます。`/kiroku` で自分の記録を確認。"
             ), color=discord.Color.gold()))

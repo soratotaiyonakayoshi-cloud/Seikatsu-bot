@@ -32,7 +32,7 @@ check("食事推定 19:00", B.infer_meal_sub(datetime(2026,8,5,19,0,tzinfo=JST))
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー4種 登録OK", True, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["hantei", "kiroku", "nakama", "rajio", "saitei", "setup"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["hantei", "jikanwari", "kadai", "kiroku", "nakama", "rajio", "saitei", "setup"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n
@@ -105,6 +105,35 @@ async def main():
     await B.add_event(6, "radio", ts_dt=t(6, 35))
     check("E 参加済み→未達なし", await B.build_misses(ue, day, d1, d2, False), [])
     check("設定表示にラジオ体操", "🏃 ラジオ体操 毎日" in B.settings_text(ue), True)
+
+    # 科目マスタ・検索・履修・課題
+    async with B.db.execute("SELECT COUNT(*) AS n FROM courses") as c:
+        ncourses = (await c.fetchone())["n"]
+    check("科目マスタ読込 500件以上", ncourses > 500, True)
+    hits = await B.search_courses("微分積分")
+    check("検索: 微分積分 がヒット", any("微分積分" in r["name"] for r in hits), True)
+    hits2 = await B.search_courses("english discussion")
+    check("検索: 大文字小文字・空白を無視", len(hits2) > 5, True)
+    cc = await B.ensure_custom_course("ゼミ（山田研）")
+    check("自由入力科目を作成", cc["custom"], 1)
+    check("同名の自由入力は再利用", (await B.ensure_custom_course("ゼミ (山田研)"))["code"], cc["code"])
+    du = B.parse_due("10/15")
+    check("期限 10/15 → 23:59", (du.month, du.day, du.hour, du.minute), (10, 15, 23, 59))
+    du2 = B.parse_due("10月15日 17:00")
+    check("期限 10月15日 17:00", (du2.month, du2.day, du2.hour, du2.minute), (10, 15, 17, 0))
+    check("期限 不正", B.parse_due("あした"), None)
+    code = hits[0]["code"]
+    await B.db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES('1',?)", (code,))
+    await B.db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES('2',?)", (code,))
+    await B.db.commit()
+    check("同じ科目の履修者", sorted(await B.takers_of(code)), ["1", "2"])
+    from datetime import timedelta as _td
+    due3 = B.now_jst() + _td(days=3)
+    cur = await B.db.execute("INSERT INTO assignments(code,title,due_ts,created_by,created_at) VALUES(?,?,?,?,?)", (code, "レポート", int(due3.timestamp()), "1", 0))
+    aid = cur.lastrowid; await B.db.commit()
+    check("残り日数 3", B.days_left(due3), 3)
+    await B.db.execute("INSERT INTO assignment_done(assignment_id,user_id) VALUES(?, '2')", (aid,)); await B.db.commit()
+    check("完了集合", await B.done_set(aid), {"2"})
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
