@@ -1761,6 +1761,7 @@ async def post_role_panels(ch, old_channels=()):
                                         + "　".join(f"{e} {n}" for e, n, _ in items))
         msg = await upsert_message(f"rolemsg_{gk}", ch, emb)
         if not msg:
+            SETUP_ERRORS.append(f"ロールパネル「{title}」を #{ch.name} に投稿できませんでした")
             continue
         ROLE_MSG_IDS[msg.id] = gk
         for e, _, _ in items:
@@ -1768,6 +1769,16 @@ async def post_role_panels(ch, old_channels=()):
                 await msg.add_reaction(e)
             except Exception as ex:
                 print(f"リアクション追加失敗 {e}: {ex!r}", flush=True)
+                SETUP_ERRORS.append(f"「{title}」に {e} のリアクションを付けられません：{ex}")
+    # 診断：Botのロールが付与対象より上か
+    guild = ch.guild
+    me_top = guild.me.top_role
+    low = [n for _, items in ROLE_GROUPS.values() for _, n, _ in items if (r := find_role(guild, n)) and r.position >= me_top.position]
+    if low:
+        SETUP_ERRORS.append("Botのロール「" + me_top.name + "」が次のロールより下にあるため付与できません → サーバー設定→ロールでBotのロールを上へ： " + "、".join(low))
+    missing = [n for _, items in ROLE_GROUPS.values() for _, n, _ in items if not find_role(guild, n)]
+    if missing:
+        SETUP_ERRORS.append("ロールが作れていません（Botに「ロールの管理」権限が必要）： " + "、".join(missing))
 
 async def load_role_msgs():
     for gk in ROLE_GROUPS:
@@ -1809,6 +1820,12 @@ async def _reaction_role(payload, add):
             await member.remove_roles(role, reason="リアクション解除")
     except discord.Forbidden:
         print("❌ ロール付与に失敗：Botのロールが対象ロールより上にあるか、「ロールの管理」権限を確認してください", flush=True)
+        try:
+            ch = guild.get_channel(payload.channel_id)
+            if ch:
+                await ch.send(f"⚠️ {member.mention} ロール「{target}」を付けられませんでした（Botのロールの位置か「ロールの管理」権限を確認してください）", delete_after=20)
+        except Exception:
+            pass
     except Exception as e:
         print(f"ロール操作エラー: {e!r}", flush=True)
 
@@ -1987,7 +2004,8 @@ async def setup_command(interaction):
         await make_readonly(rch, guild, "ロール選択はリアクションのみ")
         created = await ensure_roles(guild)
         await post_role_panels(rch, old_channels=[c for c in (jik,) if c])
-        role_note = "ロール：" + (f"作成 {', '.join(created)}" if created else "既存を利用") + f"（{rch.mention}）\n"
+        n_panels = sum(1 for gk in ROLE_GROUPS if await meta_get(f"rolemsg_{gk}"))
+        role_note = "ロール：" + (f"作成 {', '.join(created)}" if created else "既存を利用") + f"／パネル {n_panels}/3 件 → {rch.mention}\n"
     audio_state = "あり ✅" if os.path.exists(RADIO_MP3) else f"なし ⚠️ VMに {RADIO_MP3} を置いてください"
     await meta_set("guild_id", guild.id)
     for key in VIEW_FACTORY:
