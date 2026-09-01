@@ -57,14 +57,14 @@ CH = {
     "wake": ("起床🌅", "☀️ 起きたら押す／🌙 寝る前に押す。睡眠時間は自動で計算されます。\n🏃 で毎朝のラジオ体操の呼び出し（メンション）をON/OFF。"),
     "meal": ("ごはん🍚", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。"),
     "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
-    "bath": ("おふろ🛁", "🛁 お風呂に入ったら押す。"),
+    "bath": ("おふろ🛁", "🛁 お風呂に入ったら押す。🪥 歯磨きも（1日に何回でも）。"),
     "kora": ("叱責👹", "毎晩の判定で、最低限を守れなかった人が晒される場所。"),
     "tsushinbo": ("つうしんぼ📮", "毎週日曜の夜に、その週の通信簿（達成率ランキング・各賞）が届く場所。"),
     "kadai": ("課題📚", "`/jikanwari add` で履修科目を登録 → 気づいた人が `/kadai add` → 同じ科目の履修者だけに通知＆リマインド。"),
     "settei": ("設定🔧", "`/saitei` で自分の最低限を決める。`/kojin add` で自分だけの項目を追加し、📝ボタンで毎日チェック。`/oyasumi` でお休み申告。"),
 }
 CHORES = [  # (key, ラベル, 絵文字, 行)
-    ("cook", "料理", "🍳", 0), ("clean", "掃除", "🧹", 0), ("dish", "皿洗い", "🍽️", 0),
+    ("cook", "料理", "🍳", 0), ("clean", "掃除", "🧹", 0), ("dish", "皿洗い", "🍽️", 0), ("trash", "ごみ捨て", "🗑", 0),
     ("wash_run", "洗濯機を回した", "🫧", 1), ("wash_in", "洗濯物を取り込んだ", "📥", 1),
     ("dry_run", "乾燥機を回した", "🌀", 2), ("dry_in", "乾燥機から取り込んだ", "📤", 2),
     ("hang", "干した", "🧺", 2),
@@ -174,7 +174,9 @@ async def db_init():
               "ALTER TABLE users ADD COLUMN kaji_clean INTEGER NOT NULL DEFAULT 0",
               "ALTER TABLE users ADD COLUMN kaji_dish INTEGER NOT NULL DEFAULT 0",
               "ALTER TABLE users ADD COLUMN kaji_wash INTEGER NOT NULL DEFAULT 0",
-              "ALTER TABLE users ADD COLUMN kaji_since TEXT"):
+              "ALTER TABLE users ADD COLUMN kaji_since TEXT",
+              "ALTER TABLE users ADD COLUMN kaji_trash INTEGER NOT NULL DEFAULT 0",
+              "ALTER TABLE users ADD COLUMN teeth_min INTEGER NOT NULL DEFAULT 0"):
         try:
             await db.execute(m)
             await db.commit()
@@ -238,6 +240,7 @@ KAJI_CATS = [
     ("kaji_cook", "料理", "🍳", ("cook",)),
     ("kaji_clean", "掃除", "🧹", ("clean",)),
     ("kaji_dish", "皿洗い", "🍽️", ("dish",)),
+    ("kaji_trash", "ごみ捨て", "🗑", ("trash",)),
     ("kaji_wash", "洗濯", "🧺", ("wash_run", "wash_in", "dry_run", "dry_in", "hang")),
 ]
 
@@ -297,6 +300,10 @@ async def build_misses(u, day, d1, d2, is_sunday):
         n = await count_events_between(uid, "chore", d1, d2)
         if n < u["chores_week"]:
             misses.append(f"🧹 家事 今週 {n}/{u['chores_week']} 回")
+    if u["teeth_min"]:
+        n = len(await events_on(uid, day, "teeth"))
+        if n < u["teeth_min"]:
+            misses.append(f"🪥 歯磨き {n}/{u['teeth_min']} 回")
     # 家事の種類ごとの頻度（/kaji）
     for st in await kaji_status(u, day):
         if st["due"]:
@@ -322,13 +329,14 @@ def effective_deadline(u, dt):
 
 def has_any_setting(u):
     return bool(u["wake_deadline"] or u["sleep_min"] or u["bath_daily"] or u["meals_min"] or u["chores_week"] or u["radio_daily"]
-                or u["kaji_cook"] or u["kaji_clean"] or u["kaji_dish"] or u["kaji_wash"])
+                or u["kaji_cook"] or u["kaji_clean"] or u["kaji_dish"] or u["kaji_wash"] or u["kaji_trash"] or u["teeth_min"])
 
 def settings_text(u):
     parts = []
     parts.append((f"☀️ 起床 {u['wake_deadline']} まで" + (f"（土日は +{(u['holiday_shift'] or 0) / 60:g}h）" if u["holiday_shift"] else "")) if u["wake_deadline"] else "☀️ 起床 —")
     parts.append(f"🌙 睡眠 {fmt_hours(u['sleep_min'])} 以上" if u["sleep_min"] else "🌙 睡眠 —")
     parts.append("🛁 入浴 毎日" if u["bath_daily"] else "🛁 入浴 —")
+    parts.append(f"🪥 歯磨き 1日{u['teeth_min']}回" if u["teeth_min"] else "🪥 歯磨き —")
     parts.append("🏃 ラジオ体操 毎日" if u["radio_daily"] else "🏃 ラジオ体操 —")
     parts.append(f"🍚 食事 1日{u['meals_min']}回" if u["meals_min"] else "🍚 食事 —")
     kaji = [f"{e} {lb} {kaji_interval_text(u[col])}" for col, lb, e, _ in KAJI_CATS if u[col]]
@@ -562,6 +570,18 @@ class BathView(discord.ui.View):
         await interaction.response.send_message(f"✅ {hhmm(now)} 入浴を記録しました。", ephemeral=True)
         await post_log("bath", f"🛁 **{user.display_name}** {hhmm(now)} 入浴")
 
+    @discord.ui.button(label="🪥 歯磨きした", style=discord.ButtonStyle.secondary, custom_id="sk_teeth")
+    async def teeth(self, interaction, button):
+        user = interaction.user
+        now = now_jst()
+        await ensure_user(user)
+        await add_event(user.id, "teeth")
+        n = len(await events_on(user.id, day_str(now), "teeth"))
+        u = await get_user(user.id)
+        goal = f"／目標 {u['teeth_min']} 回" if u and u["teeth_min"] else ""
+        await interaction.response.send_message(f"✅ {hhmm(now)} 歯磨き（今日 {n} 回目{goal}）", ephemeral=True)
+        await post_log("bath", f"🪥 **{user.display_name}** {hhmm(now)} 歯磨き（今日 {n} 回目）")
+
 VIEW_FACTORY.update({"wake": WakeView, "meal": MealView, "chore": ChoreView, "bath": BathView})
 
 # ------------------------------------------------------------
@@ -764,6 +784,7 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
             "chores": sum(1 for e in evs if e["kind"] == "chore"),
             "meals": sum(1 for e in evs if e["kind"] == "meal"),
             "baths": len({e["day"] for e in evs if e["kind"] == "bath"}),
+            "teeth": sum(1 for e in evs if e["kind"] == "teeth"),
             "radio": sum(1 for e in evs if e["kind"] == "radio"),
             "late": mtext.count("寝坊"), "miss_n": sum(1 for l in mtext.split("\n") if l.strip()),
         })
@@ -800,6 +821,7 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
         award("🧹 家事賞", "chores", fmt=lambda v: f"{v}回"),
         award("🍚 ごはん賞", "meals", fmt=lambda v: f"{v}回報告"),
         award("🛁 きれい好き賞", "baths", fmt=lambda v: f"{v}日"),
+        award("🪥 歯磨き賞", "teeth", fmt=lambda v: f"{v}回"),
         award("🏃 ラジオ体操賞", "radio", fmt=lambda v: f"{v}回"),
         award("🐷 寝坊賞", "late", fmt=lambda v: f"{v}回"),
         award("👹 こら賞", "miss_n", fmt=lambda v: f"未達 {v}件"),
@@ -1428,12 +1450,12 @@ def parse_day_spec(spec, now):
     return [(a + timedelta(days=i)).isoformat() for i in range((b - a).days + 1)]
 
 @bot.tree.command(name="kaji", description="家事の最低頻度を種類ごとに設定（N日に1回。0で解除）")
-@app_commands.describe(ryouri="料理：何日に1回 例 1=毎日", souji="掃除：何日に1回 例 7", sara="皿洗い：何日に1回 例 1", sentaku="洗濯：何日に1回 例 3（5工程のどれかで「やった」扱い）")
-async def kaji_command(interaction, ryouri: int = None, souji: int = None, sara: int = None, sentaku: int = None):
+@app_commands.describe(ryouri="料理：何日に1回 例 1=毎日", souji="掃除：何日に1回 例 7", sara="皿洗い：何日に1回 例 1", sentaku="洗濯：何日に1回 例 3（5工程のどれかで「やった」扱い）", gomi="ごみ捨て：何日に1回 例 3")
+async def kaji_command(interaction, ryouri: int = None, souji: int = None, sara: int = None, sentaku: int = None, gomi: int = None):
     user = interaction.user
     await ensure_user(user)
     changed = False
-    for col, v in (("kaji_cook", ryouri), ("kaji_clean", souji), ("kaji_dish", sara), ("kaji_wash", sentaku)):
+    for col, v in (("kaji_cook", ryouri), ("kaji_clean", souji), ("kaji_dish", sara), ("kaji_wash", sentaku), ("kaji_trash", gomi)):
         if v is not None:
             await db.execute(f"UPDATE users SET {col}=? WHERE id=?", (max(0, min(30, v)), str(user.id)))
             changed = True
@@ -1621,7 +1643,7 @@ def tutorial_embeds():
     e3 = discord.Embed(title="🔁 1日の流れ", color=gold, description=(
         f"**朝**　☀️ 起きた → {RADIO_TIME} ラジオ体操🏃\n"
         "**日中**　🍚 食べたら押す（#ごはん🍚 に写真を投げるだけでもOK）／🧹 家事をしたら押す／📚 課題に気づいたら `/kadai add`\n"
-        "**夜**　🛁 お風呂に入ったら押す → 🌙 おやすみ\n"
+        "**夜**　🛁 お風呂・🪥 歯磨きをしたら押す → 🌙 おやすみ\n"
         f"**{JUDGE_HOUR}:00**　判定。未達は #叱責👹 で名指し、達成した人は ✨ で称えられ、連続日数 🔥 が伸びる（3・7・14・30日…でお祝い）\n"
         "**日曜の夜**　#つうしんぼ📮 に今週の通信簿（達成率ランキング・各賞・起床/睡眠グラフ）。月末は 🏆 月間MVP"))
     e4 = discord.Embed(title="🗺 チャンネル案内", color=gold, description=(
@@ -1631,7 +1653,7 @@ def tutorial_embeds():
         "#起床🌅　☀️起きた／🌙おやすみ／🏃ラジオ体操の呼び出しON/OFF\n"
         "#ごはん🍚　🍚朝 🍱昼 🍽️夜 🍩間食（写真でも記録）\n"
         "#家事🧹　🍳料理 🧹掃除 🍽️皿洗い ＋ 洗濯5工程\n"
-        "#おふろ🛁　🛁お風呂入った\n"
+        "#おふろ🛁　🛁お風呂入った／🪥歯磨きした\n"
         "#課題📚　課題の通知とリマインド。✅で完了\n"
         "#叱責👹　毎晩の判定結果。晒される場所\n"
         "#つうしんぼ📮　週の通信簿と月間表彰\n"
@@ -1963,9 +1985,10 @@ async def setup_command(interaction):
                 "・**kishou** 起床の締切（`なし` で解除）\n"
                 "・**suimin** 最低睡眠時間 h（0で解除）\n"
                 "・**nyuyoku** 毎日入浴する（True/False）\n"
+                "・**hamigaki** 1日の最低歯磨き回数 例 2（0で解除）\n"
                 "・**shokuji** 1日の最低食事回数 1〜3（0で解除。間食は数えない）\n"
                 "・**kaji** 週の最低家事回数（合計・0で解除。日曜夜に判定）\n"
-                "　種類ごとに決めたい人は `/kaji ryouri:1 sentaku:3 souji:7`（N日に1回・毎日判定）\n"
+                "　種類ごとに決めたい人は `/kaji ryouri:1 sentaku:3 souji:7 gomi:3`（N日に1回・毎日判定）\n"
                 "・**rajio** 毎朝のラジオ体操に参加する（True/False）\n\n"
                 f"🏃 ラジオ体操は毎朝 **{RADIO_TIME}** に 🔊ラジオ体操🏃 で自動再生。#起床🌅 の 🏃 ボタンで呼び出し（メンション）のON/OFF。\n"
                 "📚 **課題**：`/jikanwari add` で履修科目を登録（科目名で検索・最大5つずつ）→ 気づいた人が `/kadai add` で課題を登録すると、"
@@ -1995,9 +2018,10 @@ async def nakama_of(uid, wake_deadline):
 @bot.tree.command(name="saitei", description="自分の「最低限」を設定する（指定した項目だけ更新）")
 @app_commands.describe(kishou="起床の締切 例 7:00（「なし」で解除）", suimin="最低睡眠時間(h) 例 6（0で解除）",
                        nyuyoku="毎日入浴する", shokuji="1日の最低食事回数 1〜3（0で解除）", kaji="週の最低家事回数（0で解除）",
-                       rajio="毎朝のラジオ体操に参加する", kyujitsu="土日は起床締切を何時間遅らせるか 例 2（0で解除）")
+                       rajio="毎朝のラジオ体操に参加する", kyujitsu="土日は起床締切を何時間遅らせるか 例 2（0で解除）",
+                       hamigaki="1日の最低歯磨き回数 例 2（0で解除）")
 async def saitei_command(interaction, kishou: str = None, suimin: float = None, nyuyoku: bool = None,
-                         shokuji: int = None, kaji: int = None, rajio: bool = None, kyujitsu: float = None):
+                         shokuji: int = None, kaji: int = None, rajio: bool = None, kyujitsu: float = None, hamigaki: int = None):
     user = interaction.user
     await ensure_user(user)
     if kishou is not None:
@@ -2015,6 +2039,8 @@ async def saitei_command(interaction, kishou: str = None, suimin: float = None, 
         await db.execute("UPDATE users SET bath_daily=? WHERE id=?", (1 if nyuyoku else 0, str(user.id)))
     if rajio is not None:
         await db.execute("UPDATE users SET radio_daily=? WHERE id=?", (1 if rajio else 0, str(user.id)))
+    if hamigaki is not None:
+        await db.execute("UPDATE users SET teeth_min=? WHERE id=?", (max(0, min(10, hamigaki)), str(user.id)))
     if kyujitsu is not None:
         await db.execute("UPDATE users SET holiday_shift=? WHERE id=?", (int(max(0.0, min(12.0, kyujitsu)) * 60), str(user.id)))
     if shokuji is not None:
@@ -2028,7 +2054,7 @@ async def saitei_command(interaction, kishou: str = None, suimin: float = None, 
     if u["wake_deadline"]:
         mate_txt = f"\n\n👥 同じ {u['wake_deadline']} 起床の仲間：" + ("、".join(mates) if mates else "まだいない（最初の一人！）")
     await interaction.response.send_message(f"🛠 **{user.display_name} の最低限**\n{settings_text(u)}{mate_txt}", ephemeral=True)
-    if any(v is not None for v in (kishou, suimin, nyuyoku, shokuji, kaji, rajio, kyujitsu)):
+    if any(v is not None for v in (kishou, suimin, nyuyoku, shokuji, kaji, rajio, kyujitsu, hamigaki)):
         settei = await get_ch("settei")
         if settei:
             line = f"🛠 **{user.display_name}** が最低限を更新：" + " / ".join(settings_text(u).split("\n"))
@@ -2074,6 +2100,7 @@ async def kiroku_command(interaction):
         "🍚 食事：" + ("、".join(f"{m['sub']}" + (f"({m['note']})" if m["note"] else "") for m in meals) if meals else "未報告"),
         "🧹 家事：" + ("、".join(CHORE_LABEL[c["sub"]] for c in chores) if chores else "なし"),
         "🛁 入浴：" + ("済" if bath else "未報告"),
+        "🪥 歯磨き：" + (f"{len(await events_on(user.id, day, 'teeth'))} 回"),
         "🏃 ラジオ体操：" + ("参加" if radio else "—"),
     ]
     async with db.execute("SELECT COUNT(*) AS n FROM custom_items WHERE user_id=?", (str(user.id),)) as c:

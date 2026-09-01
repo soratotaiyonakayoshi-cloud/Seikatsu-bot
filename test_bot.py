@@ -295,6 +295,21 @@ async def main():
     check("#ロール🏷 チャンネル定義", B.CH["roles"][0], "ロール🏷")
     check("自己紹介チャンネルの説明にロールが無い", "ロール" in B.CH["jikoshokai"][1], False)
 
+    # 歯磨き・ごみ捨て
+    check("家事ボタンに ごみ捨て", any(k == "trash" for k, _, _, _ in B.CHORES), True)
+    check("家事カテゴリに ごみ捨て", any(c == "kaji_trash" for c, _, _, _ in B.KAJI_CATS), True)
+    await B.db.execute("UPDATE users SET teeth_min=2 WHERE id='8'"); await B.db.commit()
+    await B.add_event(8, "teeth", ts_dt=datetime(2026, 8, 4, 8, tzinfo=JST))
+    m8 = await B.build_misses(await B.get_user(8), "2026-08-04", d1, d2, False)
+    check("歯磨き 1/2 で未達", "🪥 歯磨き 1/2 回" in m8, True)
+    await B.add_event(8, "teeth", ts_dt=datetime(2026, 8, 4, 22, tzinfo=JST))
+    m8 = await B.build_misses(await B.get_user(8), "2026-08-04", d1, d2, False)
+    check("歯磨き 2/2 で達成", any("歯磨き" in x for x in m8), False)
+    check("設定表示に歯磨き", "🪥 歯磨き 1日2回" in B.settings_text(await B.get_user(8)), True)
+    await B.db.execute("UPDATE users SET kaji_trash=3, kaji_since='2026-08-01' WHERE id='8'"); await B.db.commit()
+    stt = {x["label"]: x for x in await B.kaji_status(await B.get_user(8), "2026-08-04")}
+    check("ごみ捨て 3日に1回 未記録→設定日から3日で今日やる", stt["ごみ捨て"]["due"], True)
+
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
     check("meta 上書き", await B.meta_get("last_judge_day"), "2026-08-06")
