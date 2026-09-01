@@ -1599,8 +1599,24 @@ bot.tree.add_command(kojin)
 # ============================================================
 #  参加者向けチュートリアル（#はじめに📖 に常設・/help でいつでも）
 # ============================================================
+async def make_readonly(ch, guild, reason=""):
+    """@everyone の書き込みを禁止しつつ、Bot 自身は投稿・編集・リアクションできるようにする。
+    （チャンネルの上書き設定は Bot にも効くので、先に Bot への許可を付けないと Bot が 403 になる）"""
+    try:
+        await ch.set_permissions(guild.me, send_messages=True, embed_links=True, attach_files=True,
+                                 add_reactions=True, read_message_history=True, manage_messages=True, reason="Botの投稿用")
+    except Exception as e:
+        print(f"#{ch.name} のBot権限設定失敗: {e!r}", flush=True)
+    try:
+        await ch.set_permissions(guild.default_role, send_messages=False, reason=reason)
+    except Exception as e:
+        print(f"#{ch.name} の読み取り専用化失敗: {e!r}", flush=True)
+
+SETUP_ERRORS = []
+
 async def upsert_message(key, ch, embed, view=None):
-    """meta に保存したメッセージがあれば編集、無ければ投稿（/setup を何度実行しても増えない）"""
+    """meta に保存したメッセージがあれば編集、無ければ投稿（/setup を何度実行しても増えない）。
+    権限不足で投稿できない場合は None を返し、/setup の結果に理由を出す"""
     mid = await meta_get(key)
     if mid:
         try:
@@ -1609,7 +1625,11 @@ async def upsert_message(key, ch, embed, view=None):
             return m
         except Exception:
             pass
-    m = await (ch.send(embed=embed, view=view) if view is not None else ch.send(embed=embed))
+    try:
+        m = await (ch.send(embed=embed, view=view) if view is not None else ch.send(embed=embed))
+    except discord.Forbidden:
+        SETUP_ERRORS.append(f"#{ch.name} に投稿できません（Botの「メッセージを送信」権限を確認）")
+        return None
     await meta_set(key, m.id)
     return m
 
@@ -1740,6 +1760,8 @@ async def post_role_panels(ch, old_channels=()):
                             description="自分に合うリアクションを押すとロールが付きます（別のを押すと切替、外すとロールも外れます）\n\n"
                                         + "　".join(f"{e} {n}" for e, n, _ in items))
         msg = await upsert_message(f"rolemsg_{gk}", ch, emb)
+        if not msg:
+            continue
         ROLE_MSG_IDS[msg.id] = gk
         for e, _, _ in items:
             try:
@@ -1923,6 +1945,7 @@ async def jikoshokai_command(interaction):
 async def setup_command(interaction):
     await interaction.response.defer(ephemeral=True)
     guild = interaction.guild
+    SETUP_ERRORS.clear()
     cat = discord.utils.get(guild.categories, name=CATEGORY_NAME) or await guild.create_category(CATEGORY_NAME)
     made = []
     renamed = []
@@ -1952,10 +1975,7 @@ async def setup_command(interaction):
                               lambda n: guild.create_voice_channel(n, category=cat))
     haj = await get_ch("hajimeni")
     if haj:
-        try:
-            await haj.set_permissions(guild.default_role, send_messages=False, reason="ガイド用チャンネルは読み取り専用")
-        except Exception as e:
-            print(f"#はじめに📖 の権限設定失敗: {e!r}", flush=True)
+        await make_readonly(haj, guild, "ガイド用チャンネルは読み取り専用")
         for i, emb in enumerate(tutorial_embeds()):
             await upsert_message(f"tutorial_{i}", haj, emb)
     role_note = ""
@@ -1964,10 +1984,7 @@ async def setup_command(interaction):
     if jik:
         await upsert_message("intro_panel", jik, intro_template_embed(), view=IntroView())
     if rch:
-        try:
-            await rch.set_permissions(guild.default_role, send_messages=False, reason="ロール選択はリアクションのみ")
-        except Exception as e:
-            print(f"#ロール🏷 の権限設定失敗: {e!r}", flush=True)
+        await make_readonly(rch, guild, "ロール選択はリアクションのみ")
         created = await ensure_roles(guild)
         await post_role_panels(rch, old_channels=[c for c in (jik,) if c])
         role_note = "ロール：" + (f"作成 {', '.join(created)}" if created else "既存を利用") + f"（{rch.mention}）\n"
@@ -2007,7 +2024,8 @@ async def setup_command(interaction):
         + f"判定時刻：毎晩 {JUDGE_HOUR}:00 → #叱責👹\n"
         + f"叱り絵文字：`:{KORA_EMOJI_NAME}:`（{kora_emoji(guild)}）\n"
         + role_note
-        + f"ラジオ体操：毎朝 {RADIO_TIME} に {vc.mention} で再生（音源 {audio_state}）", ephemeral=True)
+        + f"ラジオ体操：毎朝 {RADIO_TIME} に {vc.mention} で再生（音源 {audio_state}）"
+        + ("\n⚠️ " + "\n⚠️ ".join(dict.fromkeys(SETUP_ERRORS)) if SETUP_ERRORS else ""), ephemeral=True)
 
 async def nakama_of(uid, wake_deadline):
     if not wake_deadline:
@@ -2156,6 +2174,8 @@ async def on_app_command_error(interaction, error):
         msg = "❌ このコマンドは管理者のみ使えます。"
     else:
         msg = f"❌ エラー: {error}"
+        if "50013" in str(error) or "Missing Permissions" in str(error):
+            msg += "\n💡 Botの権限不足です。サーバー設定→ロール→Botのロールに「チャンネルの管理」「ロールの管理」「メッセージの送信」「メッセージの管理」があるか、Botのロールが付与対象ロールより上にあるか確認してください。"
         print(f"command error: {error!r}", flush=True)
     try:
         if interaction.response.is_done():
