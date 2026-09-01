@@ -14,7 +14,7 @@ import os
 import re
 import unicodedata
 import zlib
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 
 try:
     from dotenv import load_dotenv
@@ -34,6 +34,8 @@ RADIO_MP3 = os.getenv("RADIO_MP3", "radio.mp3")        # 音源ファイル（�
 FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg")
 RADIO_VC_NAME = "ラジオ体操"
 REMIND_HOUR = int(os.getenv("REMIND_HOUR", "8"))     # 課題リマインドを流す時刻（時）
+GAKUSHU_URL = os.getenv("GAKUSHU_URL", "https://gakushu-rpg.pages.dev")   # みんなで暗記！！連携先
+GAKUSHU_SECRET = os.getenv("GAKUSHU_SECRET", "")     # Cloudflare側 VC_SECRET と同じ値。空なら連携オフ
 COURSES_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "courses_2026_kouki.json")
 JST = timezone(timedelta(hours=9))
 
@@ -45,6 +47,7 @@ CH = {
     "chore": ("家事", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
     "bath": ("おふろ", "🛁 お風呂に入ったら押す。"),
     "kora": ("こら", "毎晩の判定で、最低限を守れなかった人が晒される場所。"),
+    "tsushinbo": ("つうしんぼ", "毎週日曜の夜に、その週の通信簿（達成率ランキング・各賞）が届く場所。"),
     "kadai": ("課題", "`/jikanwari add` で履修科目を登録 → 気づいた人が `/kadai add` → 同じ科目の履修者だけに通知＆リマインド。"),
     "settei": ("設定", "`/saitei` で自分の最低限を決める。`/nakama` で同じ時間の仲間を見る。"),
 }
@@ -136,6 +139,7 @@ CREATE TABLE IF NOT EXISTS assignments(
 );
 CREATE TABLE IF NOT EXISTS assignment_done(assignment_id INTEGER NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY(assignment_id, user_id));
 CREATE TABLE IF NOT EXISTS assignment_reminded(assignment_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(assignment_id, stage));
+CREATE TABLE IF NOT EXISTS daily_results(day TEXT NOT NULL, user_id TEXT NOT NULL, achieved INTEGER NOT NULL, misses TEXT, PRIMARY KEY(day, user_id));
 """
 db = None
 
@@ -147,7 +151,8 @@ async def db_init():
     await db.commit()
     # 既存DBへの列追加（既にあれば失敗するだけなので無視）
     for m in ("ALTER TABLE users ADD COLUMN radio_daily INTEGER NOT NULL DEFAULT 0",
-              "ALTER TABLE users ADD COLUMN radio_notify INTEGER NOT NULL DEFAULT 0"):
+              "ALTER TABLE users ADD COLUMN radio_notify INTEGER NOT NULL DEFAULT 0",
+              "ALTER TABLE users ADD COLUMN best_streak INTEGER NOT NULL DEFAULT 0"):
         try:
             await db.execute(m)
             await db.commit()
@@ -495,6 +500,36 @@ async def on_message(message):
 # ------------------------------------------------------------
 #  毎晩の判定 → #こら
 # ------------------------------------------------------------
+async def streak_of(uid, day):
+    """day を含めて遡った連続達成日数（記録の無い日・未達の日で途切れる）"""
+    async with db.execute("SELECT day, achieved FROM daily_results WHERE user_id=? AND day<=? ORDER BY day DESC LIMIT 400",
+                          (str(uid), day)) as c:
+        rows = await c.fetchall()
+    n, expect = 0, date.fromisoformat(day)
+    for r in rows:
+        if date.fromisoformat(r["day"]) != expect or not r["achieved"]:
+            break
+        n += 1
+        expect -= timedelta(days=1)
+    return n
+
+MILESTONES = (3, 7, 14, 30, 50, 100, 365)
+
+async def gakushu_report(uid, name, day, achieved, streak, misses_n):
+    """みんなで暗記！！(gakushu-rpg) へ判定結果を送る（達成日はメダル付与・🌅生活ランキング）。未設定なら何もしない"""
+    if not GAKUSHU_SECRET:
+        return
+    import aiohttp
+    payload = {"secret": GAKUSHU_SECRET, "uid": str(uid), "name": name, "day": day,
+               "achieved": 1 if achieved else 0, "streak": streak, "misses": misses_n}
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as sess:
+            async with sess.post(GAKUSHU_URL.rstrip("/") + "/api/seikatsu", json=payload) as r:
+                if r.status >= 300:
+                    print(f"gakushu 連携エラー {r.status}: {await r.text()}", flush=True)
+    except Exception as e:
+        print(f"gakushu 連携失敗: {e!r}", flush=True)
+
 async def judge(guild, manual=False):
     now = now_jst()
     day = day_str(now)
@@ -506,11 +541,25 @@ async def judge(guild, manual=False):
     async with db.execute("SELECT * FROM users") as c:
         users = [u for u in await c.fetchall() if has_any_setting(u)]
     emoji = kora_emoji(guild)
-    results = []
+    results, achievers, celebrate = [], [], []
     for u in users:
         misses = await build_misses(u, day, d1, d2, is_sunday)
+        achieved = 0 if misses else 1
+        await db.execute("INSERT INTO daily_results(day,user_id,achieved,misses) VALUES(?,?,?,?) "
+                         "ON CONFLICT(day,user_id) DO UPDATE SET achieved=excluded.achieved, misses=excluded.misses",
+                         (day, u["id"], achieved, "\n".join(misses)))
+        await db.commit()
+        streak = await streak_of(u["id"], day)
+        if streak > (u["best_streak"] or 0):
+            await db.execute("UPDATE users SET best_streak=? WHERE id=?", (streak, u["id"]))
+            await db.commit()
         if misses:
             results.append((u, misses))
+        else:
+            achievers.append((u, streak))
+            if streak in MILESTONES:
+                celebrate.append(f"🎊 <@{u['id']}> が **{streak}日連続** 達成！")
+        await gakushu_report(u["id"], u["name"] or "", day, achieved, streak, len(misses))
     tag = "（手動判定）" if manual else ""
     if not users:
         await kora_ch.send(f"📋 {day} の判定{tag}：まだ誰も最低限を設定していません。`/saitei` で決めよう。")
@@ -520,7 +569,93 @@ async def judge(guild, manual=False):
         await kora_ch.send(f"📋 {day} の判定{tag}：{len(results)}/{len(users)} 人が最低限を守れませんでした。")
         for u, misses in results:
             await kora_ch.send(f"{emoji} <@{u['id']}> **こら！**\n" + "\n".join("・" + m for m in misses))
+    if achievers:
+        achievers.sort(key=lambda x: -x[1])
+        await kora_ch.send("✨ 達成：" + "、".join(f"**{u['name']}**" + (f" 🔥{st}日" if st >= 2 else "") for u, st in achievers))
+    for line in celebrate:
+        await kora_ch.send(line)
     return f"判定完了：{len(results)}/{len(users)} 人が未達"
+
+# ------------------------------------------------------------
+#  週次通信簿（日曜の判定後に自動投稿。/tsushinbo で手動）
+# ------------------------------------------------------------
+async def weekly_summary(guild, manual=False):
+    now = now_jst()
+    d1, d2 = week_range(now)
+    ch = await get_ch("tsushinbo") or await get_ch("kora")
+    if not ch:
+        return "❌ #つうしんぼ が未設定です（/setup を実行してください）"
+    async with db.execute("SELECT user_id, COUNT(*) AS judged, SUM(achieved) AS ach, GROUP_CONCAT(misses, '\n') AS mtext "
+                          "FROM daily_results WHERE day BETWEEN ? AND ? GROUP BY user_id", (d1, d2)) as c:
+        jr = {r["user_id"]: r for r in await c.fetchall()}
+    async with db.execute("SELECT DISTINCT user_id FROM events WHERE day BETWEEN ? AND ?", (d1, d2)) as c:
+        uids = {r["user_id"] for r in await c.fetchall()} | set(jr)
+    stats = []
+    for uid in uids:
+        u = await get_user(uid)
+        name = (u["name"] if u else None) or uid
+        async with db.execute("SELECT kind, sub, ts, day, note FROM events WHERE user_id=? AND day BETWEEN ? AND ?", (uid, d1, d2)) as c:
+            evs = await c.fetchall()
+        wakes = [datetime.fromtimestamp(e["ts"], JST) for e in evs if e["kind"] == "wake"]
+        wake_days = {}
+        for w in wakes:  # 1日1回目だけ
+            wake_days.setdefault(day_str(w), w)
+        wake_min = [w.hour * 60 + w.minute for w in wake_days.values()]
+        sleeps = [float(e["note"]) for e in evs if e["kind"] == "sleep" and e["note"]]
+        j = jr.get(uid)
+        mtext = (j["mtext"] or "") if j else ""
+        stats.append({
+            "uid": uid, "name": name,
+            "judged": j["judged"] if j else 0, "ach": (j["ach"] or 0) if j else 0,
+            "streak": await streak_of(uid, day_str(now)),
+            "wake_n": len(wake_min), "wake_avg": (sum(wake_min) / len(wake_min)) if wake_min else None,
+            "sleep_avg": (sum(sleeps) / len(sleeps)) if sleeps else None,
+            "chores": sum(1 for e in evs if e["kind"] == "chore"),
+            "meals": sum(1 for e in evs if e["kind"] == "meal"),
+            "baths": len({e["day"] for e in evs if e["kind"] == "bath"}),
+            "radio": sum(1 for e in evs if e["kind"] == "radio"),
+            "late": mtext.count("寝坊"), "miss_n": sum(1 for l in mtext.split("\n") if l.strip()),
+        })
+    if not stats:
+        await ch.send(f"📮 今週（{d1}〜{d2}）は記録がありませんでした。")
+        return "記録なし"
+    judged = [x for x in stats if x["judged"] > 0]
+    judged.sort(key=lambda x: (-(x["ach"] / x["judged"]), -x["ach"], -x["streak"]))
+    lines = []
+    for i, x in enumerate(judged):
+        rate = round(x["ach"] * 100 / x["judged"])
+        medal = ["🥇", "🥈", "🥉"][i] if i < 3 else f"{i + 1}."
+        lines.append(f"{medal} **{x['name']}**　達成 {x['ach']}/{x['judged']}日（{rate}%）" + (f"　🔥{x['streak']}日連続" if x["streak"] >= 2 else ""))
+    stats.sort(key=lambda x: x["uid"])
+    def award(title, key, pick_min=False, need=lambda x: True, fmt=lambda v: str(v)):
+        """同点は全員表彰"""
+        cands = [x for x in stats if x[key] is not None and need(x)]
+        if not cands:
+            return None
+        best_val = min(x[key] for x in cands) if pick_min else max(x[key] for x in cands)
+        if not pick_min and not best_val:
+            return None
+        winners = [x for x in cands if x[key] == best_val]
+        return f"{title}：" + "、".join(f"**{w['name']}**" for w in winners) + f"（{fmt(best_val)}）"
+    awards = [a for a in (
+        ("👑 皆勤賞：" + "、".join(f"**{x['name']}**" for x in judged if x["judged"] >= 3 and x["ach"] == x["judged"])) if any(x["judged"] >= 3 and x["ach"] == x["judged"] for x in judged) else None,
+        award("🌅 早起き賞", "wake_avg", pick_min=True, need=lambda x: x["wake_n"] >= 3, fmt=lambda v: f"平均 {int(v)//60}:{int(v)%60:02d}"),
+        award("🛌 ぐっすり賞", "sleep_avg", need=lambda x: x["sleep_avg"] is not None, fmt=lambda v: f"平均 {v:.1f}h"),
+        award("🧹 家事賞", "chores", fmt=lambda v: f"{v}回"),
+        award("🍚 ごはん賞", "meals", fmt=lambda v: f"{v}回報告"),
+        award("🛁 きれい好き賞", "baths", fmt=lambda v: f"{v}日"),
+        award("🏃 ラジオ体操賞", "radio", fmt=lambda v: f"{v}回"),
+        award("🐷 寝坊賞", "late", fmt=lambda v: f"{v}回"),
+        award("👹 こら賞", "miss_n", fmt=lambda v: f"未達 {v}件"),
+    ) if a]
+    emb = discord.Embed(title=f"📮 今週の通信簿（{d1[5:].replace('-', '/')}〜{d2[5:].replace('-', '/')}）" + ("（手動）" if manual else ""),
+                        color=discord.Color.gold())
+    emb.add_field(name="🏆 最低限 達成率ランキング", value="\n".join(lines)[:1024] if lines else "判定対象の人がいませんでした（/saitei で設定）", inline=False)
+    if awards:
+        emb.add_field(name="🎖 今週の各賞", value="\n".join(awards)[:1024], inline=False)
+    emb.set_footer(text="来週もほどほどに、最低限を守ろう")
+    await ch.send(embed=emb)
+    return f"通信簿を投稿しました（{len(stats)}人）"
 
 @tasks.loop(minutes=1)
 async def judge_loop():
@@ -534,8 +669,10 @@ async def judge_loop():
     for g in bot.guilds:
         try:
             await judge(g)
+            if now.weekday() == 6:
+                await weekly_summary(g)
         except Exception as e:
-            print(f"judge error: {e}", flush=True)
+            print(f"judge error: {e!r}", flush=True)
 
 # ------------------------------------------------------------
 #  朝のラジオ体操（指定時刻にVCへ入って音源を流す。mezamashi-bot の再生ロジックを流用）
@@ -1068,7 +1205,10 @@ async def setup_command(interaction):
                 "・**rajio** 毎朝のラジオ体操に参加する（True/False）\n\n"
                 f"🏃 ラジオ体操は毎朝 **{RADIO_TIME}** に 🔊ラジオ体操 で自動再生。#起床 の 🏃 ボタンで呼び出し（メンション）のON/OFF。\n"
                 "📚 **課題**：`/jikanwari add` で履修科目を登録（科目名で検索・最大5つずつ）→ 気づいた人が `/kadai add` で課題を登録すると、"
-                f"同じ科目の履修者だけに #課題 で通知。3日前・前日・当日 {REMIND_HOUR}:00 に未完了の人へリマインド。投稿の ✅ で完了。\n"
+                f"同じ科目の履修者だけに #課題 で通知。3日前・前日・当日 {REMIND_HOUR}:00 に未完了の人へリマインド。投稿の ✅ で完了。\n\n"
+                "🔥 **連続達成**：判定で未達ゼロの日が続くと連続日数が伸びる（3・7・14・30日…で祝福）。`/kiroku` で確認。\n"
+                "📮 **通信簿**：毎週日曜の判定後に #つうしんぼ へ達成率ランキングと各賞（早起き賞・寝坊賞…）。\n"
+                f"{'🎮 達成した日は みんなで暗記！！ で 🎫メダル（連続ボーナスあり）。🌅生活ランキングにも反映。' if GAKUSHU_SECRET else ''}\n"
                 f"毎晩 **{JUDGE_HOUR}:00** に判定し、守れなかった人は #こら に名指しで晒されます。\n"
                 "`/nakama` で同じ起床時刻の仲間が見られます。`/kiroku` で自分の記録を確認。"
             ), color=discord.Color.gold()))
@@ -1176,6 +1316,8 @@ async def kiroku_command(interaction):
     emb = discord.Embed(title=f"📖 {user.display_name} の記録", color=discord.Color.gold())
     emb.add_field(name=f"今日（{day}）", value="\n".join(today), inline=False)
     emb.add_field(name=f"今週（{d1}〜{d2}）", value=" / ".join(week), inline=False)
+    st = await streak_of(user.id, day)
+    emb.add_field(name="🔥 連続達成", value=f"{st} 日（自己ベスト {max(st, u['best_streak'] or 0)} 日）", inline=False)
     emb.add_field(name="最低限の設定", value=settings_text(u), inline=False)
     await interaction.response.send_message(embed=emb, ephemeral=True)
 
@@ -1184,6 +1326,13 @@ async def kiroku_command(interaction):
 async def rajio_command(interaction):
     await interaction.response.defer(ephemeral=True)
     res = await play_radio(interaction.guild, manual=True)
+    await interaction.followup.send(res, ephemeral=True)
+
+@bot.tree.command(name="tsushinbo", description="【管理者用】今週の通信簿を今すぐ投稿する（テスト用）")
+@app_commands.checks.has_permissions(administrator=True)
+async def tsushinbo_command(interaction):
+    await interaction.response.defer(ephemeral=True)
+    res = await weekly_summary(interaction.guild, manual=True)
     await interaction.followup.send(res, ephemeral=True)
 
 @bot.tree.command(name="hantei", description="【管理者用】今すぐ判定を実行する（テスト用）")

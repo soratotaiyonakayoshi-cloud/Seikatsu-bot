@@ -32,7 +32,7 @@ check("食事推定 19:00", B.infer_meal_sub(datetime(2026,8,5,19,0,tzinfo=JST))
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー4種 登録OK", True, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["hantei", "jikanwari", "kadai", "kiroku", "nakama", "rajio", "saitei", "setup"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["hantei", "jikanwari", "kadai", "kiroku", "nakama", "rajio", "saitei", "setup", "tsushinbo"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n
@@ -134,6 +134,57 @@ async def main():
     check("残り日数 3", B.days_left(due3), 3)
     await B.db.execute("INSERT INTO assignment_done(assignment_id,user_id) VALUES(?, '2')", (aid,)); await B.db.commit()
     check("完了集合", await B.done_set(aid), {"2"})
+
+    # ストリーク（連続達成）
+    for dd, ok_ in (("2026-08-01", 1), ("2026-08-02", 1), ("2026-08-03", 0), ("2026-08-04", 1), ("2026-08-05", 1)):
+        await B.db.execute("INSERT INTO daily_results(day,user_id,achieved,misses) VALUES(?,?,?,?)", (dd, "7", ok_, "" if ok_ else "☀️ 寝坊"))
+    await B.db.commit()
+    check("連続達成 8/5時点=2", await B.streak_of(7, "2026-08-05"), 2)
+    check("連続達成 8/3で途切れ=0", await B.streak_of(7, "2026-08-03"), 0)
+    check("連続達成 8/2時点=2", await B.streak_of(7, "2026-08-02"), 2)
+    check("記録の無い日はカウントしない", await B.streak_of(7, "2026-08-07"), 0)
+    check("マイルストーンに7", 7 in B.MILESTONES, True)
+
+    # 週次通信簿（偽チャンネルに投稿させて内容を確認）
+    sent = []
+    class FakeCh:
+        async def send(self, content=None, **kw):
+            sent.append((content, kw.get("embed")))
+    orig_get_ch = B.get_ch
+    async def fake_get_ch(key):
+        return FakeCh() if key in ("tsushinbo", "kora") else None
+    B.get_ch = fake_get_ch
+    orig_now = B.now_jst
+    B.now_jst = lambda: datetime(2026, 8, 9, 23, 5, tzinfo=JST)   # 日曜
+    try:
+        for uid, nm in ((11, "はやおき"), (12, "ねぼう")):
+            await B.ensure_user(M(uid, nm))
+        for dd in ("2026-08-03", "2026-08-04", "2026-08-05"):
+            await B.db.execute("INSERT OR REPLACE INTO daily_results(day,user_id,achieved,misses) VALUES(?,?,1,'')", (dd, "11"))
+            await B.db.execute("INSERT OR REPLACE INTO daily_results(day,user_id,achieved,misses) VALUES(?,?,0,'☀️ 寝坊 07:00 まで → 09:30')", (dd, "12"))
+            await B.add_event(11, "wake", ts_dt=datetime.fromisoformat(dd).replace(hour=6, minute=30, tzinfo=JST))
+            await B.add_event(12, "wake", ts_dt=datetime.fromisoformat(dd).replace(hour=9, minute=30, tzinfo=JST))
+            await B.add_event(11, "sleep", note="7.5", ts_dt=datetime.fromisoformat(dd).replace(hour=6, minute=30, tzinfo=JST))
+            await B.add_event(12, "chore", "cook", ts_dt=datetime.fromisoformat(dd).replace(hour=12, tzinfo=JST))
+        await B.db.commit()
+        res = await B.weekly_summary(None, manual=True)
+        check("通信簿 投稿された", len(sent), 1)
+        emb = sent[0][1]
+        check("通信簿 embed あり", emb is not None, True)
+        fields = {f.name: f.value for f in emb.fields}
+        rank = fields.get("🏆 最低限 達成率ランキング", "")
+        check("達成率1位は はやおき", rank.startswith("🥇 **はやおき**"), True)
+        check("ねぼう は 0/3", "**ねぼう**　達成 0/3日（0%）" in rank, True)
+        aw = fields.get("🎖 今週の各賞", "")
+        check("皆勤賞 はやおき", "👑 皆勤賞：**はやおき**" in aw, True)
+        check("早起き賞 6:30", "🌅 早起き賞：**はやおき**（平均 6:30）" in aw, True)
+        check("寝坊賞 ねぼう 3回", "🐷 寝坊賞：**ねぼう**（3回）" in aw, True)
+        kaji_line = next((l for l in aw.split("\n") if l.startswith("🧹 家事賞")), "")
+        check("家事賞 同点は全員（ねぼう含む・3回）", "**ねぼう**" in kaji_line and kaji_line.endswith("（3回）"), True)
+        check("ぐっすり賞 7.5h", "🛌 ぐっすり賞：**はやおき**（平均 7.5h）" in aw, True)
+    finally:
+        B.get_ch = orig_get_ch
+        B.now_jst = orig_now
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
