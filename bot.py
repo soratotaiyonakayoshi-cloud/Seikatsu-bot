@@ -1,7 +1,7 @@
 """最低限生活リズムサークル Bot
 
 起床・睡眠・家事・食事・入浴を「ボタン1タップ」で記録し、
-毎晩の判定で「自分で決めた最低限」を守れなかった人を #こら に晒す。
+毎晩の判定で「自分で決めた最低限」を守れなかった人を #叱責👹 に晒す。
 データは SQLite（VM上のファイル）に保存。外部サービス不要。
 """
 import discord
@@ -32,7 +32,11 @@ KORA_EMOJI_NAME = os.getenv("KORA_EMOJI", "こら")
 RADIO_TIME = os.getenv("RADIO_TIME", "06:30")          # ラジオ体操の開始時刻(HH:MM)
 RADIO_MP3 = os.getenv("RADIO_MP3", "radio.mp3")        # 音源ファイル（リポジトリには含めない。VMに直接置く）
 FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg")
-RADIO_VC_NAME = "ラジオ体操"
+RADIO_VC_NAME = "ラジオ体操🏃"
+# 改名前の旧チャンネル名（/setup が既存チャンネルを見つけて改名するために使う）
+OLD_CH_NAMES = {"wake": "起床", "meal": "ごはん", "chore": "家事", "bath": "おふろ", "kora": "こら",
+                "kadai": "課題", "tsushinbo": "つうしんぼ", "settei": "設定"}
+OLD_RADIO_VC_NAME = "ラジオ体操"
 REMIND_HOUR = int(os.getenv("REMIND_HOUR", "8"))     # 課題リマインドを流す時刻（時）
 GAKUSHU_URL = os.getenv("GAKUSHU_URL", "https://gakushu-rpg.pages.dev")   # みんなで暗記！！連携先
 GAKUSHU_SECRET = os.getenv("GAKUSHU_SECRET", "")     # Cloudflare側 VC_SECRET と同じ値。空なら連携オフ
@@ -42,14 +46,14 @@ JST = timezone(timedelta(hours=9))
 CATEGORY_NAME = "最低限生活リズム"
 # key -> (チャンネル名, パネルの説明)
 CH = {
-    "wake": ("起床", "☀️ 起きたら押す／🌙 寝る前に押す。睡眠時間は自動で計算されます。\n🏃 で毎朝のラジオ体操の呼び出し（メンション）をON/OFF。"),
-    "meal": ("ごはん", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。"),
-    "chore": ("家事", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
-    "bath": ("おふろ", "🛁 お風呂に入ったら押す。"),
-    "kora": ("こら", "毎晩の判定で、最低限を守れなかった人が晒される場所。"),
-    "tsushinbo": ("つうしんぼ", "毎週日曜の夜に、その週の通信簿（達成率ランキング・各賞）が届く場所。"),
-    "kadai": ("課題", "`/jikanwari add` で履修科目を登録 → 気づいた人が `/kadai add` → 同じ科目の履修者だけに通知＆リマインド。"),
-    "settei": ("設定", "`/saitei` で自分の最低限を決める。`/nakama` で同じ時間の仲間を見る。"),
+    "wake": ("起床🌅", "☀️ 起きたら押す／🌙 寝る前に押す。睡眠時間は自動で計算されます。\n🏃 で毎朝のラジオ体操の呼び出し（メンション）をON/OFF。"),
+    "meal": ("ごはん🍚", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。"),
+    "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
+    "bath": ("おふろ🛁", "🛁 お風呂に入ったら押す。"),
+    "kora": ("叱責👹", "毎晩の判定で、最低限を守れなかった人が晒される場所。"),
+    "tsushinbo": ("つうしんぼ📮", "毎週日曜の夜に、その週の通信簿（達成率ランキング・各賞）が届く場所。"),
+    "kadai": ("課題📚", "`/jikanwari add` で履修科目を登録 → 気づいた人が `/kadai add` → 同じ科目の履修者だけに通知＆リマインド。"),
+    "settei": ("設定🔧", "`/saitei` で自分の最低限を決める。`/nakama` で同じ時間の仲間を見る。"),
 }
 CHORES = [  # (key, ラベル, 絵文字, 行)
     ("cook", "料理", "🍳", 0), ("clean", "掃除", "🧹", 0), ("dish", "皿洗い", "🍽️", 0),
@@ -266,7 +270,7 @@ def settings_text(u):
 class SeikatsuBot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
-        intents.message_content = True  # #ごはん の写真投稿検知に必要（Developer PortalでONにする）
+        intents.message_content = True  # #ごはん🍚 の写真投稿検知に必要（Developer PortalでONにする）
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
 
@@ -475,7 +479,7 @@ class BathView(discord.ui.View):
 VIEW_FACTORY.update({"wake": WakeView, "meal": MealView, "chore": ChoreView, "bath": BathView})
 
 # ------------------------------------------------------------
-#  #ごはん に写真を投げたら自動記録
+#  #ごはん🍚 に写真を投げたら自動記録
 # ------------------------------------------------------------
 @bot.event
 async def on_message(message):
@@ -498,7 +502,7 @@ async def on_message(message):
     await bump_panel("meal")
 
 # ------------------------------------------------------------
-#  毎晩の判定 → #こら
+#  毎晩の判定 → #叱責👹
 # ------------------------------------------------------------
 async def streak_of(uid, day):
     """day を含めて遡った連続達成日数（記録の無い日・未達の日で途切れる）"""
@@ -537,7 +541,7 @@ async def judge(guild, manual=False):
     is_sunday = now.weekday() == 6
     kora_ch = await get_ch("kora")
     if not kora_ch:
-        return "❌ #こら チャンネルが未設定です（/setup を実行してください）"
+        return "❌ #叱責👹 チャンネルが未設定です（/setup を実行してください）"
     async with db.execute("SELECT * FROM users") as c:
         users = [u for u in await c.fetchall() if has_any_setting(u)]
     emoji = kora_emoji(guild)
@@ -584,7 +588,7 @@ async def weekly_summary(guild, manual=False):
     d1, d2 = week_range(now)
     ch = await get_ch("tsushinbo") or await get_ch("kora")
     if not ch:
-        return "❌ #つうしんぼ が未設定です（/setup を実行してください）"
+        return "❌ #つうしんぼ📮 が未設定です（/setup を実行してください）"
     async with db.execute("SELECT user_id, COUNT(*) AS judged, SUM(achieved) AS ach, GROUP_CONCAT(misses, '\n') AS mtext "
                           "FROM daily_results WHERE day BETWEEN ? AND ? GROUP BY user_id", (d1, d2)) as c:
         jr = {r["user_id"]: r for r in await c.fetchall()}
@@ -1175,17 +1179,31 @@ async def setup_command(interaction):
     guild = interaction.guild
     cat = discord.utils.get(guild.categories, name=CATEGORY_NAME) or await guild.create_category(CATEGORY_NAME)
     made = []
-    for key, (name, _) in CH.items():
-        ch = discord.utils.get(guild.text_channels, name=name)
+    renamed = []
+    async def find_or_rename(key, name, old_name, chans, create):
+        ch = None
+        old_id = await meta_get("ch_" + key)
+        if old_id:
+            ch = guild.get_channel(int(old_id))
         if ch is None:
-            ch = await guild.create_text_channel(name, category=cat)
+            ch = discord.utils.get(chans, name=name) or discord.utils.get(chans, name=old_name)
+        if ch is None:
+            ch = await create(name)
             made.append(name)
+        elif ch.name != name:
+            before = ch.name
+            try:
+                await ch.edit(name=name, reason="チャンネル名を絵文字つきに変更")
+                renamed.append(f"#{before} → #{name}")
+            except Exception as e:
+                print(f"改名失敗 {before}: {e!r}", flush=True)
         await meta_set("ch_" + key, ch.id)
-    vc = discord.utils.get(guild.voice_channels, name=RADIO_VC_NAME)
-    if vc is None:
-        vc = await guild.create_voice_channel(RADIO_VC_NAME, category=cat)
-        made.append("🔊" + RADIO_VC_NAME)
-    await meta_set("ch_radio", vc.id)
+        return ch
+    for key, (name, _) in CH.items():
+        await find_or_rename(key, name, OLD_CH_NAMES.get(key, name), guild.text_channels,
+                             lambda n: guild.create_text_channel(n, category=cat))
+    vc = await find_or_rename("radio", RADIO_VC_NAME, OLD_RADIO_VC_NAME, guild.voice_channels,
+                              lambda n: guild.create_voice_channel(n, category=cat))
     audio_state = "あり ✅" if os.path.exists(RADIO_MP3) else f"なし ⚠️ VMに {RADIO_MP3} を置いてください"
     await meta_set("guild_id", guild.id)
     for key in VIEW_FACTORY:
@@ -1203,18 +1221,18 @@ async def setup_command(interaction):
                 "・**shokuji** 1日の最低食事回数 1〜3（0で解除。間食は数えない）\n"
                 "・**kaji** 週の最低家事回数（0で解除。日曜夜に判定）\n"
                 "・**rajio** 毎朝のラジオ体操に参加する（True/False）\n\n"
-                f"🏃 ラジオ体操は毎朝 **{RADIO_TIME}** に 🔊ラジオ体操 で自動再生。#起床 の 🏃 ボタンで呼び出し（メンション）のON/OFF。\n"
+                f"🏃 ラジオ体操は毎朝 **{RADIO_TIME}** に 🔊ラジオ体操🏃 で自動再生。#起床🌅 の 🏃 ボタンで呼び出し（メンション）のON/OFF。\n"
                 "📚 **課題**：`/jikanwari add` で履修科目を登録（科目名で検索・最大5つずつ）→ 気づいた人が `/kadai add` で課題を登録すると、"
-                f"同じ科目の履修者だけに #課題 で通知。3日前・前日・当日 {REMIND_HOUR}:00 に未完了の人へリマインド。投稿の ✅ で完了。\n\n"
+                f"同じ科目の履修者だけに #課題📚 で通知。3日前・前日・当日 {REMIND_HOUR}:00 に未完了の人へリマインド。投稿の ✅ で完了。\n\n"
                 "🔥 **連続達成**：判定で未達ゼロの日が続くと連続日数が伸びる（3・7・14・30日…で祝福）。`/kiroku` で確認。\n"
-                "📮 **通信簿**：毎週日曜の判定後に #つうしんぼ へ達成率ランキングと各賞（早起き賞・寝坊賞…）。\n"
+                "📮 **通信簿**：毎週日曜の判定後に #つうしんぼ📮 へ達成率ランキングと各賞（早起き賞・寝坊賞…）。\n"
                 f"{'🎮 達成した日は みんなで暗記！！ で 🎫メダル（連続ボーナスあり）。🌅生活ランキングにも反映。' if GAKUSHU_SECRET else ''}\n"
-                f"毎晩 **{JUDGE_HOUR}:00** に判定し、守れなかった人は #こら に名指しで晒されます。\n"
+                f"毎晩 **{JUDGE_HOUR}:00** に判定し、守れなかった人は #叱責👹 に名指しで晒されます。\n"
                 "`/nakama` で同じ起床時刻の仲間が見られます。`/kiroku` で自分の記録を確認。"
             ), color=discord.Color.gold()))
     await interaction.followup.send(
-        "✅ セットアップ完了\n" + (f"新規作成：{', '.join('#' + n for n in made)}\n" if made else "既存チャンネルを再利用しました\n")
-        + f"判定時刻：毎晩 {JUDGE_HOUR}:00 → #こら\n"
+        "✅ セットアップ完了\n" + (f"改名：{', '.join(renamed)}\n" if renamed else "") + (f"新規作成：{', '.join('#' + n for n in made)}\n" if made else "既存チャンネルを再利用しました\n")
+        + f"判定時刻：毎晩 {JUDGE_HOUR}:00 → #叱責👹\n"
         + f"叱り絵文字：`:{KORA_EMOJI_NAME}:`（{kora_emoji(guild)}）\n"
         + f"ラジオ体操：毎朝 {RADIO_TIME} に {vc.mention} で再生（音源 {audio_state}）", ephemeral=True)
 
