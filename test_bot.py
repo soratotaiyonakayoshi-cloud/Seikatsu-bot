@@ -32,10 +32,13 @@ check("食事推定 19:00", B.infer_meal_sub(datetime(2026,8,5,19,0,tzinfo=JST))
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー4種 登録OK", True, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["hantei", "jikanwari", "kadai", "kiroku", "nakama", "rajio", "saitei", "setup", "tsushinbo"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["hantei", "jikanwari", "kadai", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "tsushinbo"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n
+
+async def _fake_async(v):
+    return v
 
 async def main():
     await B.db_init()
@@ -182,6 +185,56 @@ async def main():
         kaji_line = next((l for l in aw.split("\n") if l.startswith("🧹 家事賞")), "")
         check("家事賞 同点は全員（ねぼう含む・3回）", "**ねぼう**" in kaji_line and kaji_line.endswith("（3回）"), True)
         check("ぐっすり賞 7.5h", "🛌 ぐっすり賞：**はやおき**（平均 7.5h）" in aw, True)
+    finally:
+        B.get_ch = orig_get_ch
+        B.now_jst = orig_now
+
+    # お休み申告でストリークが途切れない
+    await B.db.execute("INSERT INTO off_days(day,user_id,reason) VALUES('2026-08-03','7','帰省')"); await B.db.commit()
+    check("お休みの日を飛ばして連続=4", await B.streak_of(7, "2026-08-05"), 4)
+    check("お休み当日から見ても継続", await B.streak_of(7, "2026-08-03"), 2)
+    # 休日設定
+    u7 = await B.get_user(7) or (await B.ensure_user(M(7, "G")) or await B.get_user(7))
+    await B.db.execute("UPDATE users SET wake_deadline='07:00', holiday_shift=120 WHERE id='7'"); await B.db.commit()
+    u7 = await B.get_user(7)
+    check("平日の締切 07:00", B.effective_deadline(u7, datetime(2026, 8, 5, tzinfo=JST)), "07:00")
+    check("土曜の締切 09:00", B.effective_deadline(u7, datetime(2026, 8, 8, tzinfo=JST)), "09:00")
+    # 日付指定
+    nw = datetime(2026, 8, 5, 12, 0, tzinfo=JST)
+    check("日付: 省略=今日", B.parse_day_spec("", nw), ["2026-08-05"])
+    check("日付: 明日", B.parse_day_spec("明日", nw), ["2026-08-06"])
+    check("日付: 範囲", B.parse_day_spec("10/15-10/17", nw), ["2026-10-15", "2026-10-16", "2026-10-17"])
+    check("日付: 不正", B.parse_day_spec("あさって", nw), None)
+    # 個人項目が未チェックなら判定で未達
+    await B.db.execute("INSERT INTO custom_items(user_id,name,created_at) VALUES('7','薬を飲む',0)"); await B.db.commit()
+    m7 = await B.build_misses(u7, "2026-08-05", d1, d2, False)
+    check("個人項目 未チェックが未達に", "📝 薬を飲む 未チェック" in m7, True)
+    async with B.db.execute("SELECT id FROM custom_items WHERE user_id='7'") as c:
+        iid = (await c.fetchone())["id"]
+    await B.db.execute("INSERT INTO custom_checks(day,user_id,item_id) VALUES('2026-08-05','7',?)", (iid,)); await B.db.commit()
+    m7 = await B.build_misses(u7, "2026-08-05", d1, d2, False)
+    check("チェック済みなら未達にならない", any("薬を飲む" in x for x in m7), False)
+    # 起床ダイジェスト（水曜3限の科目）
+    await B.db.execute("INSERT OR IGNORE INTO courses(code,name,nname,teacher,room,faculty,dept,cls,year,slots,term,custom) VALUES('t_test1','テスト科目','てすと','','L0011','工','','',1,'水3','',1)")
+    await B.db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES('7','t_test1')"); await B.db.commit()
+    dg = await B.today_digest(7, datetime(2026, 8, 5, 7, 0, tzinfo=JST))
+    check("ダイジェストに水曜3限", "3限(13:00) テスト科目 L0011" in dg, True)
+    check("月曜は出ない", "テスト科目" in await B.today_digest(7, datetime(2026, 8, 3, 7, 0, tzinfo=JST)), False)
+    # 月間表彰（偽チャンネル）
+    sent2 = []
+    class FakeCh2:
+        async def send(self, content=None, **kw):
+            sent2.append((content, kw.get("embed"), kw.get("file")))
+    B.get_ch = lambda key: _fake_async(FakeCh2() if key in ("tsushinbo", "kora") else None)
+    B.now_jst = lambda: datetime(2026, 8, 31, 23, 5, tzinfo=JST)
+    try:
+        res2 = await B.monthly_summary(None, manual=True)
+        check("月間表彰 投稿", len(sent2), 1)
+        check("月間MVP 表示", (sent2[0][1].description or "").startswith("👑 **月間MVP："), True)
+        B.now_jst = lambda: datetime(2026, 8, 9, 23, 5, tzinfo=JST)
+        sent2.clear()
+        await B.weekly_summary(None, manual=True)
+        check("週次にグラフ添付（matplotlibあれば）", sent2[0][2] is not None or B.render_week_chart("2026-08-03", []) is None, True)
     finally:
         B.get_ch = orig_get_ch
         B.now_jst = orig_now

@@ -2,3 +2,4 @@ discord.py[voice]
 aiosqlite
 python-dotenv
 davey
+matplotlib

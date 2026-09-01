@@ -26,7 +26,10 @@
 - `/nakama` 起床時刻ごとの仲間一覧
 - `/kiroku` 自分の今日・今週の記録
 - `/hantei` 【管理者】今すぐ判定（テスト用）
-- `/tsushinbo` 【管理者】今週の通信簿を今すぐ投稿（テスト用）
+- `/tsushinbo` 【管理者】今週の通信簿を今すぐ投稿（`tsuki:True` で月間表彰）
+- `/oyasumi riyuu:帰省 hi:10/15-10/17` お休み申告（その日は判定されず連続達成も途切れない。`riyuu:なし` で取り消し）
+- `/kojin add namae:薬を飲む`／`remove`／`list` 自分だけの最低限項目。`#設定🔧` の 📝 ボタンで毎日チェック（未チェックは判定対象）
+- `/saitei kyujitsu:2` 土日は起床締切を2時間遅らせる
 - `/rajio` 【管理者】今すぐラジオ体操を流す（音が出るかのテスト用）
 - `/jikanwari add kamoku:<科目名で検索>`（最大5つ同時）／`list`／`remove` 履修科目の登録。マスタに無い科目は入力した名前で新規登録できる
 - `/kadai add kamoku:<自分の履修科目> kigen:10/15 naiyou:レポート提出`／`list`／`done`／`delete` 課題の登録・確認・完了・取り下げ
@@ -87,7 +90,13 @@ cd ~/seikatsu-bot && git pull && sudo systemctl restart seikatsu-bot
 記録は `seikatsu.db` 1ファイル。`scp` でコピーするだけ。
 
 ### 連続達成（ストリーク）
-判定で未達ゼロの日が続くと 🔥連続日数が伸びる（記録の無い日で途切れる）。3・7・14・30・50・100日でお祝い投稿。`/kiroku` に現在と自己ベストを表示。
+判定で未達ゼロの日が続くと 🔥連続日数が伸びる（記録の無い日で途切れる。`/oyasumi` したお休みの日は飛ばして継続）。3・7・14・30・50・100日でお祝い投稿。`/kiroku` に現在と自己ベストを表示。
+
+### 起床時のダイジェスト・朝の天気
+☀️を押した返事に、その日の授業（履修登録した科目の曜日時限・教室）と未完了の課題を添える。ラジオ体操の予告には Open-Meteo の天気（`WEATHER_LAT/LON`、既定=府中）。
+
+### 週間グラフ・月間表彰
+通信簿に起床時刻・睡眠時間の折れ線グラフ（matplotlib。日本語ラベルには `fonts-noto-cjk` が必要＝`setup.sh` で導入。既存VMは `sudo apt-get install -y fonts-noto-cjk` と `venv/bin/pip install -r requirements.txt`）。月末の判定後に 🏆月間MVP と月間各賞。
 
 ### みんなで暗記！！（gakushu-rpg）連携
 `.env` に `GAKUSHU_SECRET`（Cloudflare側 `VC_SECRET` と同じ値）を入れると、毎晩の判定結果を `/api/seikatsu` へ送信。達成した日は 🎫メダル10枚＋連続ボーナス（7日+30…）、HUDの🌅生活ランキング／プロフィールに反映。gakushu-rpg 側は `npm run seikatsu:remote` → `npm run deploy` が必要。
