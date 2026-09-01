@@ -292,6 +292,9 @@ async def main():
     check("種類設定だけでも判定対象", B.has_any_setting(await B.get_user(8)), True)
     check("設定表示", "🧺 洗濯 3日に1回" in B.settings_text(await B.get_user(8)), True)
 
+    check("#ロール🏷 チャンネル定義", B.CH["roles"][0], "ロール🏷")
+    check("自己紹介チャンネルの説明にロールが無い", "ロール" in B.CH["jikoshokai"][1], False)
+
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
     check("meta 上書き", await B.meta_get("last_judge_day"), "2026-08-06")

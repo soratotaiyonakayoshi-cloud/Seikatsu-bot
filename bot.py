@@ -52,7 +52,8 @@ CATEGORY_NAME = "最低限生活リズム"
 # key -> (チャンネル名, パネルの説明)
 CH = {
     "hajimeni": ("はじめに📖", "参加者向けのガイド。困ったら `/help`。"),
-    "jikoshokai": ("自己紹介🙋", "📝 ボタンでフォームから自己紹介カードを投稿。リアクションで学部・学年・生活形態のロール。"),
+    "jikoshokai": ("自己紹介🙋", "📝 ボタンでフォームから自己紹介カードを投稿（あとから更新OK）。"),
+    "roles": ("ロール🏷", "リアクションで学部・学年・生活形態のロールを付け外し。"),
     "wake": ("起床🌅", "☀️ 起きたら押す／🌙 寝る前に押す。睡眠時間は自動で計算されます。\n🏃 で毎朝のラジオ体操の呼び出し（メンション）をON/OFF。"),
     "meal": ("ごはん🍚", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。"),
     "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
@@ -1603,7 +1604,7 @@ def tutorial_embeds():
         ), color=gold)
     e2 = discord.Embed(title="🚀 はじめの5分でやること", color=gold)
     e2.add_field(name="⓪ 自己紹介とロール", inline=False, value=(
-        "#自己紹介🙋 の 📝 ボタンでカードを投稿（あとから更新OK）。上のリアクションで学部・学年・生活形態のロールも付けよう。"))
+        "#自己紹介🙋 の 📝 ボタンでカードを投稿（あとから更新OK）。#ロール🏷 のリアクションで学部・学年・生活形態のロールも付けよう。"))
     e2.add_field(name="① 自分の「最低限」を決める", inline=False, value=(
         "#設定🔧 で `/saitei` を実行。例：\n`/saitei kishou:8:00 suimin:6 nyuyoku:True shokuji:2`\n"
         "→ 8時までに起きる・6時間寝る・毎日お風呂・1日2食。**全部決めなくてOK**、決めた項目だけ判定されます。"
@@ -1625,7 +1626,8 @@ def tutorial_embeds():
         "**日曜の夜**　#つうしんぼ📮 に今週の通信簿（達成率ランキング・各賞・起床/睡眠グラフ）。月末は 🏆 月間MVP"))
     e4 = discord.Embed(title="🗺 チャンネル案内", color=gold, description=(
         "#はじめに📖　このガイド\n"
-        "#自己紹介🙋　📝 自己紹介カード／リアクションでロール\n"
+        "#自己紹介🙋　📝 自己紹介カード\n"
+        "#ロール🏷　リアクションで学部・学年・生活形態のロール\n"
         "#起床🌅　☀️起きた／🌙おやすみ／🏃ラジオ体操の呼び出しON/OFF\n"
         "#ごはん🍚　🍚朝 🍱昼 🍽️夜 🍩間食（写真でも記録）\n"
         "#家事🧹　🍳料理 🧹掃除 🍽️皿洗い ＋ 洗濯5工程\n"
@@ -1697,8 +1699,21 @@ async def ensure_roles(guild):
                     print(f"ロール作成失敗 {name}: {e!r}", flush=True)
     return created
 
-async def post_role_panels(ch):
+async def post_role_panels(ch, old_channels=()):
     for gk, (title, items) in ROLE_GROUPS.items():
+        mid = await meta_get(f"rolemsg_{gk}")
+        if mid:
+            try:
+                await ch.fetch_message(int(mid))
+            except Exception:
+                for oc in old_channels:  # 以前は別チャンネルに置いていた → 古いパネルを削除
+                    try:
+                        m = await oc.fetch_message(int(mid))
+                        await m.delete()
+                        break
+                    except Exception:
+                        pass
+                ROLE_MSG_IDS.pop(int(mid), None)
         emb = discord.Embed(title=title, color=discord.Color.gold(),
                             description="自分に合うリアクションを押すとロールが付きます（別のを押すと切替、外すとロールも外れます）\n\n"
                                         + "　".join(f"{e} {n}" for e, n, _ in items))
@@ -1782,7 +1797,7 @@ def intro_template_embed():
             "**④ 叱られ方の希望／できること・してほしいこと**　例：ガツンと来てOK／モーニングコールできます\n"
             "**⑤ 今学期の一言目標**　例：1限に生きて行く\n\n"
             "カードには起床目標・連続達成・履修科目数・ロールが自動で添えられます。"
-            "書き終わったら、上のリアクションで **学部・学年・生活形態のロール** も付けてね。\n"
+            "書き終わったら、#ロール🏷 のリアクションで **学部・学年・生活形態のロール** も付けてね。\n"
             "※ 本名・住所・連絡先は書かないでね。"
         ))
 
@@ -1824,7 +1839,20 @@ async def post_intro_card(member):
     m = await ch.send(embed=emb)
     await db.execute("UPDATE intros SET msg_id=? WHERE user_id=?", (str(m.id), str(member.id)))
     await db.commit()
+    await bump_intro_panel(ch)
     return m
+
+async def bump_intro_panel(ch):
+    """テンプレ＋📝ボタンをチャンネルの一番下に置き直す（カードで流れないように）"""
+    mid = await meta_get("intro_panel")
+    if mid:
+        try:
+            old = await ch.fetch_message(int(mid))
+            await old.delete()
+        except Exception:
+            pass
+    m = await ch.send(embed=intro_template_embed(), view=IntroView())
+    await meta_set("intro_panel", m.id)
 
 class IntroModal(discord.ui.Modal, title="🙋 自己紹介"):
     def __init__(self, defaults=None):
@@ -1910,11 +1938,17 @@ async def setup_command(interaction):
             await upsert_message(f"tutorial_{i}", haj, emb)
     role_note = ""
     jik = await get_ch("jikoshokai")
+    rch = await get_ch("roles")
     if jik:
-        created = await ensure_roles(guild)
-        await post_role_panels(jik)
         await upsert_message("intro_panel", jik, intro_template_embed(), view=IntroView())
-        role_note = "ロール：" + (f"作成 {', '.join(created)}" if created else "既存を利用") + "\n"
+    if rch:
+        try:
+            await rch.set_permissions(guild.default_role, send_messages=False, reason="ロール選択はリアクションのみ")
+        except Exception as e:
+            print(f"#ロール🏷 の権限設定失敗: {e!r}", flush=True)
+        created = await ensure_roles(guild)
+        await post_role_panels(rch, old_channels=[c for c in (jik,) if c])
+        role_note = "ロール：" + (f"作成 {', '.join(created)}" if created else "既存を利用") + f"（{rch.mention}）\n"
     audio_state = "あり ✅" if os.path.exists(RADIO_MP3) else f"なし ⚠️ VMに {RADIO_MP3} を置いてください"
     await meta_set("guild_id", guild.id)
     for key in VIEW_FACTORY:
