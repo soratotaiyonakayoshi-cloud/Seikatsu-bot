@@ -1,0 +1,17 @@
+[Unit]
+Description=Seikatsu Rhythm Discord Bot (最低限生活リズムサークル)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ubuntu/seikatsu-bot
+EnvironmentFile=/home/ubuntu/seikatsu-bot/.env
+ExecStart=/home/ubuntu/seikatsu-bot/venv/bin/python bot.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
