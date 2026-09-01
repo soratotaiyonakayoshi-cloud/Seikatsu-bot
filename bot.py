@@ -2025,7 +2025,10 @@ async def setup_command(interaction):
         await make_readonly(rch, guild, "ロール選択はリアクションのみ")
         created = await ensure_roles(guild)
         await post_role_panels(rch, old_channels=[c for c in (jik,) if c])
-        n_panels = sum(1 for gk in ROLE_GROUPS if await meta_get(f"rolemsg_{gk}"))
+        n_panels = 0
+        for gk in ROLE_GROUPS:
+            if await meta_get(f"rolemsg_{gk}"):
+                n_panels += 1
         role_note = "ロール：" + (f"作成 {', '.join(created)}" if created else "既存を利用") + f"／パネル {n_panels}/3 件 → {rch.mention}\n"
     audio_state = "あり ✅" if os.path.exists(RADIO_MP3) else f"なし ⚠️ VMに {RADIO_MP3} を置いてください"
     await meta_set("guild_id", guild.id)
