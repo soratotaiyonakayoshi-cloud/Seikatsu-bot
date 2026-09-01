@@ -1601,16 +1601,28 @@ bot.tree.add_command(kojin)
 # ============================================================
 async def make_readonly(ch, guild, reason=""):
     """@everyone の書き込みを禁止しつつ、Bot 自身は投稿・編集・リアクションできるようにする。
-    （チャンネルの上書き設定は Bot にも効くので、先に Bot への許可を付けないと Bot が 403 になる）"""
+    ・チャンネルの上書き設定は Bot にも効くので、先に Bot への許可を付けないと Bot が 403 になる
+    ・Discord は「自分が持っていない権限」を上書きで付与できない（403）ので、Bot が持つ権限だけを付ける
+    ・Bot への許可が付けられなかった場合は、禁止だけ残ると詰むので読み取り専用化を諦める"""
+    me = guild.me
+    gp = me.guild_permissions
+    wanted = ("send_messages", "embed_links", "attach_files", "add_reactions", "read_message_history", "manage_messages")
+    grant = {k: True for k in wanted if gp.administrator or getattr(gp, k, False)}
     try:
-        await ch.set_permissions(guild.me, send_messages=True, embed_links=True, attach_files=True,
-                                 add_reactions=True, read_message_history=True, manage_messages=True, reason="Botの投稿用")
+        await ch.set_permissions(me, reason="Botの投稿用", **grant)
     except Exception as e:
         print(f"#{ch.name} のBot権限設定失敗: {e!r}", flush=True)
+        SETUP_ERRORS.append(f"#{ch.name} にBotの投稿許可を付けられませんでした（{e}）→ 読み取り専用にせず誰でも書ける状態にしています")
+        try:
+            await ch.set_permissions(guild.default_role, send_messages=None, reason="Bot許可を付けられないため読み取り専用を解除")
+        except Exception:
+            pass
+        return
     try:
         await ch.set_permissions(guild.default_role, send_messages=False, reason=reason)
     except Exception as e:
         print(f"#{ch.name} の読み取り専用化失敗: {e!r}", flush=True)
+        SETUP_ERRORS.append(f"#{ch.name} を読み取り専用にできませんでした（{e}）")
 
 SETUP_ERRORS = []
 
