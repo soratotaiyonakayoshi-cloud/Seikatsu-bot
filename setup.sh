@@ -3,7 +3,7 @@
 set -euo pipefail
 echo "==> 必要パッケージのインストール"
 sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-pip git
+sudo apt-get install -y python3 python3-venv python3-pip git ffmpeg libopus0 libffi-dev
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "==> 仮想環境を作成: $APP_DIR/venv"
 python3 -m venv "$APP_DIR/venv"

@@ -8,6 +8,7 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 import aiosqlite
+import asyncio
 import os
 import re
 from datetime import datetime, timezone, timedelta
@@ -25,12 +26,16 @@ TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 DB_PATH = os.getenv("DB_PATH", "seikatsu.db")
 JUDGE_HOUR = int(os.getenv("JUDGE_HOUR", "23"))
 KORA_EMOJI_NAME = os.getenv("KORA_EMOJI", "こら")
+RADIO_TIME = os.getenv("RADIO_TIME", "06:30")          # ラジオ体操の開始時刻(HH:MM)
+RADIO_MP3 = os.getenv("RADIO_MP3", "radio.mp3")        # 音源ファイル（リポジトリには含めない。VMに直接置く）
+FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg")
+RADIO_VC_NAME = "ラジオ体操"
 JST = timezone(timedelta(hours=9))
 
 CATEGORY_NAME = "最低限生活リズム"
 # key -> (チャンネル名, パネルの説明)
 CH = {
-    "wake": ("起床", "☀️ 起きたら押す／🌙 寝る前に押す。睡眠時間は自動で計算されます。"),
+    "wake": ("起床", "☀️ 起きたら押す／🌙 寝る前に押す。睡眠時間は自動で計算されます。\n🏃 で毎朝のラジオ体操の呼び出し（メンション）をON/OFF。"),
     "meal": ("ごはん", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。"),
     "chore": ("家事", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
     "bath": ("おふろ", "🛁 お風呂に入ったら押す。"),
@@ -103,7 +108,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS users(
   id TEXT PRIMARY KEY, name TEXT,
   wake_deadline TEXT, sleep_min REAL, bath_daily INTEGER NOT NULL DEFAULT 0,
-  meals_min INTEGER, chores_week INTEGER, updated_at INTEGER
+  meals_min INTEGER, chores_week INTEGER, updated_at INTEGER,
+  radio_daily INTEGER NOT NULL DEFAULT 0, radio_notify INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,6 +127,14 @@ async def db_init():
     db.row_factory = aiosqlite.Row
     await db.executescript(SCHEMA)
     await db.commit()
+    # 既存DBへの列追加（既にあれば失敗するだけなので無視）
+    for m in ("ALTER TABLE users ADD COLUMN radio_daily INTEGER NOT NULL DEFAULT 0",
+              "ALTER TABLE users ADD COLUMN radio_notify INTEGER NOT NULL DEFAULT 0"):
+        try:
+            await db.execute(m)
+            await db.commit()
+        except Exception:
+            pass
 
 async def meta_get(key, default=None):
     async with db.execute("SELECT value FROM meta WHERE key=?", (key,)) as c:
@@ -196,6 +210,9 @@ async def build_misses(u, day, d1, d2, is_sunday):
     if u["bath_daily"]:
         if not await events_on(uid, day, "bath"):
             misses.append("🛁 入浴 未報告")
+    if u["radio_daily"]:
+        if not await events_on(uid, day, "radio"):
+            misses.append("🏃 ラジオ体操 未参加")
     if u["meals_min"]:
         n = len(await distinct_main_meals(uid, day))
         if n < u["meals_min"]:
@@ -207,13 +224,14 @@ async def build_misses(u, day, d1, d2, is_sunday):
     return misses
 
 def has_any_setting(u):
-    return bool(u["wake_deadline"] or u["sleep_min"] or u["bath_daily"] or u["meals_min"] or u["chores_week"])
+    return bool(u["wake_deadline"] or u["sleep_min"] or u["bath_daily"] or u["meals_min"] or u["chores_week"] or u["radio_daily"])
 
 def settings_text(u):
     parts = []
     parts.append(f"☀️ 起床 {u['wake_deadline']} まで" if u["wake_deadline"] else "☀️ 起床 —")
     parts.append(f"🌙 睡眠 {fmt_hours(u['sleep_min'])} 以上" if u["sleep_min"] else "🌙 睡眠 —")
     parts.append("🛁 入浴 毎日" if u["bath_daily"] else "🛁 入浴 —")
+    parts.append("🏃 ラジオ体操 毎日" if u["radio_daily"] else "🏃 ラジオ体操 —")
     parts.append(f"🍚 食事 1日{u['meals_min']}回" if u["meals_min"] else "🍚 食事 —")
     parts.append(f"🧹 家事 週{u['chores_week']}回" if u["chores_week"] else "🧹 家事 —")
     return "\n".join(parts)
@@ -341,6 +359,18 @@ class WakeView(discord.ui.View):
         await add_event(user.id, "bed", ts_dt=now)
         await interaction.response.send_message(f"🌙 {hhmm(now)} おやすみ。起きたら ☀️ を押してね。", ephemeral=True)
         await post_log("wake", f"🌙 **{user.display_name}** {hhmm(now)} おやすみ")
+
+    @discord.ui.button(label="🏃 ラジオ体操の呼び出し ON/OFF", style=discord.ButtonStyle.secondary, custom_id="sk_radio_toggle", row=1)
+    async def radio_toggle(self, interaction, button):
+        user = interaction.user
+        await ensure_user(user)
+        u = await get_user(user.id)
+        new = 0 if u["radio_notify"] else 1
+        await db.execute("UPDATE users SET radio_notify=? WHERE id=?", (new, str(user.id)))
+        await db.commit()
+        state = "ON" if new else "OFF"
+        extra = "（開始時にメンションで呼びます）" if new else ""
+        await interaction.response.send_message(f"🏃 毎朝 {RADIO_TIME} のラジオ体操の呼び出し：**{state}**{extra}", ephemeral=True)
 
 # ------------------------------------------------------------
 #  食事
@@ -488,6 +518,71 @@ async def judge_loop():
             print(f"judge error: {e}", flush=True)
 
 # ------------------------------------------------------------
+#  朝のラジオ体操（指定時刻にVCへ入って音源を流す。mezamashi-bot の再生ロジックを流用）
+# ------------------------------------------------------------
+async def play_radio(guild, manual=False):
+    vc_ch = await get_ch("radio")
+    if not vc_ch:
+        return "❌ ラジオ体操用VCが未設定です（/setup を実行してください）"
+    if not os.path.exists(RADIO_MP3):
+        return f"❌ 音源が見つかりません: {os.path.abspath(RADIO_MP3)}"
+    wake_ch = await get_ch("wake")
+    async with db.execute("SELECT id FROM users WHERE radio_notify=1") as c:
+        notify_ids = [r["id"] for r in await c.fetchall()]
+    mention = " ".join(f"<@{i}>" for i in notify_ids)
+    if wake_ch:
+        lead = "" if manual else "（1分後にスタート）"
+        await wake_ch.send(f"🏃 **{RADIO_TIME} ラジオ体操はじまるよ！**{lead} {vc_ch.mention} に集合〜 {mention}".rstrip())
+    if not manual:
+        await asyncio.sleep(60)
+    try:
+        vc = await vc_ch.connect(timeout=20, reconnect=False)
+    except Exception as e:
+        print(f"🔊 ラジオ体操 VC接続失敗: {e!r}", flush=True)
+        return f"❌ VC接続失敗: {e}"
+    present = {}
+    try:
+        vc.play(discord.FFmpegPCMAudio(RADIO_MP3, executable=FFMPEG_PATH))
+        while vc.is_playing():
+            for m in vc_ch.members:
+                if not m.bot:
+                    present[m.id] = m
+            await asyncio.sleep(2)
+    except Exception as e:
+        print(f"🔊 ラジオ体操 再生エラー: {e!r}", flush=True)
+    finally:
+        try:
+            await vc.disconnect(force=True)
+        except Exception:
+            pass
+    day = day_str(now_jst())
+    names = []
+    for m in present.values():
+        await ensure_user(m)
+        if not await events_on(m.id, day, "radio"):
+            await add_event(m.id, "radio")
+        names.append(m.display_name)
+    if wake_ch:
+        await wake_ch.send("🏃 ラジオ体操おつかれさま！ 参加：" + ("、".join(names) if names else "誰もいなかった…😢"))
+        await bump_panel("wake")
+    return f"再生完了（参加 {len(names)} 人）"
+
+@tasks.loop(minutes=1)
+async def radio_loop():
+    now = now_jst()
+    if hhmm(now) != RADIO_TIME:
+        return
+    day = day_str(now)
+    if await meta_get("last_radio_day") == day:
+        return
+    await meta_set("last_radio_day", day)
+    for g in bot.guilds:
+        try:
+            await play_radio(g)
+        except Exception as e:
+            print(f"radio error: {e!r}", flush=True)
+
+# ------------------------------------------------------------
 #  スラッシュコマンドの同期（サーバー単位＝即時反映。グローバル登録は最長1時間かかるので使わない）
 # ------------------------------------------------------------
 GLOBAL_CMDS = None   # デコレータで登録されたコマンド定義の退避先
@@ -524,6 +619,8 @@ async def on_ready():
             print(f"グローバルコマンド削除エラー: {e!r}", flush=True)
     if not judge_loop.is_running():
         judge_loop.start()
+    if not radio_loop.is_running():
+        radio_loop.start()
     print("====================================", flush=True)
 
 @bot.event
@@ -547,6 +644,12 @@ async def setup_command(interaction):
             ch = await guild.create_text_channel(name, category=cat)
             made.append(name)
         await meta_set("ch_" + key, ch.id)
+    vc = discord.utils.get(guild.voice_channels, name=RADIO_VC_NAME)
+    if vc is None:
+        vc = await guild.create_voice_channel(RADIO_VC_NAME, category=cat)
+        made.append("🔊" + RADIO_VC_NAME)
+    await meta_set("ch_radio", vc.id)
+    audio_state = "あり ✅" if os.path.exists(RADIO_MP3) else f"なし ⚠️ VMに {RADIO_MP3} を置いてください"
     await meta_set("guild_id", guild.id)
     for key in VIEW_FACTORY:
         await bump_panel(key)
@@ -561,14 +664,17 @@ async def setup_command(interaction):
                 "・**suimin** 最低睡眠時間 h（0で解除）\n"
                 "・**nyuyoku** 毎日入浴する（True/False）\n"
                 "・**shokuji** 1日の最低食事回数 1〜3（0で解除。間食は数えない）\n"
-                "・**kaji** 週の最低家事回数（0で解除。日曜夜に判定）\n\n"
+                "・**kaji** 週の最低家事回数（0で解除。日曜夜に判定）\n"
+                "・**rajio** 毎朝のラジオ体操に参加する（True/False）\n\n"
+                f"🏃 ラジオ体操は毎朝 **{RADIO_TIME}** に 🔊ラジオ体操 で自動再生。#起床 の 🏃 ボタンで呼び出し（メンション）のON/OFF。\n"
                 f"毎晩 **{JUDGE_HOUR}:00** に判定し、守れなかった人は #こら に名指しで晒されます。\n"
                 "`/nakama` で同じ起床時刻の仲間が見られます。`/kiroku` で自分の記録を確認。"
             ), color=discord.Color.gold()))
     await interaction.followup.send(
         "✅ セットアップ完了\n" + (f"新規作成：{', '.join('#' + n for n in made)}\n" if made else "既存チャンネルを再利用しました\n")
         + f"判定時刻：毎晩 {JUDGE_HOUR}:00 → #こら\n"
-        + f"叱り絵文字：`:{KORA_EMOJI_NAME}:`（{kora_emoji(guild)}）", ephemeral=True)
+        + f"叱り絵文字：`:{KORA_EMOJI_NAME}:`（{kora_emoji(guild)}）\n"
+        + f"ラジオ体操：毎朝 {RADIO_TIME} に {vc.mention} で再生（音源 {audio_state}）", ephemeral=True)
 
 async def nakama_of(uid, wake_deadline):
     if not wake_deadline:
@@ -578,9 +684,10 @@ async def nakama_of(uid, wake_deadline):
 
 @bot.tree.command(name="saitei", description="自分の「最低限」を設定する（指定した項目だけ更新）")
 @app_commands.describe(kishou="起床の締切 例 7:00（「なし」で解除）", suimin="最低睡眠時間(h) 例 6（0で解除）",
-                       nyuyoku="毎日入浴する", shokuji="1日の最低食事回数 1〜3（0で解除）", kaji="週の最低家事回数（0で解除）")
+                       nyuyoku="毎日入浴する", shokuji="1日の最低食事回数 1〜3（0で解除）", kaji="週の最低家事回数（0で解除）",
+                       rajio="毎朝のラジオ体操に参加する")
 async def saitei_command(interaction, kishou: str = None, suimin: float = None, nyuyoku: bool = None,
-                         shokuji: int = None, kaji: int = None):
+                         shokuji: int = None, kaji: int = None, rajio: bool = None):
     user = interaction.user
     await ensure_user(user)
     if kishou is not None:
@@ -596,6 +703,8 @@ async def saitei_command(interaction, kishou: str = None, suimin: float = None, 
         await db.execute("UPDATE users SET sleep_min=? WHERE id=?", (suimin if suimin > 0 else None, str(user.id)))
     if nyuyoku is not None:
         await db.execute("UPDATE users SET bath_daily=? WHERE id=?", (1 if nyuyoku else 0, str(user.id)))
+    if rajio is not None:
+        await db.execute("UPDATE users SET radio_daily=? WHERE id=?", (1 if rajio else 0, str(user.id)))
     if shokuji is not None:
         await db.execute("UPDATE users SET meals_min=? WHERE id=?", (min(3, shokuji) if shokuji > 0 else None, str(user.id)))
     if kaji is not None:
@@ -607,7 +716,7 @@ async def saitei_command(interaction, kishou: str = None, suimin: float = None, 
     if u["wake_deadline"]:
         mate_txt = f"\n\n👥 同じ {u['wake_deadline']} 起床の仲間：" + ("、".join(mates) if mates else "まだいない（最初の一人！）")
     await interaction.response.send_message(f"🛠 **{user.display_name} の最低限**\n{settings_text(u)}{mate_txt}", ephemeral=True)
-    if any(v is not None for v in (kishou, suimin, nyuyoku, shokuji, kaji)):
+    if any(v is not None for v in (kishou, suimin, nyuyoku, shokuji, kaji, rajio)):
         settei = await get_ch("settei")
         if settei:
             line = f"🛠 **{user.display_name}** が最低限を更新：" + " / ".join(settings_text(u).split("\n"))
@@ -646,12 +755,14 @@ async def kiroku_command(interaction):
     meals = await events_on(user.id, day, "meal")
     chores = await events_on(user.id, day, "chore")
     bath = await events_on(user.id, day, "bath")
+    radio = await events_on(user.id, day, "radio")
     today = [
         "☀️ 起床：" + (hhmm(datetime.fromtimestamp(w[0]["ts"], JST)) if w else "未報告"),
         "🌙 睡眠：" + (fmt_hours(float(s[-1]["note"])) if s else "未記録"),
         "🍚 食事：" + ("、".join(f"{m['sub']}" + (f"({m['note']})" if m["note"] else "") for m in meals) if meals else "未報告"),
         "🧹 家事：" + ("、".join(CHORE_LABEL[c["sub"]] for c in chores) if chores else "なし"),
         "🛁 入浴：" + ("済" if bath else "未報告"),
+        "🏃 ラジオ体操：" + ("参加" if radio else "—"),
     ]
     wake_days = await count_events_between(user.id, "wake", d1, d2)
     chore_n = await count_events_between(user.id, "chore", d1, d2)
@@ -665,6 +776,13 @@ async def kiroku_command(interaction):
     emb.add_field(name=f"今週（{d1}〜{d2}）", value=" / ".join(week), inline=False)
     emb.add_field(name="最低限の設定", value=settings_text(u), inline=False)
     await interaction.response.send_message(embed=emb, ephemeral=True)
+
+@bot.tree.command(name="rajio", description="【管理者用】今すぐラジオ体操を流す（テスト用）")
+@app_commands.checks.has_permissions(administrator=True)
+async def rajio_command(interaction):
+    await interaction.response.defer(ephemeral=True)
+    res = await play_radio(interaction.guild, manual=True)
+    await interaction.followup.send(res, ephemeral=True)
 
 @bot.tree.command(name="hantei", description="【管理者用】今すぐ判定を実行する（テスト用）")
 @app_commands.checks.has_permissions(administrator=True)

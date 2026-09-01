@@ -32,7 +32,7 @@ check("食事推定 19:00", B.infer_meal_sub(datetime(2026,8,5,19,0,tzinfo=JST))
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー4種 登録OK", True, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["hantei", "kiroku", "nakama", "saitei", "setup"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["hantei", "kiroku", "nakama", "rajio", "saitei", "setup"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n
@@ -95,6 +95,16 @@ async def main():
     # 同時刻の仲間
     check("Aの7:00仲間はB", await B.nakama_of(1, "07:00"), ["B"])
     check("Cの8:00仲間はいない", await B.nakama_of(3, "08:00"), [])
+
+    # ラジオ体操
+    e = M(6, "E"); await B.ensure_user(e)
+    await B.db.execute("UPDATE users SET radio_daily=1 WHERE id='6'")
+    ue = await B.get_user(6)
+    check("E ラジオ体操のみ設定→判定対象", B.has_any_setting(ue), True)
+    check("E 未参加", await B.build_misses(ue, day, d1, d2, False), ["🏃 ラジオ体操 未参加"])
+    await B.add_event(6, "radio", ts_dt=t(6, 35))
+    check("E 参加済み→未達なし", await B.build_misses(ue, day, d1, d2, False), [])
+    check("設定表示にラジオ体操", "🏃 ラジオ体操 毎日" in B.settings_text(ue), True)
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
