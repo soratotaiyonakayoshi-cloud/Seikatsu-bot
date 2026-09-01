@@ -32,7 +32,7 @@ check("食事推定 19:00", B.infer_meal_sub(datetime(2026,8,5,19,0,tzinfo=JST))
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー4種 登録OK", True, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["hantei", "help", "jikanwari", "jikoshokai", "kadai", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "tsushinbo"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["hantei", "help", "jikanwari", "jikoshokai", "kadai", "kaji", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "tsushinbo"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n
@@ -268,6 +268,29 @@ async def main():
     check("カード 5項目", len(card.fields), 5)
     check("カード footer に起床目標とロール", "起床目標 07:00" in card.footer.text and "🏭工学部" in card.footer.text and "その他" not in card.footer.text, True)
     check("テンプレ embed 上限内", len(B.intro_template_embed()) <= 6000, True)
+
+    # 家事の種類ごとの頻度
+    await B.ensure_user(M(8, "H"))
+    await B.db.execute("UPDATE users SET kaji_cook=1, kaji_wash=3, kaji_since='2026-08-01' WHERE id='8'")
+    for dd in ("2026-08-01", "2026-08-02"):
+        await B.add_event(8, "chore", "cook", ts_dt=datetime.fromisoformat(dd).replace(hour=12, tzinfo=JST))
+    await B.add_event(8, "chore", "hang", ts_dt=datetime(2026, 8, 1, 15, tzinfo=JST))
+    await B.db.commit()
+    u8 = await B.get_user(8)
+    st = {x["label"]: x for x in await B.kaji_status(u8, "2026-08-02")}
+    check("料理 毎日: 今日やった→OK", st["料理"]["due"], False)
+    check("洗濯 3日に1回: 8/1にやって8/2→まだ", st["洗濯"]["due"], False)
+    st4 = {x["label"]: x for x in await B.kaji_status(u8, "2026-08-04")}
+    check("洗濯 3日に1回: 8/4で3日空き→今日やる", (st4["洗濯"]["gap"], st4["洗濯"]["due"]), (3, True))
+    check("料理 毎日: 8/4やってない→未達", st4["料理"]["due"], True)
+    m8 = await B.build_misses(u8, "2026-08-04", d1, d2, False)
+    check("判定文: 洗濯3日やってない", "🧺 洗濯 3日やってない（3日に1回）" in m8, True)
+    check("判定文: 料理 今日やってない", "🍳 料理 今日やってない（毎日）" in m8, True)
+    check("未記録は設定日から数える(掃除7日)", (await B.db.execute("UPDATE users SET kaji_clean=7 WHERE id='8'")) is not None and
+          {x["label"]: x for x in await B.kaji_status(await B.get_user(8), "2026-08-07")}["掃除"]["due"], False)
+    check("設定日から7日で掃除が未達", {x["label"]: x for x in await B.kaji_status(await B.get_user(8), "2026-08-08")}["掃除"]["due"], True)
+    check("種類設定だけでも判定対象", B.has_any_setting(await B.get_user(8)), True)
+    check("設定表示", "🧺 洗濯 3日に1回" in B.settings_text(await B.get_user(8)), True)
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")

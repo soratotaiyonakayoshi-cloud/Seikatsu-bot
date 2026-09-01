@@ -168,7 +168,12 @@ async def db_init():
     for m in ("ALTER TABLE users ADD COLUMN radio_daily INTEGER NOT NULL DEFAULT 0",
               "ALTER TABLE users ADD COLUMN radio_notify INTEGER NOT NULL DEFAULT 0",
               "ALTER TABLE users ADD COLUMN best_streak INTEGER NOT NULL DEFAULT 0",
-              "ALTER TABLE users ADD COLUMN holiday_shift INTEGER NOT NULL DEFAULT 0"):
+              "ALTER TABLE users ADD COLUMN holiday_shift INTEGER NOT NULL DEFAULT 0",
+              "ALTER TABLE users ADD COLUMN kaji_cook INTEGER NOT NULL DEFAULT 0",
+              "ALTER TABLE users ADD COLUMN kaji_clean INTEGER NOT NULL DEFAULT 0",
+              "ALTER TABLE users ADD COLUMN kaji_dish INTEGER NOT NULL DEFAULT 0",
+              "ALTER TABLE users ADD COLUMN kaji_wash INTEGER NOT NULL DEFAULT 0",
+              "ALTER TABLE users ADD COLUMN kaji_since TEXT"):
         try:
             await db.execute(m)
             await db.commit()
@@ -227,6 +232,35 @@ async def distinct_main_meals(uid, day):
 # ============================================================
 #  判定ロジック（純粋関数に近い形にしてテストしやすく）
 # ============================================================
+# 家事の種類ごとの最低頻度（「N日に1回」）。洗濯は5工程のどれかをやれば「洗濯した」扱い
+KAJI_CATS = [
+    ("kaji_cook", "料理", "🍳", ("cook",)),
+    ("kaji_clean", "掃除", "🧹", ("clean",)),
+    ("kaji_dish", "皿洗い", "🍽️", ("dish",)),
+    ("kaji_wash", "洗濯", "🧺", ("wash_run", "wash_in", "dry_run", "dry_in", "hang")),
+]
+
+def kaji_interval_text(n):
+    return "毎日" if n == 1 else f"{n}日に1回"
+
+async def kaji_status(u, day):
+    """設定済みの家事について {label, emoji, n, last, gap, due}。due=今日やらないと未達"""
+    out = []
+    since = u["kaji_since"] or day
+    d0 = date.fromisoformat(day)
+    for col, label, emoji, subs in KAJI_CATS:
+        n = u[col] or 0
+        if n <= 0:
+            continue
+        q = ",".join("?" * len(subs))
+        async with db.execute(f"SELECT MAX(day) AS d FROM events WHERE user_id=? AND kind='chore' AND sub IN ({q}) AND day<=?",
+                              (str(u["id"]), *subs, day)) as c:
+            last = (await c.fetchone())["d"]
+        base = last if (last and last >= since) else since
+        gap = (d0 - date.fromisoformat(base)).days
+        out.append({"label": label, "emoji": emoji, "n": n, "last": last, "gap": gap, "due": gap >= n})
+    return out
+
 async def build_misses(u, day, d1, d2, is_sunday):
     """ユーザーの設定と当日の記録から、未達項目の文字列リストを返す。"""
     misses = []
@@ -262,6 +296,10 @@ async def build_misses(u, day, d1, d2, is_sunday):
         n = await count_events_between(uid, "chore", d1, d2)
         if n < u["chores_week"]:
             misses.append(f"🧹 家事 今週 {n}/{u['chores_week']} 回")
+    # 家事の種類ごとの頻度（/kaji）
+    for st in await kaji_status(u, day):
+        if st["due"]:
+            misses.append(f"{st['emoji']} {st['label']} " + ("今日やってない（毎日）" if st["n"] == 1 else f"{st['gap']}日やってない（{st['n']}日に1回）"))
     # 自分で決めた項目（/kojin）
     async with db.execute("SELECT name FROM custom_items WHERE user_id=? AND id NOT IN "
                           "(SELECT item_id FROM custom_checks WHERE user_id=? AND day=?) ORDER BY id", (uid, uid, day)) as c:
@@ -282,7 +320,8 @@ def effective_deadline(u, dt):
     return dl
 
 def has_any_setting(u):
-    return bool(u["wake_deadline"] or u["sleep_min"] or u["bath_daily"] or u["meals_min"] or u["chores_week"] or u["radio_daily"])
+    return bool(u["wake_deadline"] or u["sleep_min"] or u["bath_daily"] or u["meals_min"] or u["chores_week"] or u["radio_daily"]
+                or u["kaji_cook"] or u["kaji_clean"] or u["kaji_dish"] or u["kaji_wash"])
 
 def settings_text(u):
     parts = []
@@ -291,7 +330,11 @@ def settings_text(u):
     parts.append("🛁 入浴 毎日" if u["bath_daily"] else "🛁 入浴 —")
     parts.append("🏃 ラジオ体操 毎日" if u["radio_daily"] else "🏃 ラジオ体操 —")
     parts.append(f"🍚 食事 1日{u['meals_min']}回" if u["meals_min"] else "🍚 食事 —")
-    parts.append(f"🧹 家事 週{u['chores_week']}回" if u["chores_week"] else "🧹 家事 —")
+    kaji = [f"{e} {lb} {kaji_interval_text(u[col])}" for col, lb, e, _ in KAJI_CATS if u[col]]
+    if kaji:
+        parts.append("🧹 家事 " + "／".join(kaji) + (f"（＋合計 週{u['chores_week']}回）" if u["chores_week"] else ""))
+    else:
+        parts.append(f"🧹 家事 週{u['chores_week']}回（合計）" if u["chores_week"] else "🧹 家事 —（/kaji で種類ごとに設定）")
     return "\n".join(parts)
 
 # ============================================================
@@ -1358,6 +1401,11 @@ async def today_digest(uid, now):
         rows = await c.fetchall()
     if rows:
         lines.append("📚 未完了の課題：" + "／".join(f"{r['cname']}「{r['title']}」{fmt_due(datetime.fromtimestamp(r['due_ts'], JST))}" for r in rows))
+    u = await get_user(uid)
+    if u:
+        due = [st for st in await kaji_status(u, day_str(now)) if st["due"]]
+        if due:
+            lines.append("🧹 今日やる家事：" + "／".join(f"{st['emoji']}{st['label']}（{kaji_interval_text(st['n'])}）" for st in due))
     return "\n".join(lines)
 
 def parse_day_spec(spec, now):
@@ -1377,6 +1425,32 @@ def parse_day_spec(spec, now):
     if b < a or (b - a).days > 31:
         return None
     return [(a + timedelta(days=i)).isoformat() for i in range((b - a).days + 1)]
+
+@bot.tree.command(name="kaji", description="家事の最低頻度を種類ごとに設定（N日に1回。0で解除）")
+@app_commands.describe(ryouri="料理：何日に1回 例 1=毎日", souji="掃除：何日に1回 例 7", sara="皿洗い：何日に1回 例 1", sentaku="洗濯：何日に1回 例 3（5工程のどれかで「やった」扱い）")
+async def kaji_command(interaction, ryouri: int = None, souji: int = None, sara: int = None, sentaku: int = None):
+    user = interaction.user
+    await ensure_user(user)
+    changed = False
+    for col, v in (("kaji_cook", ryouri), ("kaji_clean", souji), ("kaji_dish", sara), ("kaji_wash", sentaku)):
+        if v is not None:
+            await db.execute(f"UPDATE users SET {col}=? WHERE id=?", (max(0, min(30, v)), str(user.id)))
+            changed = True
+    if changed:
+        await db.execute("UPDATE users SET kaji_since=? WHERE id=?", (day_str(now_jst()), str(user.id)))  # 設定日を起点にカウント
+    await db.commit()
+    u = await get_user(user.id)
+    sts = await kaji_status(u, day_str(now_jst()))
+    if not sts:
+        await interaction.response.send_message("🧹 家事の頻度は未設定です。例：`/kaji ryouri:1 sentaku:3 souji:7`（料理は毎日・洗濯は3日に1回・掃除は週1）", ephemeral=True)
+        return
+    lines = [f"{st['emoji']} **{st['label']}**　{kaji_interval_text(st['n'])}　最後：{st['last'][5:].replace('-', '/') if st['last'] else '未記録'}"
+             + ("　⚠️ 今日やる日" if st["due"] else f"　あと {st['n'] - st['gap']} 日") for st in sts]
+    await interaction.response.send_message("🧹 **家事の最低頻度**（設定日から数えます）\n" + "\n".join(lines), ephemeral=True)
+    if changed:
+        settei = await get_ch("settei")
+        if settei:
+            await settei.send(f"🧹 **{user.display_name}** が家事の頻度を設定：" + "／".join(f"{st['emoji']}{st['label']} {kaji_interval_text(st['n'])}" for st in sts))
 
 @bot.tree.command(name="oyasumi", description="お休み申告（その日は判定されず、連続達成も途切れない）")
 @app_commands.describe(riyuu="理由 例: 帰省／体調不良（「なし」で取り消し）", hi="日付 例: 明日／10/15／10/15-10/17（省略=今日）")
@@ -1562,7 +1636,7 @@ def tutorial_embeds():
         "#設定🔧　`/saitei` `/kojin` `/oyasumi` の案内。📝 今日のチェック\n"
         "🔊ラジオ体操🏃　朝の体操VC"))
     e5 = discord.Embed(title="⌨️ コマンド早見表", color=gold, description=(
-        "**最低限**　`/saitei` 設定（指定した項目だけ更新）／`/nakama` 同じ起床時刻の仲間／`/kiroku` 自分の記録と連続日数\n"
+        "**最低限**　`/saitei` 設定（指定した項目だけ更新）／`/kaji` 家事を種類ごとに「N日に1回」／`/nakama` 同じ起床時刻の仲間／`/kiroku` 自分の記録と連続日数\n"
         "**お休み**　`/oyasumi riyuu:帰省 hi:10/15-10/17`（判定なし・連続達成も途切れない。`riyuu:なし` で取消）\n"
         "**科目**　`/jikanwari add` 登録／`list` 一覧／`remove` 外す\n"
         "**課題**　`/kadai add` 登録／`list` 一覧／`done` 完了／`delete` 取り下げ\n"
@@ -1856,7 +1930,8 @@ async def setup_command(interaction):
                 "・**suimin** 最低睡眠時間 h（0で解除）\n"
                 "・**nyuyoku** 毎日入浴する（True/False）\n"
                 "・**shokuji** 1日の最低食事回数 1〜3（0で解除。間食は数えない）\n"
-                "・**kaji** 週の最低家事回数（0で解除。日曜夜に判定）\n"
+                "・**kaji** 週の最低家事回数（合計・0で解除。日曜夜に判定）\n"
+                "　種類ごとに決めたい人は `/kaji ryouri:1 sentaku:3 souji:7`（N日に1回・毎日判定）\n"
                 "・**rajio** 毎朝のラジオ体操に参加する（True/False）\n\n"
                 f"🏃 ラジオ体操は毎朝 **{RADIO_TIME}** に 🔊ラジオ体操🏃 で自動再生。#起床🌅 の 🏃 ボタンで呼び出し（メンション）のON/OFF。\n"
                 "📚 **課題**：`/jikanwari add` で履修科目を登録（科目名で検索・最大5つずつ）→ 気づいた人が `/kadai add` で課題を登録すると、"
