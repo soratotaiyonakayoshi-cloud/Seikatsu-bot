@@ -43,12 +43,14 @@ GAKUSHU_URL = os.getenv("GAKUSHU_URL", "https://gakushu-rpg.pages.dev")   # み�
 GAKUSHU_SECRET = os.getenv("GAKUSHU_SECRET", "")     # Cloudflare側 VC_SECRET と同じ値。空なら連携オフ
 WEATHER_LAT = float(os.getenv("WEATHER_LAT", "35.68"))   # 朝の天気（Open-Meteo・キー不要）。既定=府中
 WEATHER_LON = float(os.getenv("WEATHER_LON", "139.48"))
+MEMBERS_INTENT = os.getenv("MEMBERS_INTENT", "0") == "1"   # 1にすると新規参加者を #はじめに📖 で歓迎（Developer PortalでSERVER MEMBERS INTENTをONにすること）
 COURSES_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "courses_2026_kouki.json")
 JST = timezone(timedelta(hours=9))
 
 CATEGORY_NAME = "最低限生活リズム"
 # key -> (チャンネル名, パネルの説明)
 CH = {
+    "hajimeni": ("はじめに📖", "参加者向けのガイド。困ったら `/help`。"),
     "wake": ("起床🌅", "☀️ 起きたら押す／🌙 寝る前に押す。睡眠時間は自動で計算されます。\n🏃 で毎朝のラジオ体操の呼び出し（メンション）をON/OFF。"),
     "meal": ("ごはん🍚", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。"),
     "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
@@ -296,6 +298,8 @@ class SeikatsuBot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True  # #ごはん🍚 の写真投稿検知に必要（Developer PortalでONにする）
+        if MEMBERS_INTENT:
+            intents.members = True
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
 
@@ -1485,6 +1489,97 @@ async def kojin_list(interaction):
 
 bot.tree.add_command(kojin)
 
+
+# ============================================================
+#  参加者向けチュートリアル（#はじめに📖 に常設・/help でいつでも）
+# ============================================================
+async def upsert_message(key, ch, embed):
+    """meta に保存したメッセージがあれば編集、無ければ投稿（/setup を何度実行しても増えない）"""
+    mid = await meta_get(key)
+    if mid:
+        try:
+            m = await ch.fetch_message(int(mid))
+            await m.edit(embed=embed)
+            return m
+        except Exception:
+            pass
+    m = await ch.send(embed=embed)
+    await meta_set(key, m.id)
+    return m
+
+def tutorial_embeds():
+    gold = discord.Color.gold()
+    e1 = discord.Embed(
+        title="📖 ようこそ「最低限生活リズムサークル」へ",
+        description=(
+            "ここは **最低限の生活リズムを、みんなで（ゆるく・晒し合いながら）守る** サークルです。\n\n"
+            "やることはシンプル：**起きたら押す・食べたら押す・やったら押す。**\n"
+            f"ボタンを押すだけで記録され、毎晩 **{JUDGE_HOUR}:00** に「自分で決めた最低限」を守れたか判定されます。"
+            "守れなかった人は #叱責👹 に名指しで晒されます（ネタとして楽しむ場所です👹）。\n\n"
+            "記録はぜんぶ **自己申告**。正直に押すのがこのサークルの流儀です。"
+        ), color=gold)
+    e2 = discord.Embed(title="🚀 はじめの5分でやること", color=gold)
+    e2.add_field(name="① 自分の「最低限」を決める", inline=False, value=(
+        "#設定🔧 で `/saitei` を実行。例：\n`/saitei kishou:8:00 suimin:6 nyuyoku:True shokuji:2`\n"
+        "→ 8時までに起きる・6時間寝る・毎日お風呂・1日2食。**全部決めなくてOK**、決めた項目だけ判定されます。"
+        "土日をゆるめたい人は `kyujitsu:2`（締切+2時間）。"))
+    e2.add_field(name="② 起きたら ☀️、寝る前に 🌙", inline=False, value=(
+        "#起床🌅 のボタンを押すだけ。睡眠時間は自動計算。☀️の返事に **今日の授業と未完了の課題** が出ます。"))
+    e2.add_field(name="③ 履修科目を登録", inline=False, value=(
+        "`/jikanwari add kamoku:` に科目名を打つと候補が出ます（一度に5つまで）。"
+        "同じ科目の誰かが課題を登録すると #課題📚 で通知が届き、期限の3日前・前日・当日朝にリマインドされます。"))
+    e2.add_field(name="④ ラジオ体操に参加（任意）", inline=False, value=(
+        f"毎朝 **{RADIO_TIME}** に 🔊ラジオ体操🏃 で音源が流れます。#起床🌅 の 🏃 ボタンで呼び出しをONにすると、開始時にメンションで起こされます。"))
+    e2.add_field(name="⑤ 自分だけの項目（任意）", inline=False, value=(
+        "`/kojin add namae:薬を飲む` のように追加すると、#設定🔧 の 📝 ボタンで毎日チェックできます。未チェックは判定で叱られます。"))
+    e3 = discord.Embed(title="🔁 1日の流れ", color=gold, description=(
+        f"**朝**　☀️ 起きた → {RADIO_TIME} ラジオ体操🏃\n"
+        "**日中**　🍚 食べたら押す（#ごはん🍚 に写真を投げるだけでもOK）／🧹 家事をしたら押す／📚 課題に気づいたら `/kadai add`\n"
+        "**夜**　🛁 お風呂に入ったら押す → 🌙 おやすみ\n"
+        f"**{JUDGE_HOUR}:00**　判定。未達は #叱責👹 で名指し、達成した人は ✨ で称えられ、連続日数 🔥 が伸びる（3・7・14・30日…でお祝い）\n"
+        "**日曜の夜**　#つうしんぼ📮 に今週の通信簿（達成率ランキング・各賞・起床/睡眠グラフ）。月末は 🏆 月間MVP"))
+    e4 = discord.Embed(title="🗺 チャンネル案内", color=gold, description=(
+        "#はじめに📖　このガイド\n"
+        "#起床🌅　☀️起きた／🌙おやすみ／🏃ラジオ体操の呼び出しON/OFF\n"
+        "#ごはん🍚　🍚朝 🍱昼 🍽️夜 🍩間食（写真でも記録）\n"
+        "#家事🧹　🍳料理 🧹掃除 🍽️皿洗い ＋ 洗濯5工程\n"
+        "#おふろ🛁　🛁お風呂入った\n"
+        "#課題📚　課題の通知とリマインド。✅で完了\n"
+        "#叱責👹　毎晩の判定結果。晒される場所\n"
+        "#つうしんぼ📮　週の通信簿と月間表彰\n"
+        "#設定🔧　`/saitei` `/kojin` `/oyasumi` の案内。📝 今日のチェック\n"
+        "🔊ラジオ体操🏃　朝の体操VC"))
+    e5 = discord.Embed(title="⌨️ コマンド早見表", color=gold, description=(
+        "**最低限**　`/saitei` 設定（指定した項目だけ更新）／`/nakama` 同じ起床時刻の仲間／`/kiroku` 自分の記録と連続日数\n"
+        "**お休み**　`/oyasumi riyuu:帰省 hi:10/15-10/17`（判定なし・連続達成も途切れない。`riyuu:なし` で取消）\n"
+        "**科目**　`/jikanwari add` 登録／`list` 一覧／`remove` 外す\n"
+        "**課題**　`/kadai add` 登録／`list` 一覧／`done` 完了／`delete` 取り下げ\n"
+        "**自分の項目**　`/kojin add` 追加／`list` チェックリスト／`remove` 削除\n"
+        "**このガイド**　`/help`"))
+    e6 = discord.Embed(title="🤝 ルールと心がまえ", color=gold, description=(
+        "・晒しはネタ。叱るときは愛をこめて（こら！スタンプ推奨）\n"
+        "・記録は自己申告。盛らない、隠さない\n"
+        "・無理な日は `/oyasumi`。休むのも最低限のうち\n"
+        "・最低限は人それぞれ。人の最低限を笑わない\n"
+        "・Botの不具合・要望は管理者まで"))
+    return [e1, e2, e3, e4, e5, e6]
+
+@bot.tree.command(name="help", description="使い方のかんたんガイド（自分にだけ表示）")
+async def help_command(interaction):
+    embs = tutorial_embeds()
+    await interaction.response.send_message(embeds=[embs[1], embs[4]], ephemeral=True)
+
+@bot.event
+async def on_member_join(member):
+    if member.bot:
+        return
+    haj = await get_ch("hajimeni")
+    if haj:
+        try:
+            await haj.send(f"👋 ようこそ {member.mention}！まずは ① #設定🔧 で `/saitei` を実行して自分の最低限を決めて、② #起床🌅 で ☀️ を押してみよう。詳しくはこのチャンネルの上のガイドを読んでね。")
+        except Exception as e:
+            print(f"歓迎メッセージ失敗: {e!r}", flush=True)
+
 # ============================================================
 #  スラッシュコマンド
 # ============================================================
@@ -1520,13 +1615,21 @@ async def setup_command(interaction):
                              lambda n: guild.create_text_channel(n, category=cat))
     vc = await find_or_rename("radio", RADIO_VC_NAME, OLD_RADIO_VC_NAME, guild.voice_channels,
                               lambda n: guild.create_voice_channel(n, category=cat))
+    haj = await get_ch("hajimeni")
+    if haj:
+        try:
+            await haj.set_permissions(guild.default_role, send_messages=False, reason="ガイド用チャンネルは読み取り専用")
+        except Exception as e:
+            print(f"#はじめに📖 の権限設定失敗: {e!r}", flush=True)
+        for i, emb in enumerate(tutorial_embeds()):
+            await upsert_message(f"tutorial_{i}", haj, emb)
     audio_state = "あり ✅" if os.path.exists(RADIO_MP3) else f"なし ⚠️ VMに {RADIO_MP3} を置いてください"
     await meta_set("guild_id", guild.id)
     for key in VIEW_FACTORY:
         await bump_panel(key)
     settei = await get_ch("settei")
     if settei:
-        await settei.send(embed=discord.Embed(
+        await upsert_message("guide_msg", settei, discord.Embed(
             title="🛠 最低限の決め方",
             description=(
                 "`/saitei` で **自分の最低限** を設定します（指定した項目だけ更新）。\n"

@@ -32,7 +32,7 @@ check("食事推定 19:00", B.infer_meal_sub(datetime(2026,8,5,19,0,tzinfo=JST))
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー4種 登録OK", True, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["hantei", "jikanwari", "kadai", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "tsushinbo"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["hantei", "help", "jikanwari", "kadai", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "tsushinbo"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n
@@ -238,6 +238,12 @@ async def main():
     finally:
         B.get_ch = orig_get_ch
         B.now_jst = orig_now
+
+    # チュートリアル
+    embs = B.tutorial_embeds()
+    check("チュートリアル 6枚", len(embs), 6)
+    check("各embedがDiscord上限内", all(len(e) <= 6000 and all(len(f.value) <= 1024 for f in e.fields) for e in embs), True)
+    check("判定時刻が埋め込まれる", f"{B.JUDGE_HOUR}:00" in (embs[0].description or ""), True)
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
