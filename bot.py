@@ -984,7 +984,7 @@ async def post_goal_thread(guild, ch, now):
     """月間表彰の直後に、翌月の目標宣言スレッドを作る（月に1回だけ）。
     前回スレッド化に失敗していた場合（権限不足など）は、既存メッセージのスレッド化を再試行する。
     戻り値は状態の一言（/tsushinbo の結果に表示）"""
-    nxt = (now.replace(day=1) + timedelta(days=32)).replace(day=1)
+    nxt = (now + timedelta(days=1)).replace(day=1)  # 「明日が属する月」＝月末実行なら翌月、月の途中の手動実行ならその月
     key = f"goal_thread_{nxt.year}-{nxt.month:02d}"
     title = f"🎯 {nxt.month}月の目標宣言"
     perm_hint = "⚠️ 宣言スレッドが作れません。サーバー設定→ロール→Botのロールに「公開スレッドの作成」を付けてください"
