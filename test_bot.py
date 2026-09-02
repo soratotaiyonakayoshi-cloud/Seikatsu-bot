@@ -320,6 +320,13 @@ async def main():
     check("入浴2回でも未達にならない", any("入浴" in x for x in m9), False)
     check("入浴2回が記録されている", len(await B.events_on(9, "2026-08-05", "bath")), 2)
 
+    # add_event はIDを返す（写真の食事種類の選び直しに使う）
+    eid_test = await B.add_event(9, "meal", "昼", note="写真", ts_dt=datetime(2026, 8, 5, 12, tzinfo=JST))
+    check("add_event がIDを返す", isinstance(eid_test, int) and eid_test > 0, True)
+    await B.db.execute("UPDATE events SET sub='夜' WHERE id=?", (eid_test,)); await B.db.commit()
+    async with B.db.execute("SELECT sub FROM events WHERE id=?", (eid_test,)) as c:
+        check("食事種類を選び直せる", (await c.fetchone())["sub"], "夜")
+
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
     check("meta 上書き", await B.meta_get("last_judge_day"), "2026-08-06")

@@ -206,9 +206,10 @@ async def get_user(uid):
 
 async def add_event(uid, kind, sub=None, note=None, ts_dt=None):
     dt = ts_dt or now_jst()
-    await db.execute("INSERT INTO events(user_id,kind,sub,ts,day,note) VALUES(?,?,?,?,?,?)",
-                     (str(uid), kind, sub, int(dt.timestamp()), day_str(dt), note))
+    cur = await db.execute("INSERT INTO events(user_id,kind,sub,ts,day,note) VALUES(?,?,?,?,?,?)",
+                           (str(uid), kind, sub, int(dt.timestamp()), day_str(dt), note))
     await db.commit()
+    return cur.lastrowid
 
 async def events_on(uid, day, kind):
     async with db.execute("SELECT * FROM events WHERE user_id=? AND day=? AND kind=? ORDER BY ts",
@@ -366,7 +367,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(BathView())
         self.add_view(SetteiView())
         self.add_view(IntroView())
-        self.add_dynamic_items(DoneButton)
+        self.add_dynamic_items(DoneButton, MealFixButton)
         # コマンドの同期はグローバルではなくサーバー単位で行う（即時反映）。on_ready 参照。
 
 bot = SeikatsuBot()
@@ -510,7 +511,7 @@ class MealModal(discord.ui.Modal):
         note = self.what.value.strip() or None
         await ensure_user(user)
         await add_event(user.id, "meal", self.sub, note=note)
-        await interaction.response.send_message(f"✅ {self.sub}ごはんを記録しました。", ephemeral=True)
+        await interaction.response.send_message(f"✅ {self.sub}ごはんを記録しました。📸 写真も残したいときは、このチャンネルに写真を投稿すると自動で記録されます。", ephemeral=True)
         await post_log("meal", f"{MEAL_EMOJI[self.sub]} **{user.display_name}** {self.sub}ごはん" + (f"：{note}" if note else ""))
 
 class MealButton(discord.ui.Button):
@@ -599,13 +600,41 @@ async def on_message(message):
     now = now_jst()
     sub = infer_meal_sub(now)
     await ensure_user(message.author)
-    await add_event(message.author.id, "meal", sub, note=(message.content.strip() or "写真")[:100])
+    eid = await add_event(message.author.id, "meal", sub, note=(message.content.strip() or "写真")[:100])
     try:
         await message.add_reaction("✅")
     except Exception:
         pass
-    await message.reply(f"{MEAL_EMOJI[sub]} {sub}ごはんとして記録しました（違ってたらボタンで報告してね）", mention_author=False)
+    view = discord.ui.View(timeout=None)
+    for s2, e2 in MEALS:
+        view.add_item(MealFixButton(eid, message.author.id, s2, e2, current=sub))
+    await message.reply(f"📸 {MEAL_EMOJI[sub]} **{sub}ごはん** として記録しました（違ったら下のボタンで選び直せます・本人のみ）",
+                        mention_author=False, view=view)
     await bump_panel("meal")
+
+class MealFixButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_mf:(?P<eid>\d+):(?P<uid>\d+):(?P<sub>朝|昼|夜|間食)"):
+    """写真投稿の食事種類を選び直すボタン（投稿した本人だけ有効）"""
+    def __init__(self, eid, uid, sub, emoji, current=None):
+        super().__init__(discord.ui.Button(
+            label=f"{emoji} {sub}", custom_id=f"sk_mf:{eid}:{uid}:{sub}",
+            style=discord.ButtonStyle.success if sub == current else discord.ButtonStyle.secondary))
+        self.eid, self.uid, self.sub = int(eid), int(uid), sub
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["eid"], match["uid"], match["sub"], MEAL_EMOJI.get(match["sub"], ""), current=None)
+
+    async def callback(self, interaction):
+        if interaction.user.id != self.uid:
+            await interaction.response.send_message("投稿した本人だけが変更できます。", ephemeral=True)
+            return
+        await db.execute("UPDATE events SET sub=? WHERE id=? AND user_id=? AND kind='meal'", (self.sub, self.eid, str(self.uid)))
+        await db.commit()
+        view = discord.ui.View(timeout=None)
+        for s2, e2 in MEALS:
+            view.add_item(MealFixButton(self.eid, self.uid, s2, e2, current=self.sub))
+        await interaction.response.edit_message(
+            content=f"📸 {MEAL_EMOJI[self.sub]} **{self.sub}ごはん** として記録しました（違ったら下のボタンで選び直せます・本人のみ）", view=view)
 
 # ------------------------------------------------------------
 #  毎晩の判定 → #叱責👹
@@ -689,7 +718,7 @@ async def judge(guild, manual=False):
     elif not results:
         await kora_ch.send(f"{erai_emoji(guild)} {day} の判定{tag}：**全員が最低限を守りました！** えらい！！")
     else:
-        await kora_ch.send(f"📋 {day} の判定{tag}：{len(results)}/{len(users)} 人が最低限を守れませんでした。")
+        await kora_ch.send(f"📋 {day} の判定{tag}：{len(results)}/{len(users)} 人に叱責の儀を行います👹")
         for u, misses in results:
             await kora_ch.send(f"{emoji} <@{u['id']}> **こら！**\n" + "\n".join("・" + m for m in misses))
     if achievers:
