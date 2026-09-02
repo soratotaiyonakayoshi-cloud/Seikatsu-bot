@@ -964,6 +964,7 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
         await ch.send(embed=emb, file=file)
     else:
         await ch.send(embed=emb)
+    thread_note = ""
     if guild is not None:
         try:
             if kind == "week":
@@ -973,27 +974,51 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
                 await set_exclusive_title(guild, TITLE_NEBOU[0], [x["uid"] for x in nebou if x["late"] == best_late] if best_late else [])
             else:
                 await set_exclusive_title(guild, TITLE_MVP[0], [judged[0]["uid"]] if judged else [])
-                await post_goal_thread(guild, ch, now)
+                thread_note = await post_goal_thread(guild, ch, now)
         except Exception as e:
             print(f"称号/宣言スレ エラー: {e!r}", flush=True)
-    return f"{'通信簿' if kind == 'week' else '月間表彰'}を投稿しました（{len(stats)}人）"
+    return (f"{'通信簿' if kind == 'week' else '月間表彰'}を投稿しました（{len(stats)}人）"
+            + ((chr(10) + thread_note) if thread_note else ""))
 
 async def post_goal_thread(guild, ch, now):
-    """月間表彰の直後に、翌月の目標宣言スレッドを作る（月に1回だけ）"""
+    """月間表彰の直後に、翌月の目標宣言スレッドを作る（月に1回だけ）。
+    前回スレッド化に失敗していた場合（権限不足など）は、既存メッセージのスレッド化を再試行する。
+    戻り値は状態の一言（/tsushinbo の結果に表示）"""
     nxt = (now.replace(day=1) + timedelta(days=32)).replace(day=1)
     key = f"goal_thread_{nxt.year}-{nxt.month:02d}"
-    if await meta_get(key):
-        return
+    title = f"🎯 {nxt.month}月の目標宣言"
+    perm_hint = "⚠️ 宣言スレッドが作れません。サーバー設定→ロール→Botのロールに「公開スレッドの作成」を付けてください"
+    stored = await meta_get(key)
+    if stored:
+        existing = guild.get_thread(int(stored)) if guild else None
+        if existing is not None:
+            return "宣言スレッドは作成済みです"
+        try:
+            m = await ch.fetch_message(int(stored))
+        except Exception:
+            return "宣言スレッドは作成済みです"
+        try:
+            th = await m.create_thread(name=title)
+            await meta_set(key, th.id)
+            await meta_set("goal_thread_last", th.id)
+            return "宣言スレッドを作成しました（前回の失敗分を復旧）"
+        except Exception as e:
+            print(f"宣言スレッド再作成失敗: {e!r}", flush=True)
+            return f"{perm_hint}（{e}）"
+    if guild and not ch.permissions_for(guild.me).create_public_threads:
+        print("宣言スレッド: 公開スレッドの作成 権限がありません", flush=True)
     prev = await meta_get("goal_thread_last")
     extra = f"\n🔙 先月の宣言の答え合わせもどうぞ → <#{prev}>" if prev else ""
     msg = await ch.send(f"🎯 **{nxt.month}月の目標宣言、募集！**\nスレッドに一言どうぞ。来月末の表彰で答え合わせします。{extra}")
     try:
-        th = await msg.create_thread(name=f"🎯 {nxt.month}月の目標宣言")
+        th = await msg.create_thread(name=title)
         await meta_set(key, th.id)
         await meta_set("goal_thread_last", th.id)
+        return "宣言スレッドを作成しました"
     except Exception as e:
-        print(f"宣言スレッド作成失敗（Botに「公開スレッドの作成」権限が必要）: {e!r}", flush=True)
-        await meta_set(key, msg.id)
+        print(f"宣言スレッド作成失敗: {e!r}", flush=True)
+        await meta_set(key, msg.id)  # メッセージIDを記録し、権限が付いたら次回スレッド化する
+        return f"{perm_hint}（{e}）"
 
 async def weekly_summary(guild, manual=False):
     d1, d2 = week_range(now_jst())
