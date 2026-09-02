@@ -57,6 +57,7 @@ CH = {
     "wake": ("起床🌅", "☀️ 起きたら押す／🌙 寝る前に押す。睡眠時間は自動で計算されます。\n🏃 で毎朝のラジオ体操の呼び出し（メンション）をON/OFF。"),
     "meal": ("ごはん🍚", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。"),
     "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
+    "erai": ("えらい🌟", "最低限とは別に、今日がんばったことを報告して褒め合う場所。🌟ボタン（または /erai）から。判定はされません。"),
     "bath": ("おふろ🛁", "🛁 お風呂に入ったら押す。🪥 歯磨きも（1日に何回でも）。"),
     "kora": ("叱責👹", "毎晩の判定で、最低限を守れなかった人が晒される場所。"),
     "tsushinbo": ("つうしんぼ📮", "毎週日曜の夜に、その週の通信簿（達成率ランキング・各賞）が届く場所。"),
@@ -152,6 +153,8 @@ CREATE TABLE IF NOT EXISTS assignments(
 CREATE TABLE IF NOT EXISTS assignment_done(assignment_id INTEGER NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY(assignment_id, user_id));
 CREATE TABLE IF NOT EXISTS assignment_reminded(assignment_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(assignment_id, stage));
 CREATE TABLE IF NOT EXISTS daily_results(day TEXT NOT NULL, user_id TEXT NOT NULL, achieved INTEGER NOT NULL, misses TEXT, PRIMARY KEY(day, user_id));
+CREATE TABLE IF NOT EXISTS efforts(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, text TEXT NOT NULL, day TEXT NOT NULL, ts INTEGER, msg_id TEXT);
+CREATE TABLE IF NOT EXISTS effort_praise(effort_id INTEGER NOT NULL, user_id TEXT NOT NULL, day TEXT, PRIMARY KEY(effort_id, user_id));
 CREATE TABLE IF NOT EXISTS intros(user_id TEXT PRIMARY KEY, f1 TEXT, f2 TEXT, f3 TEXT, f4 TEXT, f5 TEXT, msg_id TEXT, updated_at INTEGER);
 CREATE TABLE IF NOT EXISTS off_days(day TEXT NOT NULL, user_id TEXT NOT NULL, reason TEXT, PRIMARY KEY(day, user_id));
 CREATE TABLE IF NOT EXISTS custom_items(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER);
@@ -367,7 +370,8 @@ class SeikatsuBot(discord.Client):
         self.add_view(BathView())
         self.add_view(SetteiView())
         self.add_view(IntroView())
-        self.add_dynamic_items(DoneButton, MealFixButton)
+        self.add_dynamic_items(DoneButton, MealFixButton, PraiseButton)
+        self.add_view(EraiView())
         # コマンドの同期はグローバルではなくサーバー単位で行う（即時反映）。on_ready 参照。
 
 bot = SeikatsuBot()
@@ -814,11 +818,19 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
             "meals": sum(1 for e in evs if e["kind"] == "meal"),
             "baths": len({e["day"] for e in evs if e["kind"] == "bath"}),
             "teeth": sum(1 for e in evs if e["kind"] == "teeth"),
+            "efforts": 0, "praises": 0,
             "radio": sum(1 for e in evs if e["kind"] == "radio"),
             "late": mtext.count("寝坊"), "miss_n": sum(1 for l in mtext.split("\n") if l.strip()),
         })
         if kind == "week" and (wake_days or sleep_days):
             series.append({"name": name, "wake": {d: w.hour + w.minute / 60 for d, w in wake_days.items()}, "sleep": sleep_days})
+    async with db.execute("SELECT user_id, COUNT(*) AS n FROM efforts WHERE day BETWEEN ? AND ? GROUP BY user_id", (d1, d2)) as c:
+        eff = {r["user_id"]: r["n"] for r in await c.fetchall()}
+    async with db.execute("SELECT user_id, COUNT(*) AS n FROM effort_praise WHERE day BETWEEN ? AND ? GROUP BY user_id", (d1, d2)) as c:
+        pr = {r["user_id"]: r["n"] for r in await c.fetchall()}
+    for x in stats:
+        x["efforts"] = eff.get(x["uid"], 0)
+        x["praises"] = pr.get(x["uid"], 0)
     label = "今週" if kind == "week" else f"{int(d1[5:7])}月"
     if not stats:
         await ch.send(f"📮 {label}（{d1}〜{d2}）は記録がありませんでした。")
@@ -851,6 +863,8 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
         award("🍚 ごはん賞", "meals", fmt=lambda v: f"{v}回報告"),
         award("🛁 きれい好き賞", "baths", fmt=lambda v: f"{v}日"),
         award("🪥 歯磨き賞", "teeth", fmt=lambda v: f"{v}回"),
+        award("🌟 がんばり屋賞", "efforts", fmt=lambda v: f"{v}件"),
+        award("👏 ほめ上手賞", "praises", fmt=lambda v: f"{v}回"),
         award("🏃 ラジオ体操賞", "radio", fmt=lambda v: f"{v}回"),
         award("🐷 寝坊賞", "late", fmt=lambda v: f"{v}回"),
         award("👹 こら賞", "miss_n", fmt=lambda v: f"未達 {v}件"),
@@ -2004,6 +2018,111 @@ class IntroView(discord.ui.View):
 async def jikoshokai_command(interaction):
     await open_intro_modal(interaction)
 
+
+# ============================================================
+#  今日のえらい（最低限とは別の「がんばった」報告と褒め合い。判定対象外）
+# ============================================================
+async def _praisers(eid):
+    async with db.execute("SELECT user_id FROM effort_praise WHERE effort_id=?", (eid,)) as c:
+        return [r["user_id"] for r in await c.fetchall()]
+
+def _effort_content(name, text, praisers, names):
+    line = f"🌟 **{name}** の「今日のえらい」\n> {text}"
+    if praisers:
+        line += f"\n👏 × {len(praisers)}　{'、'.join(names)}"
+    return line
+
+async def _praiser_names(uids):
+    names = []
+    for uid in uids:
+        u = await get_user(uid)
+        names.append((u["name"] if u else None) or "？")
+    return names
+
+class PraiseButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_praise:(?P<eid>\d+)"):
+    def __init__(self, eid, count=0):
+        super().__init__(discord.ui.Button(label=f"👏 えらい！（{count}）", style=discord.ButtonStyle.success,
+                                           custom_id=f"sk_praise:{eid}"))
+        self.eid = int(eid)
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["eid"])
+
+    async def callback(self, interaction):
+        uid = str(interaction.user.id)
+        async with db.execute("SELECT user_id FROM efforts WHERE id=?", (self.eid,)) as c:
+            row = await c.fetchone()
+        if not row:
+            await interaction.response.send_message("この報告は見つかりませんでした。", ephemeral=True)
+            return
+        if row["user_id"] == uid:
+            await interaction.response.send_message("自分で自分を褒めるのは、心の中でどうぞ 🌟", ephemeral=True)
+            return
+        await ensure_user(interaction.user)
+        if uid in await _praisers(self.eid):
+            await db.execute("DELETE FROM effort_praise WHERE effort_id=? AND user_id=?", (self.eid, uid))
+            note = "👏 を取り消しました。"
+        else:
+            await db.execute("INSERT OR IGNORE INTO effort_praise(effort_id,user_id,day) VALUES(?,?,?)", (self.eid, uid, day_str(now_jst())))
+            note = "褒めました！ 👏"
+        await db.commit()
+        praisers = await _praisers(self.eid)
+        names = await _praiser_names(praisers)
+        author = await get_user(row["user_id"])
+        async with db.execute("SELECT text FROM efforts WHERE id=?", (self.eid,)) as c:
+            text = (await c.fetchone())["text"]
+        view = discord.ui.View(timeout=None)
+        view.add_item(PraiseButton(self.eid, len(praisers)))
+        try:
+            await interaction.response.edit_message(
+                content=_effort_content((author["name"] if author else "？"), text, praisers, names), view=view)
+        except Exception:
+            await interaction.response.send_message(note, ephemeral=True)
+
+class EraiModal(discord.ui.Modal, title="🌟 今日のえらい"):
+    what = discord.ui.TextInput(label="今日がんばったこと（最低限じゃなくてOK）", style=discord.TextStyle.paragraph,
+                                placeholder="例：授業に全部出た／課題を締切3日前に出した／散歩した", required=True, max_length=200)
+
+    async def on_submit(self, interaction):
+        user = interaction.user
+        await ensure_user(user)
+        now = now_jst()
+        text = self.what.value.strip()
+        cur = await db.execute("INSERT INTO efforts(user_id,text,day,ts) VALUES(?,?,?,?)",
+                               (str(user.id), text, day_str(now), int(now.timestamp())))
+        eid = cur.lastrowid
+        await db.commit()
+        ch = await get_ch("erai")
+        if not ch:
+            await interaction.response.send_message("記録しました（#えらい🌟 が未設定です。/setup を実行してください）", ephemeral=True)
+            return
+        view = discord.ui.View(timeout=None)
+        view.add_item(PraiseButton(eid, 0))
+        msg = await ch.send(_effort_content(user.display_name, text, [], []), view=view)
+        await db.execute("UPDATE efforts SET msg_id=? WHERE id=?", (str(msg.id), eid))
+        await db.commit()
+        try:
+            await msg.add_reaction(erai_emoji(interaction.guild))
+        except Exception:
+            pass
+        await interaction.response.send_message("🌟 投稿しました！えらい！", ephemeral=True)
+        await bump_panel("erai")
+
+class EraiView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🌟 今日がんばったことを報告", style=discord.ButtonStyle.primary, custom_id="sk_erai")
+    async def erai(self, interaction, button):
+        await interaction.response.send_modal(EraiModal())
+
+VIEW_FACTORY["erai"] = EraiView
+
+@bot.tree.command(name="erai", description="今日がんばったことを報告する（最低限とは別・判定なし・褒め合い用）")
+async def erai_command(interaction):
+    await interaction.response.send_modal(EraiModal())
+
 # ============================================================
 #  スラッシュコマンド
 # ============================================================
@@ -2191,6 +2310,7 @@ async def kiroku_command(interaction):
         "🛁 入浴：" + ((f"済（{len(bath)}回）" if len(bath) >= 2 else "済") if bath else "未報告"),
         "🪥 歯磨き：" + (f"{len(await events_on(user.id, day, 'teeth'))} 回"),
         "🏃 ラジオ体操：" + ("参加" if radio else "—"),
+        "🌟 今日のえらい：" + str(len(await db.execute_fetchall("SELECT 1 FROM efforts WHERE user_id=? AND day=?", (str(user.id), day)))) + " 件",
     ]
     async with db.execute("SELECT COUNT(*) AS n FROM custom_items WHERE user_id=?", (str(user.id),)) as c:
         n_items = (await c.fetchone())["n"]

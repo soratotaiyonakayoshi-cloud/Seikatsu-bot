@@ -32,7 +32,7 @@ check("食事推定 19:00", B.infer_meal_sub(datetime(2026,8,5,19,0,tzinfo=JST))
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー4種 登録OK", True, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["hantei", "help", "jikanwari", "jikoshokai", "kadai", "kaji", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "tsushinbo"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kaji", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "tsushinbo"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n
@@ -326,6 +326,16 @@ async def main():
     await B.db.execute("UPDATE events SET sub='夜' WHERE id=?", (eid_test,)); await B.db.commit()
     async with B.db.execute("SELECT sub FROM events WHERE id=?", (eid_test,)) as c:
         check("食事種類を選び直せる", (await c.fetchone())["sub"], "夜")
+
+    # 今日のえらい（褒め合い）
+    cur = await B.db.execute("INSERT INTO efforts(user_id,text,day,ts) VALUES('11','早起きして図書館','2026-08-05',0)")
+    eid2 = cur.lastrowid
+    await B.db.execute("INSERT INTO effort_praise(effort_id,user_id,day) VALUES(?, '12', '2026-08-05')", (eid2,))
+    await B.db.execute("INSERT INTO effort_praise(effort_id,user_id,day) VALUES(?, '7', '2026-08-05')", (eid2,))
+    await B.db.commit()
+    check("褒めた人の一覧", sorted(await B._praisers(eid2)), ["12", "7"])
+    body = B._effort_content("はやおき", "早起きして図書館", ["12", "7"], ["ねぼう", "G"])
+    check("投稿本文に件数と名前", "👏 × 2" in body and "ねぼう" in body, True)
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
