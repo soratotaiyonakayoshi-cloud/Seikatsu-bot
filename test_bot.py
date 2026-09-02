@@ -311,6 +311,15 @@ async def main():
     stt = {x["label"]: x for x in await B.kaji_status(await B.get_user(8), "2026-08-04")}
     check("ごみ捨て 3日に1回 未記録→設定日から3日で今日やる", stt["ごみ捨て"]["due"], True)
 
+    # 入浴は1日2回以上でも記録でき、判定は1回以上でOKのまま
+    await B.add_event(9, "bath", ts_dt=datetime(2026, 8, 5, 9, tzinfo=JST))
+    await B.add_event(9, "bath", ts_dt=datetime(2026, 8, 5, 22, tzinfo=JST))
+    await B.ensure_user(M(9, "I"))
+    await B.db.execute("UPDATE users SET bath_daily=1 WHERE id='9'"); await B.db.commit()
+    m9 = await B.build_misses(await B.get_user(9), "2026-08-05", d1, d2, False)
+    check("入浴2回でも未達にならない", any("入浴" in x for x in m9), False)
+    check("入浴2回が記録されている", len(await B.events_on(9, "2026-08-05", "bath")), 2)
+
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
     check("meta 上書き", await B.meta_get("last_judge_day"), "2026-08-06")

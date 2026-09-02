@@ -563,12 +563,12 @@ class BathView(discord.ui.View):
         user = interaction.user
         now = now_jst()
         await ensure_user(user)
-        if await events_on(user.id, day_str(now), "bath"):
-            await interaction.response.send_message("今日はもう入浴報告済みです。きれい好き！", ephemeral=True)
-            return
         await add_event(user.id, "bath")
-        await interaction.response.send_message(f"✅ {hhmm(now)} 入浴を記録しました。", ephemeral=True)
-        await post_log("bath", f"🛁 **{user.display_name}** {hhmm(now)} 入浴")
+        n = len(await events_on(user.id, day_str(now), "bath"))
+        extra = f"（今日 {n} 回目）" if n >= 2 else ""
+        praise = " きれい好き！" if n >= 2 else ""
+        await interaction.response.send_message(f"✅ {hhmm(now)} 入浴を記録しました{extra}。{praise}", ephemeral=True)
+        await post_log("bath", f"🛁 **{user.display_name}** {hhmm(now)} 入浴{extra}")
 
     @discord.ui.button(label="🪥 歯磨きした", style=discord.ButtonStyle.secondary, custom_id="sk_teeth")
     async def teeth(self, interaction, button):
@@ -2159,7 +2159,7 @@ async def kiroku_command(interaction):
         "🌙 睡眠：" + (fmt_hours(float(s[-1]["note"])) if s else "未記録"),
         "🍚 食事：" + ("、".join(f"{m['sub']}" + (f"({m['note']})" if m["note"] else "") for m in meals) if meals else "未報告"),
         "🧹 家事：" + ("、".join(CHORE_LABEL[c["sub"]] for c in chores) if chores else "なし"),
-        "🛁 入浴：" + ("済" if bath else "未報告"),
+        "🛁 入浴：" + ((f"済（{len(bath)}回）" if len(bath) >= 2 else "済") if bath else "未報告"),
         "🪥 歯磨き：" + (f"{len(await events_on(user.id, day, 'teeth'))} 回"),
         "🏃 ラジオ体操：" + ("参加" if radio else "—"),
     ]
