@@ -337,6 +337,20 @@ async def main():
     body = B._effort_content("はやおき", "早起きして図書館", ["12", "7"], ["ねぼう", "G"])
     check("投稿本文に件数と名前", "👏 × 2" in body and "ねぼう" in body, True)
 
+    # 称号の段位と飯テロ賞
+    check("段位: 2日はなし", B.streak_title_for(2), None)
+    check("段位: 3日で見習い", B.streak_title_for(3), "🔥リズム見習い")
+    check("段位: 10日で達人", B.streak_title_for(10), "🔥リズムの達人")
+    check("段位: 40日で化身", B.streak_title_for(40), "🔥リズムの化身")
+    mid1 = await B.add_event(11, "meal", "昼", note="写真", ts_dt=datetime(2026, 8, 5, 12, tzinfo=JST))
+    mid2 = await B.add_event(12, "meal", "夜", note="写真", ts_dt=datetime(2026, 8, 5, 19, tzinfo=JST))
+    for uid in ("7", "9"):
+        await B.db.execute("INSERT OR IGNORE INTO meal_praise(event_id,user_id,day) VALUES(?,?,'2026-08-05')", (mid1, uid))
+    await B.db.execute("INSERT OR IGNORE INTO meal_praise(event_id,user_id,day) VALUES(?,?,'2026-08-05')", (mid2, "7"))
+    await B.db.commit()
+    names, best = await B.meshitero_winners(d1, d2)
+    check("飯テロ賞: 👏2の写真が勝ち", (names, best), (["はやおき"], 2))
+
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
     check("meta 上書き", await B.meta_get("last_judge_day"), "2026-08-06")
