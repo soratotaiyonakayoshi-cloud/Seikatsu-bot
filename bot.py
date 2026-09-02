@@ -1950,7 +1950,8 @@ async def load_role_msgs():
             ROLE_MSG_IDS[int(mid)] = gk
 
 # ---- 称号ロール（判定結果からBotが自動で付け外し） ----
-TITLE_STREAK = [(30, "🔥リズムの化身", 0xff4d00), (7, "🔥リズムの達人", 0xff7a1a), (3, "🔥リズム見習い", 0xffa64d)]
+TITLE_STREAK = [(30, "🔥生活リズムの化身", 0xff4d00), (7, "🔥生活リズムの達人", 0xff7a1a), (3, "🔥生活リズム見習い", 0xffa64d)]
+OLD_TITLE_NAMES = {"🔥生活リズムの化身": ("🔥リズムの化身",), "🔥生活リズムの達人": ("🔥リズムの達人",), "🔥生活リズム見習い": ("🔥リズム見習い",)}
 TITLE_KAIKIN = ("👑今週の皆勤", 0xf5c518)
 TITLE_NEBOU = ("🐷今週の寝坊神", 0xec4899)
 TITLE_MVP = ("🏆月間MVP", 0xa855f7)
@@ -1963,6 +1964,14 @@ async def ensure_title_roles(guild):
     created = []
     for _, name, color in ALL_TITLES:
         if find_role(guild, name) is None:
+            old_r = next((r for on in OLD_TITLE_NAMES.get(name, ()) if (r := find_role(guild, on))), None)
+            if old_r is not None:
+                try:
+                    await old_r.edit(name=name, reason="称号ロール名の変更（/setup）")
+                    created.append(f"{name}（改名）")
+                    continue
+                except Exception as e:
+                    print(f"称号ロール改名失敗 {name}: {e!r}", flush=True)
             try:
                 await guild.create_role(name=name, colour=discord.Colour(color), mentionable=False, reason="称号ロール（/setup）")
                 created.append(name)

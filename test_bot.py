@@ -339,9 +339,9 @@ async def main():
 
     # 称号の段位と飯テロ賞
     check("段位: 2日はなし", B.streak_title_for(2), None)
-    check("段位: 3日で見習い", B.streak_title_for(3), "🔥リズム見習い")
-    check("段位: 10日で達人", B.streak_title_for(10), "🔥リズムの達人")
-    check("段位: 40日で化身", B.streak_title_for(40), "🔥リズムの化身")
+    check("段位: 3日で見習い", B.streak_title_for(3), "🔥生活リズム見習い")
+    check("段位: 10日で達人", B.streak_title_for(10), "🔥生活リズムの達人")
+    check("段位: 40日で化身", B.streak_title_for(40), "🔥生活リズムの化身")
     mid1 = await B.add_event(11, "meal", "昼", note="写真", ts_dt=datetime(2026, 8, 5, 12, tzinfo=JST))
     mid2 = await B.add_event(12, "meal", "夜", note="写真", ts_dt=datetime(2026, 8, 5, 19, tzinfo=JST))
     for uid in ("7", "9"):
