@@ -351,6 +351,17 @@ async def main():
     names, best = await B.meshitero_winners(d1, d2)
     check("飯テロ賞: 👏2の写真が勝ち", (names, best), (["はやおき"], 2))
 
+    # 宣言の答え合わせ（◯△✕）
+    await B.db.execute("INSERT INTO goal_reviews(month,user_id,result) VALUES('2026-09','11','o')")
+    await B.db.execute("INSERT INTO goal_reviews(month,user_id,result) VALUES('2026-09','12','x')")
+    await B.db.commit()
+    ty = await B.goal_review_tally("2026-09")
+    check("答え合わせ集計", "◯ 1人（はやおき）" in ty and "✕ 1人（ねぼう）" in ty, True)
+    await B.db.execute("INSERT INTO goal_reviews(month,user_id,result) VALUES('2026-09','12','o') "
+                       "ON CONFLICT(month,user_id) DO UPDATE SET result=excluded.result")
+    await B.db.commit()
+    check("押し直しで切替", "◯ 2人" in await B.goal_review_tally("2026-09"), True)
+
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
     check("meta 上書き", await B.meta_get("last_judge_day"), "2026-08-06")

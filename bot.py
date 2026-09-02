@@ -154,6 +154,7 @@ CREATE TABLE IF NOT EXISTS assignment_done(assignment_id INTEGER NOT NULL, user_
 CREATE TABLE IF NOT EXISTS assignment_reminded(assignment_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(assignment_id, stage));
 CREATE TABLE IF NOT EXISTS daily_results(day TEXT NOT NULL, user_id TEXT NOT NULL, achieved INTEGER NOT NULL, misses TEXT, PRIMARY KEY(day, user_id));
 CREATE TABLE IF NOT EXISTS efforts(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, text TEXT NOT NULL, day TEXT NOT NULL, ts INTEGER, msg_id TEXT);
+CREATE TABLE IF NOT EXISTS goal_reviews(month TEXT NOT NULL, user_id TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(month, user_id));
 CREATE TABLE IF NOT EXISTS meal_praise(event_id INTEGER NOT NULL, user_id TEXT NOT NULL, day TEXT, PRIMARY KEY(event_id, user_id));
 CREATE TABLE IF NOT EXISTS effort_praise(effort_id INTEGER NOT NULL, user_id TEXT NOT NULL, day TEXT, PRIMARY KEY(effort_id, user_id));
 CREATE TABLE IF NOT EXISTS intros(user_id TEXT PRIMARY KEY, f1 TEXT, f2 TEXT, f3 TEXT, f4 TEXT, f5 TEXT, msg_id TEXT, updated_at INTEGER);
@@ -371,7 +372,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(BathView())
         self.add_view(SetteiView())
         self.add_view(IntroView())
-        self.add_dynamic_items(DoneButton, MealFixButton, PraiseButton, MealPraiseButton)
+        self.add_dynamic_items(DoneButton, MealFixButton, PraiseButton, MealPraiseButton, GoalReviewButton)
         self.add_view(EraiView())
         # コマンドの同期はグローバルではなくサーバー単位で行う（即時反映）。on_ready 参照。
 
@@ -974,11 +975,101 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
                 await set_exclusive_title(guild, TITLE_NEBOU[0], [x["uid"] for x in nebou if x["late"] == best_late] if best_late else [])
             else:
                 await set_exclusive_title(guild, TITLE_MVP[0], [judged[0]["uid"]] if judged else [])
-                thread_note = await post_goal_thread(guild, ch, now)
+                notes = [await post_goal_review(guild, now), await post_goal_thread(guild, ch, now)]
+                thread_note = "\n".join(n for n in notes if n)
         except Exception as e:
             print(f"称号/宣言スレ エラー: {e!r}", flush=True)
     return (f"{'通信簿' if kind == 'week' else '月間表彰'}を投稿しました（{len(stats)}人）"
             + ((chr(10) + thread_note) if thread_note else ""))
+
+GOAL_RESULTS = [("o", "◯ 達成した！", discord.ButtonStyle.success),
+                ("d", "△ おしかった", discord.ButtonStyle.secondary),
+                ("x", "✕ 来月こそ", discord.ButtonStyle.danger)]
+GOAL_LABEL = {r: lab for r, lab, _ in GOAL_RESULTS}
+
+async def goal_review_state(month):
+    async with db.execute("SELECT user_id, result FROM goal_reviews WHERE month=?", (month,)) as c:
+        rows = await c.fetchall()
+    by = {"o": [], "d": [], "x": []}
+    for r in rows:
+        by.setdefault(r["result"], []).append(r["user_id"])
+    return by
+
+async def goal_review_tally(month):
+    by = await goal_review_state(month)
+    parts = []
+    for r, lab, _ in GOAL_RESULTS:
+        uids = by.get(r, [])
+        if uids:
+            names = []
+            for uid in uids:
+                u = await get_user(uid)
+                names.append((u["name"] if u else None) or f"<@{uid}>")
+            parts.append(f"{lab[0]} {len(uids)}人（{'、'.join(names)}）")
+    return "　".join(parts)
+
+async def _goal_review_view(month):
+    by = await goal_review_state(month)
+    view = discord.ui.View(timeout=None)
+    for r, lab, st in GOAL_RESULTS:
+        view.add_item(GoalReviewButton(month, r, len(by.get(r, []))))
+    return view
+
+class GoalReviewButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_gr:(?P<month>\d{4}-\d{2}):(?P<res>[odx])"):
+    def __init__(self, month, res, count=0):
+        lab, st = next(((lab, st) for r, lab, st in GOAL_RESULTS if r == res), ("?", discord.ButtonStyle.secondary))
+        super().__init__(discord.ui.Button(label=f"{lab}（{count}）", style=st, custom_id=f"sk_gr:{month}:{res}"))
+        self.month, self.res = month, res
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["month"], match["res"])
+
+    async def callback(self, interaction):
+        uid = str(interaction.user.id)
+        await ensure_user(interaction.user)
+        async with db.execute("SELECT result FROM goal_reviews WHERE month=? AND user_id=?", (self.month, uid)) as c:
+            cur = await c.fetchone()
+        if cur and cur["result"] == self.res:
+            await db.execute("DELETE FROM goal_reviews WHERE month=? AND user_id=?", (self.month, uid))
+        else:
+            await db.execute("INSERT INTO goal_reviews(month,user_id,result) VALUES(?,?,?) "
+                             "ON CONFLICT(month,user_id) DO UPDATE SET result=excluded.result", (self.month, uid, self.res))
+        await db.commit()
+        base = interaction.message.content.split("\n📊 ")[0]
+        tally = await goal_review_tally(self.month)
+        await interaction.response.edit_message(content=base + (f"\n📊 {tally}" if tally else ""),
+                                                view=await _goal_review_view(self.month))
+
+async def post_goal_review(guild, now):
+    """月末に、その月の宣言スレッドへ「答え合わせ」を投稿（◯△✕の自己申告ボタン・月1回）"""
+    key_m = f"{now.year}-{now.month:02d}"
+    tid = await meta_get(f"goal_thread_{key_m}")
+    if not tid or not guild:
+        return ""
+    th = guild.get_thread(int(tid))
+    if th is None:
+        try:
+            th = await guild.fetch_channel(int(tid))
+        except Exception:
+            return ""
+    if not isinstance(th, discord.Thread):
+        return ""
+    if await meta_get(f"goal_review_{key_m}"):
+        return "答え合わせは投稿済みです"
+    uids = []
+    try:
+        async for m in th.history(limit=200):
+            if not m.author.bot and str(m.author.id) not in uids:
+                uids.append(str(m.author.id))
+    except Exception as e:
+        print(f"宣言スレッド履歴取得失敗: {e!r}", flush=True)
+    mention = " ".join(f"<@{u}>" for u in reversed(uids))
+    msg = await th.send((f"🎬 **{now.month}月の宣言、答え合わせの時間です！**\n"
+                         "宣言はどうだった？ 下のボタンで自己申告どうぞ（押し直しOK・もう一度押すと取り消し）\n" + mention).rstrip(),
+                        view=await _goal_review_view(key_m))
+    await meta_set(f"goal_review_{key_m}", msg.id)
+    return "答え合わせを宣言スレッドに投稿しました"
 
 async def post_goal_thread(guild, ch, now):
     """月間表彰の直後に、翌月の目標宣言スレッドを作る（月に1回だけ）。
