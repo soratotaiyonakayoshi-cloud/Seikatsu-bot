@@ -181,7 +181,14 @@ async def db_init():
               "ALTER TABLE users ADD COLUMN kaji_wash INTEGER NOT NULL DEFAULT 0",
               "ALTER TABLE users ADD COLUMN kaji_since TEXT",
               "ALTER TABLE users ADD COLUMN kaji_trash INTEGER NOT NULL DEFAULT 0",
-              "ALTER TABLE users ADD COLUMN teeth_min INTEGER NOT NULL DEFAULT 0"):
+              "ALTER TABLE users ADD COLUMN teeth_min INTEGER NOT NULL DEFAULT 0",
+              "ALTER TABLE users ADD COLUMN wake_set_day TEXT",
+              "ALTER TABLE users ADD COLUMN sleep_set_day TEXT",
+              "ALTER TABLE users ADD COLUMN bath_set_day TEXT",
+              "ALTER TABLE users ADD COLUMN meals_set_day TEXT",
+              "ALTER TABLE users ADD COLUMN teeth_set_day TEXT",
+              "ALTER TABLE users ADD COLUMN radio_set_day TEXT",
+              "ALTER TABLE users ADD COLUMN chores_set_day TEXT"):
         try:
             await db.execute(m)
             await db.commit()
@@ -276,7 +283,7 @@ async def build_misses(u, day, d1, d2, is_sunday):
     misses = []
     uid = u["id"]
     dl = effective_deadline(u, date.fromisoformat(day))
-    if dl:
+    if dl and u["wake_set_day"] != day:
         w = await events_on(uid, day, "wake")
         if not w:
             misses.append(f"☀️ 起床 未報告（{dl} まで）")
@@ -284,7 +291,7 @@ async def build_misses(u, day, d1, d2, is_sunday):
             t = hhmm(datetime.fromtimestamp(w[0]["ts"], JST))
             if t > dl:
                 misses.append(f"☀️ 寝坊 {dl} まで → {t}")
-    if u["sleep_min"]:
+    if u["sleep_min"] and u["sleep_set_day"] != day:
         s = await events_on(uid, day, "sleep")
         if not s:
             misses.append("🌙 睡眠時間 未報告")
@@ -292,21 +299,21 @@ async def build_misses(u, day, d1, d2, is_sunday):
             hrs = float(s[-1]["note"] or 0)
             if hrs < u["sleep_min"]:
                 misses.append(f"🌙 睡眠不足 {fmt_hours(hrs)}（最低 {fmt_hours(u['sleep_min'])}）")
-    if u["bath_daily"]:
+    if u["bath_daily"] and u["bath_set_day"] != day:
         if not await events_on(uid, day, "bath"):
             misses.append("🛁 入浴 未報告")
-    if u["radio_daily"]:
+    if u["radio_daily"] and u["radio_set_day"] != day:
         if not await events_on(uid, day, "radio"):
             misses.append("🏃 ラジオ体操 未参加")
-    if u["meals_min"]:
+    if u["meals_min"] and u["meals_set_day"] != day:
         n = len(await distinct_main_meals(uid, day))
         if n < u["meals_min"]:
             misses.append(f"🍚 食事 {n}/{u['meals_min']} 回")
-    if u["chores_week"] and is_sunday:
+    if u["chores_week"] and is_sunday and u["chores_set_day"] != day:
         n = await count_events_between(uid, "chore", d1, d2)
         if n < u["chores_week"]:
             misses.append(f"🧹 家事 今週 {n}/{u['chores_week']} 回")
-    if u["teeth_min"]:
+    if u["teeth_min"] and u["teeth_set_day"] != day:
         n = len(await events_on(uid, day, "teeth"))
         if n < u["teeth_min"]:
             misses.append(f"🪥 歯磨き {n}/{u['teeth_min']} 回")
@@ -315,9 +322,11 @@ async def build_misses(u, day, d1, d2, is_sunday):
         if st["due"]:
             misses.append(f"{st['emoji']} {st['label']} " + ("今日やってない（毎日）" if st["n"] == 1 else f"{st['gap']}日やってない（{st['n']}日に1回）"))
     # 自分で決めた項目（/kojin）
-    async with db.execute("SELECT name FROM custom_items WHERE user_id=? AND id NOT IN "
+    async with db.execute("SELECT name, created_at FROM custom_items WHERE user_id=? AND id NOT IN "
                           "(SELECT item_id FROM custom_checks WHERE user_id=? AND day=?) ORDER BY id", (uid, uid, day)) as c:
         for r in await c.fetchall():
+            if day_str(datetime.fromtimestamp(r["created_at"] or 0, JST)) == day:
+                continue  # 今日追加した項目は明日から
             misses.append(f"📝 {r['name']} 未チェック")
     return misses
 
@@ -332,6 +341,23 @@ def effective_deadline(u, dt):
         t = min(h * 60 + m + shift, 23 * 60 + 59)
         return f"{t // 60:02d}:{t % 60:02d}"
     return dl
+
+async def all_items_skipped(u, day):
+    """この日、実際に判定される項目が1つも無い（すべて今日設定・未設定）＝設定初日の人"""
+    if any(v and sd != day for v, sd in (
+            (u["wake_deadline"], u["wake_set_day"]), (u["sleep_min"], u["sleep_set_day"]),
+            (u["bath_daily"], u["bath_set_day"]), (u["teeth_min"], u["teeth_set_day"]),
+            (u["meals_min"], u["meals_set_day"]), (u["radio_daily"], u["radio_set_day"]),
+            (u["chores_week"], u["chores_set_day"]))):
+        return False
+    for col, _l, _e, _s in KAJI_CATS:
+        if u[col] and (u["kaji_since"] or day) != day:
+            return False
+    async with db.execute("SELECT created_at FROM custom_items WHERE user_id=?", (str(u["id"]),)) as c:
+        for r in await c.fetchall():
+            if day_str(datetime.fromtimestamp(r["created_at"] or 0, JST)) != day:
+                return False
+    return True
 
 def has_any_setting(u):
     return bool(u["wake_deadline"] or u["sleep_min"] or u["bath_daily"] or u["meals_min"] or u["chores_week"] or u["radio_daily"]
@@ -762,8 +788,13 @@ async def judge(guild, manual=False):
     resting = [u for u in users if u["id"] in off]
     users = [u for u in users if u["id"] not in off]
     emoji = kora_emoji(guild)
-    results, achievers, celebrate = [], [], []
+    results, achievers, celebrate, first_day = [], [], [], []
     for u in users:
+        if await all_items_skipped(u, day):
+            first_day.append(u)
+            await db.execute("INSERT OR IGNORE INTO off_days(day,user_id,reason) VALUES(?,?,?)", (day, u["id"], "設定初日"))
+            await db.commit()  # お休み扱いにしてストリークを途切れさせない
+            continue
         misses = await build_misses(u, day, d1, d2, is_sunday)
         achieved = 0 if misses else 1
         await db.execute("INSERT INTO daily_results(day,user_id,achieved,misses) VALUES(?,?,?,?) "
@@ -791,7 +822,7 @@ async def judge(guild, manual=False):
     elif not results:
         await kora_ch.send(f"{erai_emoji(guild)} {day} の判定{tag}：**全員が最低限を守りました！** えらい！！")
     else:
-        await kora_ch.send(f"📋 {day} の判定{tag}：{len(results)}/{len(users)} 人に叱責の儀を行います👹")
+        await kora_ch.send(f"📋 {day} の判定{tag}：{len(results)}/{len(users) - len(first_day)} 人に叱責の儀を行います👹")
         for u, misses in results:
             await kora_ch.send(f"{emoji} <@{u['id']}> **こら！**\n" + "\n".join("・" + m for m in misses))
     if achievers:
@@ -801,6 +832,8 @@ async def judge(guild, manual=False):
         await kora_ch.send(line)
     if resting:
         await kora_ch.send("🛌 お休み：" + "、".join(f"**{u['name']}**" + (f"（{off[u['id']]}）" if off[u["id"]] else "") for u in resting))
+    if first_day:
+        await kora_ch.send("🍀 設定初日（判定は明日から）：" + "、".join(f"**{u['name']}**" for u in first_day))
     return f"判定完了：{len(results)}/{len(users)} 人が未達"
 
 # ------------------------------------------------------------
@@ -2530,6 +2563,7 @@ async def saitei_command(interaction, kishou: str = None, suimin: float = None, 
                          shokuji: int = None, kaji: int = None, rajio: bool = None, kyujitsu: float = None, hamigaki: int = None):
     user = interaction.user
     await ensure_user(user)
+    today = day_str(now_jst())
     if kishou is not None:
         if kishou.strip() in ("なし", "none", "-", "0"):
             await db.execute("UPDATE users SET wake_deadline=NULL WHERE id=?", (str(user.id),))
@@ -2538,28 +2572,30 @@ async def saitei_command(interaction, kishou: str = None, suimin: float = None, 
             if not hh:
                 await interaction.response.send_message("⚠️ 起床時刻の形式が読めませんでした（例 7:00）", ephemeral=True)
                 return
-            await db.execute("UPDATE users SET wake_deadline=? WHERE id=?", (hh, str(user.id)))
+            await db.execute("UPDATE users SET wake_deadline=?, wake_set_day=? WHERE id=?", (hh, today, str(user.id)))
     if suimin is not None:
-        await db.execute("UPDATE users SET sleep_min=? WHERE id=?", (suimin if suimin > 0 else None, str(user.id)))
+        await db.execute("UPDATE users SET sleep_min=?, sleep_set_day=? WHERE id=?", (suimin if suimin > 0 else None, today, str(user.id)))
     if nyuyoku is not None:
-        await db.execute("UPDATE users SET bath_daily=? WHERE id=?", (1 if nyuyoku else 0, str(user.id)))
+        await db.execute("UPDATE users SET bath_daily=?, bath_set_day=? WHERE id=?", (1 if nyuyoku else 0, today, str(user.id)))
     if rajio is not None:
-        await db.execute("UPDATE users SET radio_daily=? WHERE id=?", (1 if rajio else 0, str(user.id)))
+        await db.execute("UPDATE users SET radio_daily=?, radio_set_day=? WHERE id=?", (1 if rajio else 0, today, str(user.id)))
     if hamigaki is not None:
-        await db.execute("UPDATE users SET teeth_min=? WHERE id=?", (max(0, min(10, hamigaki)), str(user.id)))
+        await db.execute("UPDATE users SET teeth_min=?, teeth_set_day=? WHERE id=?", (max(0, min(10, hamigaki)), today, str(user.id)))
     if kyujitsu is not None:
-        await db.execute("UPDATE users SET holiday_shift=? WHERE id=?", (int(max(0.0, min(12.0, kyujitsu)) * 60), str(user.id)))
+        await db.execute("UPDATE users SET holiday_shift=?, wake_set_day=? WHERE id=?", (int(max(0.0, min(12.0, kyujitsu)) * 60), today, str(user.id)))
     if shokuji is not None:
-        await db.execute("UPDATE users SET meals_min=? WHERE id=?", (min(3, shokuji) if shokuji > 0 else None, str(user.id)))
+        await db.execute("UPDATE users SET meals_min=?, meals_set_day=? WHERE id=?", (min(3, shokuji) if shokuji > 0 else None, today, str(user.id)))
     if kaji is not None:
-        await db.execute("UPDATE users SET chores_week=? WHERE id=?", (kaji if kaji > 0 else None, str(user.id)))
+        await db.execute("UPDATE users SET chores_week=?, chores_set_day=? WHERE id=?", (kaji if kaji > 0 else None, today, str(user.id)))
     await db.commit()
     u = await get_user(user.id)
     mates = await nakama_of(user.id, u["wake_deadline"])
     mate_txt = ""
     if u["wake_deadline"]:
         mate_txt = f"\n\n👥 同じ {u['wake_deadline']} 起床の仲間：" + ("、".join(mates) if mates else "まだいない（最初の一人！）")
-    await interaction.response.send_message(f"🛠 **{user.display_name} の最低限**\n{settings_text(u)}{mate_txt}", ephemeral=True)
+    changed_any = any(v is not None for v in (kishou, suimin, nyuyoku, shokuji, kaji, rajio, kyujitsu, hamigaki))
+    grace = "\n\n🍀 今日設定・変更した項目は、**明日から**判定に入ります（初日から叱られない仕様）。" if changed_any else ""
+    await interaction.response.send_message(f"🛠 **{user.display_name} の最低限**\n{settings_text(u)}{mate_txt}{grace}", ephemeral=True)
     if any(v is not None for v in (kishou, suimin, nyuyoku, shokuji, kaji, rajio, kyujitsu, hamigaki)):
         settei = await get_ch("settei")
         if settei:

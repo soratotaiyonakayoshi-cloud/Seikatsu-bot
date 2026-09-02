@@ -362,6 +362,24 @@ async def main():
     await B.db.commit()
     check("押し直しで切替", "◯ 2人" in await B.goal_review_tally("2026-09"), True)
 
+    # 設定初日は判定されない
+    await B.ensure_user(M(20, "しんじん"))
+    await B.db.execute("UPDATE users SET wake_deadline='07:00', wake_set_day='2026-08-05', sleep_min=6, sleep_set_day='2026-08-05', bath_daily=1, bath_set_day='2026-08-05' WHERE id='20'")
+    await B.db.commit()
+    u20 = await B.get_user(20)
+    check("初日は未達ゼロ", await B.build_misses(u20, "2026-08-05", d1, d2, False), [])
+    check("初日は全項目スキップ扱い", await B.all_items_skipped(u20, "2026-08-05"), True)
+    m20 = await B.build_misses(u20, "2026-08-06", d1, d2, False)
+    check("翌日からは判定される", len(m20) >= 2, True)
+    check("翌日はスキップ扱いでない", await B.all_items_skipped(u20, "2026-08-06"), False)
+    # 既存ユーザー（set_day NULL）は従来どおり判定される
+    check("set_day NULL は判定対象", await B.all_items_skipped(await B.get_user(2), "2026-08-05"), False)
+    # 今日追加した個人項目は判定されない
+    await B.db.execute("INSERT INTO custom_items(user_id,name,created_at) VALUES('20','散歩',?)", (int(datetime(2026, 8, 5, 15, tzinfo=JST).timestamp()),))
+    await B.db.commit()
+    check("今日追加の個人項目は未達に出ない", any("散歩" in x for x in await B.build_misses(await B.get_user(20), "2026-08-05", d1, d2, False)), False)
+    check("翌日は個人項目も判定", any("散歩" in x for x in await B.build_misses(await B.get_user(20), "2026-08-06", d1, d2, False)), True)
+
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
     check("meta 上書き", await B.meta_get("last_judge_day"), "2026-08-06")
