@@ -31,9 +31,14 @@ check("食事推定 16:00", B.infer_meal_sub(datetime(2026,8,5,16,0,tzinfo=JST))
 check("食事推定 19:00", B.infer_meal_sub(datetime(2026,8,5,19,0,tzinfo=JST)), "夜")
 
 # ---- 永続ビュー（custom_id 必須制約）とコマンド登録 ----
-for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView):
+for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView, B.KadaiPanelView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
-check("永続ビュー4種 登録OK", True, True)
+check("永続ビュー5種 登録OK", True, True)
+check("ごはんパネルに🧊 2ボタン", {"sk_fridge_add", "sk_fridge_list"} <= {i.custom_id for i in B.MealView().children}, True)
+check("🧊は2段目・ごはんは1段目", sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_fridge")}) == [1]
+      and sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_meal")}) == [0], True)
+check("課題パネルは4ボタン", {i.custom_id for i in B.KadaiPanelView().children}, {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list"})
+check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
 check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "reizouko", "saitei", "setup", "suimin", "tips", "tsushinbo", "watashi"])
 
 class M:  # メンバー擬似
@@ -461,6 +466,10 @@ async def main():
     chart = B.render_personal_chart([{"day": "2026-09-01", "wake": 400, "sleep": 6.5, "ach": 1, "nizone": 0},
                                      {"day": "2026-09-02", "wake": 460, "sleep": 5.0, "ach": 0, "nizone": 1}], "テスト")
     check("個人グラフ生成", chart is not None and len(chart.getvalue()) > 10000, True)
+
+    # 課題一覧embed（パネルとコマンドの共通処理）
+    check("課題一覧embed（履修者には出る）", (await B.kadai_list_embed("1")) is not None, True)
+    check("課題一覧embed（無関係な人はNone）", await B.kadai_list_embed("999999"), None)
 
     # 冷蔵庫の期限リマインド🧊
     check("冷蔵庫: プリセット 牛乳=4日", B.fridge_preset_days("牛乳"), 4)

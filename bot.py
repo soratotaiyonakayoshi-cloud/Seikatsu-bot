@@ -58,13 +58,15 @@ CH = {
     "jikoshokai": ("自己紹介🙋", "📝 ボタンでフォームから自己紹介カードを投稿（あとから更新OK）。"),
     "roles": ("ロール🏷", "リアクションで学部・学年・生活形態のロールを付け外し。"),
     "wake": ("起床🌅", "☀️ 起きたら押す／🌙 寝る前に押す（睡眠時間は自動計算）／😴 二度寝したら正直に押す。\n🏃 で毎朝のラジオ体操の呼び出し（メンション）をON/OFF。"),
-    "meal": ("ごはん🍚", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。"),
+    "meal": ("ごはん🍚", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。\n"
+             "🧊 冷蔵庫＝期限が近い食品のメモ。登録すると期限の前日・当日の朝にお知らせ（3日過ぎたら自動で消えます）。"),
     "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
     "erai": ("えらい🌟", "最低限とは別に、今日がんばったことを報告して褒め合う場所。🌟ボタン（または /erai）から。判定はされません。"),
     "bath": ("おふろ🛁", "🛁 お風呂に入ったら押す。🪥 歯磨きも（1日に何回でも）。"),
     "kora": ("叱責👹", "毎晩の判定で、最低限を守れなかった人が晒される場所。"),
     "tsushinbo": ("つうしんぼ📮", "毎週日曜の夜に、その週の通信簿（達成率ランキング・各賞）が届く場所。"),
-    "kadai": ("課題📚", "`/jikanwari add` で履修科目を登録 → 気づいた人が `/kadai add` → 同じ科目の履修者だけに通知＆リマインド。"),
+    "kadai": ("課題📚", "🎓 で履修科目を登録 → 気づいた人が ➕ で課題を登録 → 同じ科目の履修者だけに通知＆リマインド（3日前・前日・当日）。\n"
+              "投稿の ✅ で完了。コマンド派は `/jikanwari` `/kadai` でも。"),
     "settei": ("設定🔧", "`/saitei` で自分の最低限を決める。`/kojin add` で自分だけの項目を追加し、📝ボタンで毎日チェック。`/oyasumi` でお休み申告。"),
 }
 CHORES = [  # (key, ラベル, 絵文字, 行)
@@ -394,6 +396,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(MealView())
         self.add_view(ChoreView())
         self.add_view(BathView())
+        self.add_view(KadaiPanelView())
         self.add_view(SetteiView())
         self.add_view(IntroView())
         self.add_dynamic_items(DoneButton, MealFixButton, PraiseButton, MealPraiseButton, GoalReviewButton, TipSaveButton)
@@ -582,7 +585,7 @@ class MealModal(discord.ui.Modal):
 
 class MealButton(discord.ui.Button):
     def __init__(self, sub, emoji):
-        super().__init__(label=f"{emoji} {sub}", style=discord.ButtonStyle.secondary, custom_id=f"sk_meal_{sub}")
+        super().__init__(label=f"{emoji} {sub}", style=discord.ButtonStyle.secondary, custom_id=f"sk_meal_{sub}", row=0)
         self.sub = sub
 
     async def callback(self, interaction):
@@ -593,6 +596,14 @@ class MealView(discord.ui.View):
         super().__init__(timeout=None)
         for sub, emoji in MEALS:
             self.add_item(MealButton(sub, emoji))
+
+    @discord.ui.button(label="🧊 冷蔵庫に登録", style=discord.ButtonStyle.primary, custom_id="sk_fridge_add", row=1)
+    async def fridge_add(self, interaction, button):
+        await interaction.response.send_modal(FridgeAddModal())
+
+    @discord.ui.button(label="🧊 冷蔵庫を見る・食べた", style=discord.ButtonStyle.secondary, custom_id="sk_fridge_list", row=1)
+    async def fridge_list(self, interaction, button):
+        await fridge_show(interaction)
 
 # ------------------------------------------------------------
 #  家事
@@ -1546,6 +1557,7 @@ async def post_assignment(a, course, header):
     view = discord.ui.View(timeout=None)
     view.add_item(DoneButton(a["id"]))
     msg = await ch.send(f"{header}\n{mention}", embed=kadai_embed(a, course, takers, done), view=view)
+    await bump_panel("kadai")
     return msg
 
 async def remind_assignments():
@@ -1684,19 +1696,24 @@ async def ac_open_assignments(interaction, current):
 @app_commands.describe(kamoku="科目（自分の履修科目から）", kigen="期限 例: 10/15 ／ 10/15 17:00（時刻省略は23:59）", naiyou="課題の内容 例: レポート提出", memo="補足（任意）")
 @app_commands.autocomplete(kamoku=ac_my_courses)
 async def kadai_add(interaction, kamoku: str, kigen: str, naiyou: str, memo: str = None):
+    await kadai_register(interaction, kamoku, kigen, naiyou, memo)
+
+async def kadai_register(interaction, code, kigen, naiyou, memo):
+    """課題を1件登録（パネルのフォームと /kadai add の共通処理）"""
     user = interaction.user
     await ensure_user(user)
-    c = await get_course(kamoku)
+    c = await get_course(code)
     if not c:
-        await interaction.response.send_message("科目は候補から選んでください（先に `/jikanwari add` で履修登録）。", ephemeral=True)
+        await interaction.response.send_message("科目は候補から選んでください（先に履修登録）。", ephemeral=True)
         return
     due = parse_due(kigen)
     if not due:
         await interaction.response.send_message("⚠️ 期限の形式が読めませんでした。例: `10/15` `10/15 17:00` `10月15日`", ephemeral=True)
         return
+    naiyou = (naiyou or "").strip()
     await db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES(?,?)", (str(user.id), c["code"]))
     cur = await db.execute("INSERT INTO assignments(code,title,note,due_ts,created_by,created_at) VALUES(?,?,?,?,?,?)",
-                           (c["code"], naiyou.strip()[:100], (memo or "").strip()[:300] or None, int(due.timestamp()), str(user.id), int(now_jst().timestamp())))
+                           (c["code"], naiyou[:100], (memo or "").strip()[:300] or None, int(due.timestamp()), str(user.id), int(now_jst().timestamp())))
     aid = cur.lastrowid
     await db.commit()
     a = await assignment_row(aid)
@@ -1709,22 +1726,28 @@ async def kadai_add(interaction, kamoku: str, kigen: str, naiyou: str, memo: str
 
 @kadai.command(name="list", description="自分の履修科目の課題一覧（期限順）")
 async def kadai_list(interaction):
-    uid = str(interaction.user.id)
+    emb = await kadai_list_embed(str(interaction.user.id))
+    if not emb:
+        await interaction.response.send_message("いま登録されている課題はありません 🎉", ephemeral=True)
+        return
+    await interaction.response.send_message(embed=emb, ephemeral=True)
+
+async def kadai_list_embed(uid):
+    """自分の履修科目の課題一覧embed（パネルと /kadai list の共通処理）。無ければ None"""
     async with db.execute(
         "SELECT a.*, c.name AS cname FROM assignments a JOIN courses c ON c.code=a.code "
         "WHERE a.closed=0 AND (a.created_by=? OR a.code IN (SELECT code FROM user_courses WHERE user_id=?)) ORDER BY a.due_ts",
         (uid, uid)) as c:
         rows = await c.fetchall()
     if not rows:
-        await interaction.response.send_message("いま登録されている課題はありません 🎉", ephemeral=True)
-        return
+        return None
     lines = []
     for a in rows:
         done = uid in await done_set(a["id"])
         due = datetime.fromtimestamp(a["due_ts"], JST)
         left = days_left(due)
         lines.append(f"{'✅' if done else '⬜'} **{a['cname']}**：{a['title']}　{fmt_due(due)}" + ("" if done else f"（{'今日！' if left == 0 else f'あと{left}日'}）"))
-    await interaction.response.send_message(embed=discord.Embed(title="📚 課題一覧", description="\n".join(lines)[:4000], color=discord.Color.gold()), ephemeral=True)
+    return discord.Embed(title="📚 課題一覧", description="\n".join(lines)[:4000], color=discord.Color.gold())
 
 @kadai.command(name="done", description="課題を完了にする（投稿の✅ボタンでもOK）")
 @app_commands.describe(kadai_id="課題")
@@ -1751,9 +1774,113 @@ async def kadai_delete(interaction, kadai_id: str):
     ch = await get_ch("kadai")
     if ch:
         await ch.send(f"🗑 **{a['cname']}**「{a['title']}」は **{interaction.user.display_name}** が取り下げました。")
+        await bump_panel("kadai")
     await interaction.response.send_message("取り下げました。", ephemeral=True)
 
 bot.tree.add_command(kadai)
+
+# ---- #課題📚 パネル（履修登録と課題登録をボタンから） ----
+class CourseSearchModal(discord.ui.Modal, title="🎓 履修科目を探す"):
+    q = discord.ui.TextInput(label="科目名（一部でOK。例 微分、英語）", max_length=40)
+
+    async def on_submit(self, interaction):
+        query = self.q.value.strip()
+        rows = await search_courses(query, 24)
+        opts = [discord.SelectOption(label=course_label(r)[:100], value=r["code"]) for r in rows]
+        if query and not any(norm_text(r["name"]) == norm_text(query) for r in rows):
+            opts.append(discord.SelectOption(label=f"＋「{query[:40]}」をマスタに無い科目として登録", value=("new:" + query)[:100]))
+        if not opts:
+            await interaction.response.send_message("見つかりませんでした。別のキーワードでもう一度どうぞ。", ephemeral=True)
+            return
+        view = discord.ui.View(timeout=300)
+        view.add_item(CourseSelect(opts[:25]))
+        await interaction.response.send_message(f"🔍 「{query}」の検索結果です。登録する科目を選んでください：", view=view, ephemeral=True)
+
+class CourseSelect(discord.ui.Select):
+    def __init__(self, options):
+        super().__init__(placeholder="登録する科目を選ぶ（複数OK）", options=options, min_values=1, max_values=len(options))
+
+    async def callback(self, interaction):
+        user = interaction.user
+        await ensure_user(user)
+        lines = []
+        for v in self.values:
+            c = await resolve_course_value(v)
+            if not c:
+                continue
+            await db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES(?,?)", (str(user.id), c["code"]))
+            others = [t for t in await takers_of(c["code"]) if t != str(user.id)]
+            lines.append(f"✅ {course_label(c)}" + (f"　👥 他 {len(others)} 人" if others else "　👥 最初の一人！"))
+        await db.commit()
+        total = len(await user_course_rows(user.id))
+        await interaction.response.edit_message(content="\n".join(lines) + f"\n\n📚 登録科目 {total} 件。続けて探すならもう一度 🎓 を。", view=None)
+
+class KadaiCourseSelect(discord.ui.Select):
+    def __init__(self, rows):
+        opts = [discord.SelectOption(label=course_label(r)[:100], value=r["code"]) for r in rows[:25]]
+        super().__init__(placeholder="どの科目の課題？", options=opts)
+
+    async def callback(self, interaction):
+        c = await get_course(self.values[0])
+        if not c:
+            await interaction.response.send_message("科目が見つかりませんでした。", ephemeral=True)
+            return
+        await interaction.response.send_modal(KadaiAddModal(c))
+
+class KadaiAddModal(discord.ui.Modal):
+    def __init__(self, course):
+        super().__init__(title=f"📌 {course['name']}"[:45])
+        self.code = course["code"]
+        self.kigen = discord.ui.TextInput(label="期限（例 10/15 ／ 10/15 17:00）", max_length=20)
+        self.naiyou = discord.ui.TextInput(label="内容（例 レポート提出）", max_length=100)
+        self.memo = discord.ui.TextInput(label="補足（任意）", required=False, max_length=300, style=discord.TextStyle.paragraph)
+        for i in (self.kigen, self.naiyou, self.memo):
+            self.add_item(i)
+
+    async def on_submit(self, interaction):
+        await kadai_register(interaction, self.code, self.kigen.value, self.naiyou.value, self.memo.value or None)
+
+class KadaiPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🎓 履修科目を登録", style=discord.ButtonStyle.primary, custom_id="sk_jw_add", row=0)
+    async def jw_add(self, interaction, button):
+        await interaction.response.send_modal(CourseSearchModal())
+
+    @discord.ui.button(label="➕ 課題を登録", style=discord.ButtonStyle.success, custom_id="sk_kd_add", row=0)
+    async def kd_add(self, interaction, button):
+        rows = await user_course_rows(interaction.user.id)
+        if not rows:
+            await interaction.response.send_message("先に「🎓 履修科目を登録」で科目を登録してください。", ephemeral=True)
+            return
+        view = discord.ui.View(timeout=300)
+        view.add_item(KadaiCourseSelect(rows))
+        await interaction.response.send_message("📌 どの科目の課題ですか？", view=view, ephemeral=True)
+
+    @discord.ui.button(label="📖 履修一覧", style=discord.ButtonStyle.secondary, custom_id="sk_jw_list", row=1)
+    async def jw_list(self, interaction, button):
+        rows = await user_course_rows(interaction.user.id)
+        if not rows:
+            await interaction.response.send_message("まだ履修科目がありません。「🎓 履修科目を登録」からどうぞ！", ephemeral=True)
+            return
+        lines = []
+        for r in rows:
+            n = len(await takers_of(r["code"])) - 1
+            lines.append(f"・{course_label(r)}" + (f"　👥{n}" if n > 0 else ""))
+        await interaction.response.send_message(embed=discord.Embed(
+            title=f"📚 {interaction.user.display_name} の履修科目（{len(rows)}）",
+            description="\n".join(lines)[:4000], color=discord.Color.gold()), ephemeral=True)
+
+    @discord.ui.button(label="📚 課題一覧", style=discord.ButtonStyle.secondary, custom_id="sk_kd_list", row=1)
+    async def kd_list(self, interaction, button):
+        emb = await kadai_list_embed(str(interaction.user.id))
+        if not emb:
+            await interaction.response.send_message("いま登録されている課題はありません 🎉", ephemeral=True)
+            return
+        await interaction.response.send_message(embed=emb, ephemeral=True)
+
+VIEW_FACTORY["kadai"] = KadaiPanelView
 
 
 # ============================================================
@@ -2794,17 +2921,15 @@ async def fridge_remind():
     lines = [f"・<@{r['user_id']}> **{r['name']}**（{fridge_label(r['due_day'], today)}）" for r in rows]
     await post_log("meal", "🧊 **冷蔵庫アラート**：期限が近いよ！使い切りレシピは `/tips sagasu` も参考に\n" + "\n".join(lines))
 
-reizouko_grp = app_commands.Group(name="reizouko", description="冷蔵庫の期限リマインド（期限が近い食品だけの使い捨てメモ）")
-
-@reizouko_grp.command(name="add", description="食品を登録。期限の前日と当日の朝にお知らせ（定番食品は kigen 省略OK）")
-@app_commands.describe(namae="食品名 例 牛乳（定番食品は候補に目安日数つきで出ます）", kigen="期限 例 9/7（省略すると定番食品は目安から自動設定）")
-async def reizouko_add(interaction, namae: str, kigen: str = None):
+async def fridge_register(interaction, namae, kigen):
+    """食品を1件登録（パネルのフォームと /reizouko add の共通処理）"""
     await ensure_user(interaction.user)
     now = now_jst()
     nm = unicodedata.normalize("NFKC", namae or "").strip()[:30]
     if not nm:
-        await interaction.response.send_message("⚠️ 食品名を入れてください（例 `namae:牛乳`）", ephemeral=True)
+        await interaction.response.send_message("⚠️ 食品名を入れてください（例 牛乳）", ephemeral=True)
         return
+    kigen = (kigen or "").strip()
     if kigen:
         d = parse_due(kigen)
         if not d:
@@ -2814,7 +2939,7 @@ async def reizouko_add(interaction, namae: str, kigen: str = None):
     else:
         days = fridge_preset_days(nm)
         if days is None:
-            await interaction.response.send_message(f"「{nm}」の目安日数を知らないので、`kigen:9/7` のように期限も指定してください。", ephemeral=True)
+            await interaction.response.send_message(f"「{nm}」の目安日数を知らないので、期限も入れてください（例 `9/7`）。", ephemeral=True)
             return
         due = day_str(now + timedelta(days=days))
     await db.execute("INSERT INTO fridge_items(user_id,name,due_day,created_day) VALUES(?,?,?,?)",
@@ -2822,8 +2947,58 @@ async def reizouko_add(interaction, namae: str, kigen: str = None):
     await db.commit()
     await interaction.response.send_message(
         f"🧊 **{nm}** を登録しました（期限 {fridge_due_fmt(due)}・{fridge_label(due, day_str(now))}）。"
-        f"前日と当日の朝にお知らせします。食べたら `/reizouko tabeta`。期限から3日過ぎると自動で消えます。" + hitokoto_suffix(),
+        f"前日と当日の朝にお知らせします。期限から3日過ぎると自動で消えます。" + hitokoto_suffix(),
         ephemeral=True)
+
+class FridgeAddModal(discord.ui.Modal, title="🧊 冷蔵庫に登録"):
+    nm = discord.ui.TextInput(label="食品名（例 牛乳・もやし・鶏肉）", max_length=30)
+    kg = discord.ui.TextInput(label="期限（例 9/7。定番食品は空欄で目安から自動）", required=False, max_length=20)
+
+    async def on_submit(self, interaction):
+        await fridge_register(interaction, self.nm.value, self.kg.value)
+
+class FridgeEatSelect(discord.ui.Select):
+    def __init__(self, rows, today):
+        opts = [discord.SelectOption(label=f"{r['name']}（期限 {fridge_due_fmt(r['due_day'])}・{fridge_label(r['due_day'], today)}）"[:100],
+                                     value=str(r["id"])) for r in rows[:25]]
+        super().__init__(placeholder="🍽 食べた・使い切ったものを選ぶ（複数OK）", options=opts, min_values=1, max_values=len(opts))
+
+    async def callback(self, interaction):
+        uid = str(interaction.user.id)
+        names = []
+        for v in self.values:
+            async with db.execute("SELECT name FROM fridge_items WHERE id=? AND user_id=?", (int(v), uid)) as c:
+                r = await c.fetchone()
+            if r:
+                names.append(r["name"])
+                await db.execute("DELETE FROM fridge_items WHERE id=?", (int(v),))
+        await db.commit()
+        if not names:
+            await interaction.response.edit_message(content="対象が見つかりませんでした。", view=None)
+            return
+        await interaction.response.edit_message(
+            content="🍽 " + "、".join(f"**{n}**" for n in names) + " を使い切りました。フードロスゼロ、えらい！" + hitokoto_suffix(), view=None)
+
+async def fridge_show(interaction):
+    """一覧＋「食べた」プルダウン（パネルの🧊ボタンと /reizouko list の共通処理）"""
+    today = day_str(now_jst())
+    rows = await fridge_items_of(interaction.user.id)
+    if not rows:
+        await interaction.response.send_message("いま登録されている食品はありません。「🧊 冷蔵庫に登録」ボタンか `/reizouko add` でどうぞ。期限の前日と当日の朝にお知らせします。", ephemeral=True)
+        return
+    lines = [f"・**{r['name']}**　期限 {fridge_due_fmt(r['due_day'])}（{fridge_label(r['due_day'], today)}）" for r in rows]
+    view = discord.ui.View(timeout=300)
+    view.add_item(FridgeEatSelect(rows, today))
+    await interaction.response.send_message("🧊 **冷蔵庫メモ**\n" + "\n".join(lines) +
+                                            "\n\n食べたものは下のプルダウンで消せます（期限3日過ぎは自動で消えます）",
+                                            view=view, ephemeral=True)
+
+reizouko_grp = app_commands.Group(name="reizouko", description="冷蔵庫の期限リマインド（期限が近い食品だけの使い捨てメモ）")
+
+@reizouko_grp.command(name="add", description="食品を登録。期限の前日と当日の朝にお知らせ（定番食品は kigen 省略OK）")
+@app_commands.describe(namae="食品名 例 牛乳（定番食品は候補に目安日数つきで出ます）", kigen="期限 例 9/7（省略すると定番食品は目安から自動設定）")
+async def reizouko_add(interaction, namae: str, kigen: str = None):
+    await fridge_register(interaction, namae, kigen)
 
 @reizouko_add.autocomplete("namae")
 async def reizouko_namae_ac(interaction, current):
@@ -2833,14 +3008,7 @@ async def reizouko_namae_ac(interaction, current):
 
 @reizouko_grp.command(name="list", description="登録中の食品と期限を見る（自分にだけ表示）")
 async def reizouko_list(interaction):
-    today = day_str(now_jst())
-    rows = await fridge_items_of(interaction.user.id)
-    if not rows:
-        await interaction.response.send_message("いま登録されている食品はありません。`/reizouko add namae:牛乳` で登録すると、期限の前日と当日の朝にお知らせします。", ephemeral=True)
-        return
-    lines = [f"・**{r['name']}**　期限 {fridge_due_fmt(r['due_day'])}（{fridge_label(r['due_day'], today)}）" for r in rows]
-    await interaction.response.send_message("🧊 **冷蔵庫メモ**\n" + "\n".join(lines) +
-                                            "\n\n食べたら `/reizouko tabeta`。期限から3日過ぎたものは自動で消えます。", ephemeral=True)
+    await fridge_show(interaction)
 
 @reizouko_grp.command(name="tabeta", description="食べた・使い切った食品をメモから消す")
 @app_commands.describe(namae="消す食品（候補から選ぶのが確実）")
