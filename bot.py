@@ -2029,7 +2029,7 @@ def tutorial_embeds():
     e5 = discord.Embed(title="⌨️ コマンド早見表", color=gold, description=(
         "**きろく**　各チャンネルのボタンが基本（☀️🌙😴／🍚／🧹／🛁🪥）。`/suimin` 寝落ちの後づけ／`/erai` 今日のがんばり\n"
         "**最低限**　`/saitei` 設定はぜんぶここ（起床・睡眠・入浴・歯磨き・食事・家事の種類別・休日ゆるめ。指定した項目だけ更新）\n"
-        "**じぶん**　`/kiroku` 記録と連続日数／`/nakama` 同じ起床時刻の仲間\n"
+        "**じぶん**　`/kiroku` 今日と今週／`/watashi` 推移グラフと気づき（CSVも）／`/nakama` 同じ起床時刻の仲間\n"
         "**お休み**　`/oyasumi riyuu:帰省 hi:10/15-10/17`（判定なし・連続達成も途切れない。`riyuu:なし` で取消）\n"
         "**科目**　`/jikanwari add` 登録／`list` 一覧／`remove` 外す\n"
         "**課題**　`/kadai add` 登録／`list` 一覧／`done` 完了／`delete` 取り下げ\n"
@@ -2672,6 +2672,245 @@ async def ensure_tips_forum(guild, cat):
             return None
     await meta_set("ch_tips", tch.id)
     return tch
+
+
+# ============================================================
+#  /watashi（自分の記録：推移グラフ・前期間との比較・気づき・CSV。本人にだけ表示）
+# ============================================================
+WATASHI_KIKAN = ["今週", "先週", "今月", "先月", "全部"]
+
+def resolve_period(kikan, now):
+    """(d1, d2, prev_d1, prev_d2)。全部のとき prev は None"""
+    today = day_str(now)
+    if kikan == "先週":
+        d1, d2 = week_range(now - timedelta(days=7))
+        p1, p2 = week_range(now - timedelta(days=14))
+    elif kikan == "今月":
+        first = now.replace(day=1)
+        d1, d2 = day_str(first), today
+        pl = first - timedelta(days=1)
+        p1, p2 = day_str(pl.replace(day=1)), day_str(pl)
+    elif kikan == "先月":
+        first = now.replace(day=1)
+        pl = first - timedelta(days=1)
+        d1, d2 = day_str(pl.replace(day=1)), day_str(pl)
+        ppl = pl.replace(day=1) - timedelta(days=1)
+        p1, p2 = day_str(ppl.replace(day=1)), day_str(ppl)
+    elif kikan == "全部":
+        return "2000-01-01", today, None, None
+    else:  # 今週
+        d1, d2 = week_range(now)
+        p1, p2 = week_range(now - timedelta(days=7))
+    return d1, d2, p1, p2
+
+async def personal_stats(uid, d1, d2):
+    """期間内の per_day（day/wake分/sleep時間/ach/nizone）と集計を返す"""
+    uid = str(uid)
+    async with db.execute("SELECT kind, sub, ts, day, note FROM events WHERE user_id=? AND day BETWEEN ? AND ? ORDER BY ts",
+                          (uid, d1, d2)) as c:
+        evs = await c.fetchall()
+    async with db.execute("SELECT day, achieved FROM daily_results WHERE user_id=? AND day BETWEEN ? AND ?", (uid, d1, d2)) as c:
+        ach = {r["day"]: r["achieved"] for r in await c.fetchall()}
+    wake, sleep, nizone = {}, {}, {}
+    counts = {"meals": 0, "baths": set(), "teeth": 0, "radio": 0, "nizone": 0}
+    chores = {}
+    for e in evs:
+        d = e["day"]
+        if e["kind"] == "wake" and d not in wake:
+            t = datetime.fromtimestamp(e["ts"], JST)
+            wake[d] = t.hour * 60 + t.minute
+        elif e["kind"] == "sleep" and e["note"]:
+            sleep[d] = sleep.get(d, 0.0) + float(e["note"])
+        elif e["kind"] == "nizone":
+            nizone[d] = nizone.get(d, 0) + 1
+            counts["nizone"] += 1
+        elif e["kind"] == "meal":
+            counts["meals"] += 1
+        elif e["kind"] == "bath":
+            counts["baths"].add(d)
+        elif e["kind"] == "teeth":
+            counts["teeth"] += 1
+        elif e["kind"] == "radio":
+            counts["radio"] += 1
+        elif e["kind"] == "chore":
+            chores[e["sub"]] = chores.get(e["sub"], 0) + 1
+    days_all = sorted(set(wake) | set(sleep) | set(ach) | set(nizone))
+    per_day = [{"day": d, "wake": wake.get(d), "sleep": sleep.get(d), "ach": ach.get(d), "nizone": nizone.get(d, 0)} for d in days_all]
+    wakes = [v for v in wake.values()]
+    sleeps = [v for v in sleep.values()]
+    judged = len(ach)
+    achieved = sum(1 for v in ach.values() if v)
+    async with db.execute("SELECT COUNT(*) AS n FROM efforts WHERE user_id=? AND day BETWEEN ? AND ?", (uid, d1, d2)) as c:
+        n_efforts = (await c.fetchone())["n"]
+    return {
+        "per_day": per_day,
+        "wake_avg": (sum(wakes) / len(wakes)) if wakes else None,
+        "sleep_avg": (sum(sleeps) / len(sleeps)) if sleeps else None,
+        "judged": judged, "achieved": achieved,
+        "rate": (achieved * 100 / judged) if judged else None,
+        "chores": chores, "meals": counts["meals"], "baths": len(counts["baths"]),
+        "teeth": counts["teeth"], "radio": counts["radio"], "nizone": counts["nizone"],
+        "efforts": n_efforts,
+    }
+
+def fmt_min(m):
+    return f"{int(m) // 60}:{int(m) % 60:02d}"
+
+def personal_insights(cur, prev):
+    """ルールベースの気づき（最大3つ）。AI不使用"""
+    import statistics
+    tips = []
+    per_day = cur["per_day"]
+    judged_days = [d for d in per_day if d["ach"] is not None]
+    # 弱点の曜日
+    if len(judged_days) >= 7 and cur["rate"] is not None:
+        by_wd = {}
+        for d in judged_days:
+            by_wd.setdefault(date.fromisoformat(d["day"]).weekday(), []).append(d["ach"])
+        worst = None
+        for wd, xs in by_wd.items():
+            if len(xs) >= 2:
+                r = sum(xs) / len(xs) * 100
+                if worst is None or r < worst[1]:
+                    worst = (wd, r)
+        if worst and cur["rate"] - worst[1] >= 25:
+            tips.append(f"{DAY_CHARS[worst[0]]}曜日に崩れがち（達成率 {round(worst[1])}%）。{DAY_CHARS[worst[0]]}曜の予定を見直すと伸びそう")
+    # 起床のブレ
+    wakes = [d["wake"] for d in per_day if d["wake"] is not None]
+    if len(wakes) >= 5:
+        sd = statistics.pstdev(wakes)
+        if sd >= 90:
+            tips.append(f"起床時刻のブレが大きめ（±{int(sd)}分）。毎日だいたい同じ時刻に起きると体が楽になります")
+    # 短い睡眠の翌日は二度寝
+    short_next, ok_next = [], []
+    for a, b in zip(per_day, per_day[1:]):
+        if a["sleep"] is not None and (date.fromisoformat(b["day"]) - date.fromisoformat(a["day"])).days == 1:
+            (short_next if a["sleep"] < 6 else ok_next).append(1 if b["nizone"] else 0)
+    if len(short_next) >= 3 and len(ok_next) >= 3:
+        if sum(short_next) / len(short_next) >= sum(ok_next) / len(ok_next) + 0.3:
+            tips.append("睡眠が6時間を切った翌日は二度寝しがちです。早く寝るのが一番の二度寝対策かも")
+    # 前期間からの改善（ポジティブ）
+    if prev:
+        if prev.get("wake_avg") and cur.get("wake_avg") and prev["wake_avg"] - cur["wake_avg"] >= 15:
+            tips.append(f"前の期間より平均 {int(prev['wake_avg'] - cur['wake_avg'])} 分の早起きに。えらい！")
+        if prev.get("rate") is not None and cur.get("rate") is not None and cur["rate"] - prev["rate"] >= 10:
+            tips.append(f"達成率が {round(cur['rate'] - prev['rate'])}pt 改善しています。えらい！")
+    return tips[:3]
+
+def render_personal_chart(per_day, title):
+    """起床・睡眠・達成の推移（PNG bytes）。matplotlib が無ければ None"""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib import font_manager
+    except Exception:
+        return None
+    if not per_day:
+        return None
+    fp = None
+    f = _find_cjk_font()
+    if f:
+        fp = font_manager.FontProperties(fname=f)
+    days = [d["day"] for d in per_day]
+    x = list(range(len(days)))
+    step = max(1, len(days) // 8)
+    ticks = x[::step]
+    labels = [f"{int(days[i][5:7])}/{int(days[i][8:10])}" for i in ticks]
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(8, 7.4), dpi=120, height_ratios=[3, 3, 1])
+    ax1.plot(x, [d["wake"] / 60 if d["wake"] is not None else float("nan") for d in per_day], marker="o", color="#d9701a")
+    ax1.set_title(f"起床時刻（{title}）", fontproperties=fp); ax1.set_ylabel("時", fontproperties=fp)
+    ax2.plot(x, [d["sleep"] if d["sleep"] is not None else float("nan") for d in per_day], marker="s", color="#2f6f73")
+    ax2.set_title("睡眠時間", fontproperties=fp); ax2.set_ylabel("時間", fontproperties=fp)
+    for d, xi in zip(per_day, x):
+        if d["ach"] is not None:
+            ax3.bar(xi, 1, color=("#4caf50" if d["ach"] else "#e53935"), width=0.8)
+    ax3.set_title("判定（緑=達成／赤=未達）", fontproperties=fp)
+    ax3.set_yticks([])
+    for ax in (ax1, ax2, ax3):
+        ax.set_xticks(ticks)
+        ax.set_xticklabels(labels, fontproperties=fp)
+        ax.grid(alpha=0.3)
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+def build_personal_csv(evs, results):
+    import csv
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["day", "kind", "sub", "time", "note"])
+    for e in evs:
+        w.writerow([e["day"], e["kind"], e["sub"] or "", datetime.fromtimestamp(e["ts"], JST).strftime("%H:%M"), e["note"] or ""])
+    w.writerow([])
+    w.writerow(["day", "achieved", "misses"])
+    for r in results:
+        w.writerow([r["day"], r["achieved"], (r["misses"] or "").replace("\n", " / ")])
+    return buf.getvalue().encode("utf-8-sig")
+
+@bot.tree.command(name="watashi", description="自分の記録をくわしく（推移グラフ・前の期間との比較・気づき。自分にだけ表示）")
+@app_commands.describe(kikan="期間（既定=今週）", csv="True にすると全記録をCSVでもらえる")
+@app_commands.choices(kikan=[app_commands.Choice(name=k, value=k) for k in WATASHI_KIKAN])
+async def watashi_command(interaction, kikan: str = "今週", csv: bool = False):
+    await interaction.response.defer(ephemeral=True)
+    user = interaction.user
+    await ensure_user(user)
+    now = now_jst()
+    d1, d2, p1, p2 = resolve_period(kikan, now)
+    cur = await personal_stats(user.id, d1, d2)
+    prev = await personal_stats(user.id, p1, p2) if p1 else None
+    u = await get_user(user.id)
+    if not cur["per_day"]:
+        await interaction.followup.send(f"{kikan}の記録はまだありません。", ephemeral=True)
+        return
+    def delta(a, b, unit, invert=False):
+        if a is None or b is None:
+            return ""
+        d = a - b
+        if abs(d) < 1:
+            return "（変わらず）"
+        arrow = "▼" if (d < 0) != invert else "▲"
+        return f"（前の期間 {arrow}{abs(round(d))}{unit}）"
+    st_now = await streak_of(user.id, day_str(now))
+    emb = discord.Embed(title=f"📈 {user.display_name} の記録（{kikan}：{d1[5:].replace('-', '/')}〜{d2[5:].replace('-', '/')}）",
+                        color=discord.Color.gold())
+    matome = [
+        "☀️ 平均起床：" + (fmt_min(cur["wake_avg"]) + delta(cur["wake_avg"], prev and prev["wake_avg"], "分", invert=True) if cur["wake_avg"] is not None else "—"),
+        "🌙 平均睡眠：" + (fmt_hours(cur["sleep_avg"]) + delta(cur["sleep_avg"] and cur["sleep_avg"] * 60, prev and prev["sleep_avg"] and prev["sleep_avg"] * 60, "分") if cur["sleep_avg"] is not None else "—"),
+        "🎯 達成率：" + (f"{round(cur['rate'])}%（{cur['achieved']}/{cur['judged']}日）" + delta(cur["rate"], prev and prev["rate"], "pt") if cur["rate"] is not None else "—（判定なし）"),
+        f"🔥 連続達成：{st_now} 日（自己ベスト {max(st_now, (u['best_streak'] or 0))} 日）",
+    ]
+    emb.add_field(name="📊 まとめ", value="\n".join(matome), inline=False)
+    ch_txt = "／".join(f"{CHORE_LABEL.get(k, k)}×{n}" for k, n in sorted(cur["chores"].items(), key=lambda x: -x[1])) or "なし"
+    naiyaku = [
+        f"🧹 家事：{sum(cur['chores'].values())} 回（{ch_txt}）",
+        f"🍚 食事報告：{cur['meals']} 回　🛁 入浴：{cur['baths']} 日　🪥 歯磨き：{cur['teeth']} 回",
+        f"🏃 ラジオ体操：{cur['radio']} 回　😴 二度寝：{cur['nizone']} 回　🌟 えらい報告：{cur['efforts']} 件",
+    ]
+    emb.add_field(name="🧾 内訳", value="\n".join(naiyaku), inline=False)
+    ins = personal_insights(cur, prev)
+    if ins:
+        emb.add_field(name="💡 気づき", value="\n".join("・" + t for t in ins), inline=False)
+    emb.set_footer(text="この表示はあなたにしか見えません。比べる相手は、過去の自分だけ。")
+    files = []
+    try:
+        buf = await asyncio.to_thread(render_personal_chart, cur["per_day"], kikan)
+        if buf:
+            files.append(discord.File(buf, filename="watashi.png"))
+            emb.set_image(url="attachment://watashi.png")
+    except Exception as e:
+        print(f"個人グラフ生成エラー: {e!r}", flush=True)
+    if csv:
+        async with db.execute("SELECT kind, sub, ts, day, note FROM events WHERE user_id=? ORDER BY ts", (str(user.id),)) as c:
+            all_evs = await c.fetchall()
+        async with db.execute("SELECT day, achieved, misses FROM daily_results WHERE user_id=? ORDER BY day", (str(user.id),)) as c:
+            all_res = await c.fetchall()
+        data = build_personal_csv(all_evs, all_res)
+        files.append(discord.File(io.BytesIO(data), filename=f"seikatsu-{day_str(now)}.csv"))
+    await interaction.followup.send(embed=emb, files=files, ephemeral=True)
 
 # ============================================================
 #  スラッシュコマンド

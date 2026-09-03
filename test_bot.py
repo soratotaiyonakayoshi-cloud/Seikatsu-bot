@@ -32,7 +32,7 @@ check("食事推定 19:00", B.infer_meal_sub(datetime(2026,8,5,19,0,tzinfo=JST))
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー4種 登録OK", True, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "suimin", "tips", "tsushinbo"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "suimin", "tips", "tsushinbo", "watashi"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n
@@ -442,6 +442,23 @@ async def main():
     tp = await B.tip_of_day("2026-09-03")
     check("今日のTIPSが選ばれる", tp["title"], "5分チャーハン")
     check("tip_line 表示", "🔖1" in B.tip_line(rows[0]) and "<#901>" in B.tip_line(rows[0]), True)
+
+    # /watashi（期間・集計・気づき・CSV・グラフ）
+    nw2 = datetime(2026, 9, 3, 12, 0, tzinfo=JST)  # 木曜
+    check("期間: 今週", B.resolve_period("今週", nw2)[:2], ("2026-08-31", "2026-09-06"))
+    check("期間: 先月", B.resolve_period("先月", nw2)[:2], ("2026-08-01", "2026-08-31"))
+    check("期間: 全部はprevなし", B.resolve_period("全部", nw2)[2], None)
+    ps = await B.personal_stats(11, "2026-08-03", "2026-08-09")
+    check("personal_stats 平均起床", B.fmt_min(ps["wake_avg"]), "6:30")
+    check("personal_stats 睡眠平均", round(ps["sleep_avg"], 1), 7.5)
+    check("personal_stats 達成率100", ps["rate"], 100.0)
+    ins = B.personal_insights({"per_day": [], "rate": 50.0, "wake_avg": 480.0}, {"rate": 30.0, "wake_avg": 500.0})
+    check("気づき: 改善が出る", any("改善" in x for x in ins) and any("早起き" in x for x in ins), True)
+    csvb = B.build_personal_csv([], [])
+    check("CSVヘッダ", csvb.decode("utf-8-sig").startswith("day,kind,sub,time,note"), True)
+    chart = B.render_personal_chart([{"day": "2026-09-01", "wake": 400, "sleep": 6.5, "ach": 1, "nizone": 0},
+                                     {"day": "2026-09-02", "wake": 460, "sleep": 5.0, "ach": 0, "nizone": 1}], "テスト")
+    check("個人グラフ生成", chart is not None and len(chart.getvalue()) > 10000, True)
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")

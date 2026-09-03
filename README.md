@@ -32,6 +32,7 @@
 - `/nakama` 起床時刻ごとの仲間一覧
 - `/tips sagasu kensaku:チャーハン`／`mine`（🔖保存したTIPS帳）／`omakase`（ランダム1件） 暮らしのTIPS検索
 - `/kiroku` 自分の今日・今週の記録
+- `/watashi kikan:今月`（今週/先週/今月/先月/全部） 推移グラフ・前の期間との比較・ルールベースの気づき。`csv:True` で全記録をCSVで（本人にだけ表示）
 - `/hantei` 【管理者】今すぐ判定（テスト用）
 - `/tsushinbo` 【管理者】今週の通信簿を今すぐ投稿（`tsuki:True` で月間表彰）
 - `/oyasumi riyuu:帰省 hi:10/15-10/17` お休み申告（その日は判定されず連続達成も途切れない。`riyuu:なし` で取り消し）
