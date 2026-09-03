@@ -2583,7 +2583,7 @@ async def nakama_of(uid, wake_deadline):
 
 @bot.tree.command(name="saitei", description="自分の「最低限」を設定する（指定した項目だけ更新）")
 @app_commands.describe(kishou="起床の締切 例 7:00（「なし」で解除）", suimin="最低睡眠時間(h) 例 6（0で解除）",
-                       nyuyoku="毎日入浴する", shokuji="1日の最低食事回数 1〜3（0で解除）", kaji="週の最低家事回数（0で解除）",
+                       nyuyoku="毎日入浴する", shokuji="1日の最低食事回数 1〜3（0で解除）",
                        rajio="毎朝のラジオ体操に参加する", kyujitsu="土日は起床締切を何時間遅らせるか 例 2（0で解除）",
                        hamigaki="1日の最低歯磨き回数 例 2（0で解除）",
                        ryouri="料理：何日に1回 例 1=毎日（0で解除）", souji="掃除：何日に1回 例 7", sara="皿洗い：何日に1回 例 1",
