@@ -2,6 +2,8 @@
 import os, sys, asyncio
 from datetime import datetime
 os.environ["DB_PATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_seikatsu.db")
+if os.path.exists(os.environ["DB_PATH"]):
+    os.remove(os.environ["DB_PATH"])   # 前回中断の残骸があると集計テストが狂う
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bot as B
 
@@ -460,6 +462,18 @@ async def main():
                                      {"day": "2026-09-02", "wake": 460, "sleep": 5.0, "ach": 0, "nizone": 1}], "テスト")
     check("個人グラフ生成", chart is not None and len(chart.getvalue()) > 10000, True)
 
+    # 叱責に処方TIPS💊（テストDBのTIPS: 5分チャーハン=レシピタグ、限定プリン=期限切れ）
+    rx = await B.prescribe_tip("42", "2026-09-03", ["🍚 食事 1/2 回"])
+    check("処方: 食事未達→レシピTIPS", rx.startswith("💊") and "5分チャーハン" in rx and "<#901>" in rx, True)
+    rx = await B.prescribe_tip("42", "2026-09-03", ["🍳 料理 今日やってない（毎日）"])
+    check("処方: 料理未達→レシピTIPS", "5分チャーハン" in rx, True)
+    rx = await B.prescribe_tip("42", "2026-09-03", ["☀️ 寝坊 07:00 まで → 09:42", "🍚 食事 0/2 回"])
+    check("処方: ねむりが無ければ次の候補へ", "5分チャーハン" in rx, True)
+    check("処方: 該当キーワード無し→空", await B.prescribe_tip("42", "2026-09-03", ["🏃 ラジオ体操 未参加"]), "")
+    check("処方: 洗濯は家事ハック無しなら空", await B.prescribe_tip("42", "2026-09-03", ["🧺 洗濯 3日やってない（3日に1回）"]), "")
+    check("処方: 同じ日・同じ人なら同じ処方", await B.prescribe_tip("42", "2026-09-03", ["🍚 食事 1/2 回"]),
+          await B.prescribe_tip("42", "2026-09-03", ["🍚 食事 1/2 回"]))
+
     # ローディング画面のひとこと💡
     check("ひとこと: 50件以上読み込めた", len(B.HITOKOTO) >= 50, True)
     check("ひとこと: 全部が妥当な長さの文字列", all(isinstance(s, str) and 8 <= len(s) <= 140 for s in B.HITOKOTO), True)
@@ -473,6 +487,12 @@ async def main():
     check("meta 上書き", await B.meta_get("last_judge_day"), "2026-08-06")
     await B.db.close()
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+except BaseException:
+    import traceback
+    traceback.print_exc()
+    print("\n=== FAILED (exception) ===")
+    os._exit(1)   # db未closeでもaiosqliteのスレッドを残さず即終了
 print("\n=== " + ("ALL PASS" if ok else "FAILED") + " ===")
 sys.exit(0 if ok else 1)

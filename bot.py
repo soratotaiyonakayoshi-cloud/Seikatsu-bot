@@ -857,7 +857,15 @@ async def judge(guild, manual=False):
     else:
         await kora_ch.send(f"📋 {day} の判定{tag}：{len(results)}/{len(users) - len(first_day)} 人に叱責の儀を行います👹")
         for u, misses in results:
-            await kora_ch.send(f"{emoji} <@{u['id']}> **こら！**\n" + "\n".join("・" + m for m in misses))
+            line = f"{emoji} <@{u['id']}> **こら！**\n" + "\n".join("・" + m for m in misses)
+            try:
+                rx = await prescribe_tip(u["id"], day, misses)
+            except Exception as e:
+                print(f"処方TIPSエラー: {e!r}", flush=True)
+                rx = ""
+            if rx:
+                line += "\n" + rx
+            await kora_ch.send(line)
     if achievers:
         achievers.sort(key=lambda x: -x[1])
         await kora_ch.send(f"{erai_emoji(guild)} 達成：" + "、".join(f"**{u['name']}**" + (f" 🔥{st}日" if st >= 2 else "") for u, st in achievers))
@@ -2648,6 +2656,31 @@ async def tip_of_day(day):
     if not rows:
         return None
     return rows[zlib.crc32(day.encode()) % len(rows)]
+
+# 未達項目の絵文字 → 処方TIPSの検索キーワード（順に試す）。家事系は「ラベル→家事ハック」の順
+PRESCRIBE_MAP = {"☀️": ["ねむり"], "🌙": ["ねむり"], "🍚": ["レシピ"], "🍳": ["レシピ"],
+                 "🛁": ["風呂", "家事ハック"], "🪥": ["歯磨き", "家事ハック"]}
+KAJI_EMOJIS = {e for _col, _label, e, _subs in KAJI_CATS}
+
+async def prescribe_tip(uid, day, misses):
+    """未達項目に効きそうなTIPSを1件選んで「💊 処方TIPS」行を返す。見つからなければ空文字。
+    選出は 日付＋ユーザー のハッシュで安定（同じ日に同じ人へは同じ処方、人と日で変わる）"""
+    kws = []
+    for m in misses:
+        parts = m.split()
+        if len(parts) < 2:
+            continue
+        em, label = parts[0], parts[1]
+        cands = PRESCRIBE_MAP.get(em) or ([label, "家事ハック"] if em in KAJI_EMOJIS else [])
+        for k in cands:
+            if k not in kws:
+                kws.append(k)
+    for kw in kws:
+        rows = await search_tips(keyword=kw, today=day)
+        if rows:
+            r = rows[zlib.crc32(f"{day}:{uid}".encode()) % len(rows)]
+            return f"💊 処方TIPS：**{r['title']}** → <#{r['thread_id']}>"
+    return ""
 
 tips_grp = app_commands.Group(name="tips", description="暮らしのTIPSを探す・見返す")
 
