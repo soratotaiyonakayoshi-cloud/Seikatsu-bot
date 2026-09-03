@@ -460,6 +460,14 @@ async def main():
                                      {"day": "2026-09-02", "wake": 460, "sleep": 5.0, "ach": 0, "nizone": 1}], "テスト")
     check("個人グラフ生成", chart is not None and len(chart.getvalue()) > 10000, True)
 
+    # ローディング画面のひとこと💡
+    check("ひとこと: 50件以上読み込めた", len(B.HITOKOTO) >= 50, True)
+    check("ひとこと: 全部が妥当な長さの文字列", all(isinstance(s, str) and 8 <= len(s) <= 140 for s in B.HITOKOTO), True)
+    check("ひとこと: 重複なし", len(set(B.HITOKOTO)), len(B.HITOKOTO))
+    draws = [B.hitokoto_suffix() for _ in range(40)]
+    check("ひとこと: サブテキスト形式", all(d.startswith("\n-# 💡 ") for d in draws), True)
+    check("ひとこと: 直近の繰り返しを避ける", len(set(draws)) >= min(30, len(B.HITOKOTO) // 2), True)
+
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
     check("meta 上書き", await B.meta_get("last_judge_day"), "2026-08-06")

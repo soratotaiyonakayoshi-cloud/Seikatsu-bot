@@ -12,6 +12,7 @@ import asyncio
 import io
 import json
 import os
+import random
 import re
 import unicodedata
 import zlib
@@ -47,6 +48,7 @@ WEATHER_LAT = float(os.getenv("WEATHER_LAT", "35.68"))   # 朝の天気（Open-M
 WEATHER_LON = float(os.getenv("WEATHER_LON", "139.48"))
 MEMBERS_INTENT = os.getenv("MEMBERS_INTENT", "0") == "1"   # 1にすると新規参加者を #はじめに📖 で歓迎（Developer PortalでSERVER MEMBERS INTENTをONにすること）
 COURSES_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "courses_2026_kouki.json")
+HITOKOTO_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "hitokoto.json")
 JST = timezone(timedelta(hours=9))
 
 CATEGORY_NAME = "最低限生活リズム"
@@ -407,6 +409,31 @@ def erai_emoji(guild):
     e = discord.utils.get(guild.emojis, name=ERAI_EMOJI_NAME) if guild else None
     return str(e) if e else "✨"
 
+# ------------------------------------------------------------
+#  ローディング画面のひとこと 💡
+#  ゲームのロード画面のTIPSよろしく、記録の返事や判定・ラジオ体操予告の
+#  末尾に豆知識を小さい字で1行添える。ネタは data/hitokoto.json（1要素=1行）。
+# ------------------------------------------------------------
+try:
+    with open(HITOKOTO_JSON, encoding="utf-8") as _f:
+        HITOKOTO = [s.strip() for s in json.load(_f) if isinstance(s, str) and s.strip()]
+except Exception as _e:
+    print(f"hitokoto.json 読み込み失敗: {_e!r}", flush=True)
+    HITOKOTO = []
+_hitokoto_recent = []   # 直近に出したネタ（しばらく同じものを出さないため）
+
+def hitokoto_suffix():
+    """メッセージ末尾に添えるひとこと（サブテキスト1行）。ネタが無ければ空文字"""
+    if not HITOKOTO:
+        return ""
+    pool = [s for s in HITOKOTO if s not in _hitokoto_recent] or HITOKOTO
+    s = random.choice(pool)
+    _hitokoto_recent.append(s)
+    keep = min(30, len(HITOKOTO) // 2)
+    while len(_hitokoto_recent) > keep:
+        _hitokoto_recent.pop(0)
+    return f"\n-# 💡 {s}"
+
 async def get_ch(key):
     cid = await meta_get("ch_" + key)
     return bot.get_channel(int(cid)) if cid else None
@@ -458,6 +485,7 @@ async def record_wake(interaction, wake_dt, bed_dt, already_responded=False):
     digest = await today_digest(user.id, wake_dt)
     if digest:
         msg += "\n" + digest
+    msg += hitokoto_suffix()
     if already_responded:
         await interaction.followup.send(msg, ephemeral=True)
     else:
@@ -508,7 +536,7 @@ class WakeView(discord.ui.View):
         now = now_jst()
         await ensure_user(user)
         await add_event(user.id, "bed", ts_dt=now)
-        await interaction.response.send_message(f"🌙 {hhmm(now)} おやすみ。起きたら ☀️ を押してね。", ephemeral=True)
+        await interaction.response.send_message(f"🌙 {hhmm(now)} おやすみ。起きたら ☀️ を押してね。" + hitokoto_suffix(), ephemeral=True)
         await post_log("wake", f"🌙 **{user.display_name}** {hhmm(now)} おやすみ")
 
     @discord.ui.button(label="😴 二度寝した", style=discord.ButtonStyle.secondary, custom_id="sk_nizone")
@@ -518,7 +546,7 @@ class WakeView(discord.ui.View):
         await ensure_user(user)
         await add_event(user.id, "nizone")
         deg = len(await events_on(user.id, day_str(now), "nizone")) + 1  # 1回押したら「二度寝」
-        await interaction.response.send_message(f"😴 {hhmm(now)}　本日 {deg} 度寝を記録しました。おかえりなさい。", ephemeral=True)
+        await interaction.response.send_message(f"😴 {hhmm(now)}　本日 {deg} 度寝を記録しました。おかえりなさい。" + hitokoto_suffix(), ephemeral=True)
         await post_log("wake", f"😴 **{user.display_name}** {hhmm(now)} 二度寝から生還（本日 {deg} 度寝）")
 
     @discord.ui.button(label="🏃 ラジオ体操の呼び出し ON/OFF", style=discord.ButtonStyle.secondary, custom_id="sk_radio_toggle", row=1)
@@ -548,7 +576,7 @@ class MealModal(discord.ui.Modal):
         note = self.what.value.strip() or None
         await ensure_user(user)
         await add_event(user.id, "meal", self.sub, note=note)
-        await interaction.response.send_message(f"✅ {self.sub}ごはんを記録しました。📸 写真も残したいときは、このチャンネルに写真を投稿すると自動で記録されます。", ephemeral=True)
+        await interaction.response.send_message(f"✅ {self.sub}ごはんを記録しました。📸 写真も残したいときは、このチャンネルに写真を投稿すると自動で記録されます。" + hitokoto_suffix(), ephemeral=True)
         await post_log("meal", f"{MEAL_EMOJI[self.sub]} **{user.display_name}** {self.sub}ごはん" + (f"：{note}" if note else ""))
 
 class MealButton(discord.ui.Button):
@@ -580,7 +608,7 @@ class ChoreButton(discord.ui.Button):
         await add_event(user.id, "chore", self.key)
         d1, d2 = week_range(now)
         n = await count_events_between(user.id, "chore", d1, d2)
-        await interaction.response.send_message(f"✅ {CHORE_LABEL[self.key]} を記録（今週 {n} 回目）", ephemeral=True)
+        await interaction.response.send_message(f"✅ {CHORE_LABEL[self.key]} を記録（今週 {n} 回目）" + hitokoto_suffix(), ephemeral=True)
         await post_log("chore", f"{CHORE_LABEL[self.key]} **{user.display_name}**（今週 {n} 回目）")
 
 class ChoreView(discord.ui.View):
@@ -605,7 +633,7 @@ class BathView(discord.ui.View):
         n = len(await events_on(user.id, day_str(now), "bath"))
         extra = f"（今日 {n} 回目）" if n >= 2 else ""
         praise = " きれい好き！" if n >= 2 else ""
-        await interaction.response.send_message(f"✅ {hhmm(now)} 入浴を記録しました{extra}。{praise}", ephemeral=True)
+        await interaction.response.send_message(f"✅ {hhmm(now)} 入浴を記録しました{extra}。{praise}" + hitokoto_suffix(), ephemeral=True)
         await post_log("bath", f"🛁 **{user.display_name}** {hhmm(now)} 入浴{extra}")
 
     @discord.ui.button(label="🪥 歯磨きした", style=discord.ButtonStyle.secondary, custom_id="sk_teeth")
@@ -617,7 +645,7 @@ class BathView(discord.ui.View):
         n = len(await events_on(user.id, day_str(now), "teeth"))
         u = await get_user(user.id)
         goal = f"／目標 {u['teeth_min']} 回" if u and u["teeth_min"] else ""
-        await interaction.response.send_message(f"✅ {hhmm(now)} 歯磨き（今日 {n} 回目{goal}）", ephemeral=True)
+        await interaction.response.send_message(f"✅ {hhmm(now)} 歯磨き（今日 {n} 回目{goal}）" + hitokoto_suffix(), ephemeral=True)
         await post_log("bath", f"🪥 **{user.display_name}** {hhmm(now)} 歯磨き（今日 {n} 回目）")
 
 VIEW_FACTORY.update({"wake": WakeView, "meal": MealView, "chore": ChoreView, "bath": BathView})
@@ -839,6 +867,9 @@ async def judge(guild, manual=False):
         await kora_ch.send("🛌 お休み：" + "、".join(f"**{u['name']}**" + (f"（{off[u['id']]}）" if off[u["id"]] else "") for u in resting))
     if first_day:
         await kora_ch.send("🍀 設定初日（判定は明日から）：" + "、".join(f"**{u['name']}**" for u in first_day))
+    h = hitokoto_suffix()
+    if h:
+        await kora_ch.send(h.lstrip("\n"))
     return f"判定完了：{len(results)}/{len(users)} 人が未達"
 
 # ------------------------------------------------------------
@@ -1233,7 +1264,8 @@ async def play_radio(guild, manual=False):
         lead = "" if manual else "（1分後にスタート）"
         weather = await fetch_weather()
         await wake_ch.send(f"🏃 **{RADIO_TIME} ラジオ体操はじまるよ！**{lead} {vc_ch.mention} に集合〜"
-                           + (f"\n🌤 今日の天気：{weather}" if weather else "") + (f"\n{mention}" if mention else ""))
+                           + (f"\n🌤 今日の天気：{weather}" if weather else "") + (f"\n{mention}" if mention else "")
+                           + hitokoto_suffix())
     if not manual:
         await asyncio.sleep(60)
     try:
