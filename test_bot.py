@@ -32,7 +32,7 @@ check("食事推定 19:00", B.infer_meal_sub(datetime(2026,8,5,19,0,tzinfo=JST))
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー4種 登録OK", True, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "suimin", "tsushinbo"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "suimin", "tips", "tsushinbo"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n
@@ -422,6 +422,26 @@ async def main():
     _os.rmdir(bdir)
     # 週合計が設定されていても判定されない（廃止）
     check("chores_weekは対象外", B.has_any_setting({**dict(ub), "wake_deadline": None, "sleep_min": None, "bath_daily": 0, "meals_min": None, "radio_daily": 0, "teeth_min": 0, "kaji_cook": 0, "kaji_clean": 0, "kaji_dish": 0, "kaji_wash": 0, "kaji_trash": 0, "chores_week": 3}), False)
+
+    # 暮らしのTIPS
+    check("期限パース: 期限: 10/15", B.parse_tip_expiry("激うま。期限: 10/15 まで", datetime(2026, 9, 3, tzinfo=JST)), "2026-10-15")
+    check("期限パース: なし", B.parse_tip_expiry("ただのレシピ", None), None)
+    now_i = int(datetime(2026, 9, 1, tzinfo=JST).timestamp())
+    await B.db.execute("INSERT INTO tips(thread_id,author_id,title,tags,day,ts,expires) VALUES('901','11','5分チャーハン','レシピ','2026-09-01',?,NULL)", (now_i,))
+    await B.db.execute("INSERT INTO tips(thread_id,author_id,title,tags,day,ts,expires) VALUES('902','12','限定プリン','お得・期間限定','2026-09-01',?, '2026-09-02')", (now_i,))
+    await B.db.execute("INSERT INTO tip_saves(tip_id,user_id,day) VALUES(1,'7','2026-09-01')")
+    await B.db.commit()
+    rows = await B.search_tips(today="2026-09-03")
+    check("期限切れは検索から消える", [r["title"] for r in rows], ["5分チャーハン"])
+    rows2 = await B.search_tips(today="2026-09-02")
+    check("期限内なら出る", sorted(r["title"] for r in rows2), ["5分チャーハン", "限定プリン"])
+    rows3 = await B.search_tips(keyword="チャーハン", today="2026-09-03")
+    check("キーワード検索", len(rows3), 1)
+    rows4 = await B.search_tips(saved_by="7", today="2026-09-03")
+    check("TIPS帳（保存済みのみ）", [r["title"] for r in rows4], ["5分チャーハン"])
+    tp = await B.tip_of_day("2026-09-03")
+    check("今日のTIPSが選ばれる", tp["title"], "5分チャーハン")
+    check("tip_line 表示", "🔖1" in B.tip_line(rows[0]) and "<#901>" in B.tip_line(rows[0]), True)
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")

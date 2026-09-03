@@ -155,6 +155,8 @@ CREATE TABLE IF NOT EXISTS assignment_done(assignment_id INTEGER NOT NULL, user_
 CREATE TABLE IF NOT EXISTS assignment_reminded(assignment_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(assignment_id, stage));
 CREATE TABLE IF NOT EXISTS daily_results(day TEXT NOT NULL, user_id TEXT NOT NULL, achieved INTEGER NOT NULL, misses TEXT, PRIMARY KEY(day, user_id));
 CREATE TABLE IF NOT EXISTS efforts(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, text TEXT NOT NULL, day TEXT NOT NULL, ts INTEGER, msg_id TEXT);
+CREATE TABLE IF NOT EXISTS tips(id INTEGER PRIMARY KEY AUTOINCREMENT, thread_id TEXT UNIQUE, author_id TEXT, title TEXT, tags TEXT, day TEXT, ts INTEGER, expires TEXT);
+CREATE TABLE IF NOT EXISTS tip_saves(tip_id INTEGER NOT NULL, user_id TEXT NOT NULL, day TEXT, PRIMARY KEY(tip_id, user_id));
 CREATE TABLE IF NOT EXISTS goal_reviews(month TEXT NOT NULL, user_id TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(month, user_id));
 CREATE TABLE IF NOT EXISTS meal_praise(event_id INTEGER NOT NULL, user_id TEXT NOT NULL, day TEXT, PRIMARY KEY(event_id, user_id));
 CREATE TABLE IF NOT EXISTS effort_praise(effort_id INTEGER NOT NULL, user_id TEXT NOT NULL, day TEXT, PRIMARY KEY(effort_id, user_id));
@@ -391,7 +393,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(BathView())
         self.add_view(SetteiView())
         self.add_view(IntroView())
-        self.add_dynamic_items(DoneButton, MealFixButton, PraiseButton, MealPraiseButton, GoalReviewButton)
+        self.add_dynamic_items(DoneButton, MealFixButton, PraiseButton, MealPraiseButton, GoalReviewButton, TipSaveButton)
         self.add_view(EraiView())
         # コマンドの同期はグローバルではなくサーバー単位で行う（即時反映）。on_ready 参照。
 
@@ -989,6 +991,15 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
     emb.add_field(name="🏆 最低限 達成率ランキング", value="\n".join(lines)[:1024] if lines else "判定対象の人がいませんでした（/saitei で設定）", inline=False)
     if awards:
         emb.add_field(name=("🎖 今週の各賞" if kind == "week" else "🎖 月間各賞"), value="\n".join(awards)[:1024], inline=False)
+    if kind == "week":
+        try:
+            async with db.execute("SELECT t.*, (SELECT COUNT(*) FROM tip_saves s WHERE s.tip_id=t.id) AS saves FROM tips t "
+                                  "WHERE t.day BETWEEN ? AND ? ORDER BY saves DESC, t.ts DESC LIMIT 3", (d1, d2)) as c:
+                trows = await c.fetchall()
+            if trows:
+                emb.add_field(name="📚 今週のTIPS", value="\n".join(tip_line(r) for r in trows)[:1024], inline=False)
+        except Exception as e:
+            print(f"今週のTIPS集計エラー: {e!r}", flush=True)
     emb.set_footer(text="来週もほどほどに、最低限を守ろう" if kind == "week" else "来月もほどほどに、最低限を守ろう")
     file = None
     if kind == "week" and series:
@@ -1752,6 +1763,12 @@ async def today_digest(uid, now):
         due = [st for st in await kaji_status(u, day_str(now)) if st["due"]]
         if due:
             lines.append("🧹 今日やる家事：" + "／".join(f"{st['emoji']}{st['label']}（{kaji_interval_text(st['n'])}）" for st in due))
+    try:
+        tp = await tip_of_day(day_str(now))
+        if tp:
+            lines.append(f"📚 今日のTIPS：**{tp['title']}** → <#{tp['thread_id']}>")
+    except Exception:
+        pass
     return "\n".join(lines)
 
 def parse_day_spec(spec, now):
@@ -1997,6 +2014,7 @@ def tutorial_embeds():
         "**日曜の夜**　#つうしんぼ📮 に今週の通信簿（達成率ランキング・各賞・起床/睡眠グラフ）。月末は 🏆 月間MVP"))
     e4 = discord.Embed(title="🗺 チャンネル案内", color=gold, description=(
         "#はじめに📖　このガイド\n"
+        "#暮らしのtips📚　レシピ・お得情報・家事ハックの知恵袋（フォーラム。🔖で自分のTIPS帳へ）\n"
         "#自己紹介🙋　📝 自己紹介カード\n"
         "#ロール🏷　リアクションで学部・学年・生活形態のロール\n"
         "#起床🌅　☀️起きた／🌙おやすみ／🏃ラジオ体操の呼び出しON/OFF\n"
@@ -2016,6 +2034,7 @@ def tutorial_embeds():
         "**科目**　`/jikanwari add` 登録／`list` 一覧／`remove` 外す\n"
         "**課題**　`/kadai add` 登録／`list` 一覧／`done` 完了／`delete` 取り下げ\n"
         "**自分の項目**　`/kojin add` 追加／`list` チェックリスト／`remove` 削除\n"
+        "**TIPS**　`/tips sagasu` 検索／`mine` 保存したもの／`omakase` ランダム\n"
         "**自己紹介**　`/jikoshokai`（#自己紹介🙋 の 📝 ボタンでも）\n"
         "**このガイド**　`/help`"))
     e6 = discord.Embed(title="🤝 ルールと心がまえ", color=gold, description=(
@@ -2481,6 +2500,179 @@ VIEW_FACTORY["erai"] = EraiView
 async def erai_command(interaction):
     await interaction.response.send_modal(EraiModal())
 
+
+# ============================================================
+#  暮らしのTIPS📚（フォーラム×Bot：投稿を知識ストック化・🔖保存・検索・今日のTIPS）
+# ============================================================
+TIPS_CH_NAME = "暮らしのtips📚"
+TIPS_TAGS = [("🍳", "レシピ"), ("🛒", "お得・期間限定"), ("🧹", "家事ハック"), ("💤", "ねむり"), ("🏫", "キャンパス周辺"), ("📦", "その他")]
+TIPS_TOPIC = ("暮らしの知恵をストックする場所。レシピ・お店の期間限定・家事ハックなど、後輩の生活を1つ楽にする投稿を。\n"
+              "・タイトルは一言で（例「余りごはんで5分チャーハン」）\n"
+              "・期間限定情報は本文に「期限: 10/15」と書くと、期限切れ後は検索から自動で消えます\n"
+              "・役に立った投稿は 🔖保存（あなたのTIPS帳 /tips mine に入ります）")
+
+def parse_tip_expiry(body, now):
+    """本文の「期限: 10/15」を拾って day 文字列に。無ければ None"""
+    m = re.search(r"期限[:：]\s*([0-9０-９/／年月日\s:：-]+)", body or "")
+    if not m:
+        return None
+    d = parse_due(m.group(1).strip())
+    return day_str(d) if d else None
+
+async def register_tip(thread, starter_content, applied_tags, owner_id):
+    expires = parse_tip_expiry(starter_content, now_jst())
+    tags = ",".join(t.name for t in (applied_tags or []))
+    now = now_jst()
+    await db.execute("INSERT OR IGNORE INTO tips(thread_id,author_id,title,tags,day,ts,expires) VALUES(?,?,?,?,?,?,?)",
+                     (str(thread.id), str(owner_id or ""), (thread.name or "")[:100], tags, day_str(now), int(now.timestamp()), expires))
+    await db.commit()
+    async with db.execute("SELECT id FROM tips WHERE thread_id=?", (str(thread.id),)) as c:
+        row = await c.fetchone()
+    return row["id"] if row else None
+
+@bot.event
+async def on_thread_create(thread):
+    tid = await meta_get("ch_tips")
+    if not tid or thread.parent_id != int(tid):
+        return
+    starter = None
+    for _ in range(4):  # 最初の投稿本文が届くまで少し待つ
+        try:
+            starter = await thread.fetch_message(thread.id)
+            break
+        except Exception:
+            await asyncio.sleep(2)
+    tip_id = await register_tip(thread, starter.content if starter else "", getattr(thread, "applied_tags", None), thread.owner_id)
+    if not tip_id:
+        return
+    if thread.owner:
+        await ensure_user(thread.owner)
+    async with db.execute("SELECT tags, expires FROM tips WHERE id=?", (tip_id,)) as c:
+        t = await c.fetchone()
+    view = discord.ui.View(timeout=None)
+    view.add_item(TipSaveButton(tip_id, 0))
+    try:
+        await thread.send("📚 TIPSとして登録しました" + (f"（期限 {t['expires']} まで。過ぎると検索から消えます）" if t["expires"] else "")
+                          + "。役に立ったら 🔖 で自分のTIPS帳へ！", view=view)
+    except Exception as e:
+        print(f"TIPS登録メッセージ失敗: {e!r}", flush=True)
+
+class TipSaveButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_tip:(?P<id>\d+)"):
+    def __init__(self, tip_id, count=0):
+        super().__init__(discord.ui.Button(label=f"🔖 保存（{count}）", style=discord.ButtonStyle.primary, custom_id=f"sk_tip:{tip_id}"))
+        self.tip_id = int(tip_id)
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["id"])
+
+    async def callback(self, interaction):
+        uid = str(interaction.user.id)
+        await ensure_user(interaction.user)
+        async with db.execute("SELECT 1 FROM tip_saves WHERE tip_id=? AND user_id=?", (self.tip_id, uid)) as c:
+            already = await c.fetchone()
+        if already:
+            await db.execute("DELETE FROM tip_saves WHERE tip_id=? AND user_id=?", (self.tip_id, uid))
+            note = "TIPS帳から外しました。"
+        else:
+            await db.execute("INSERT OR IGNORE INTO tip_saves(tip_id,user_id,day) VALUES(?,?,?)", (self.tip_id, uid, day_str(now_jst())))
+            note = "🔖 TIPS帳に入れました（`/tips mine` で一覧）"
+        await db.commit()
+        async with db.execute("SELECT COUNT(*) AS n FROM tip_saves WHERE tip_id=?", (self.tip_id,)) as c:
+            n = (await c.fetchone())["n"]
+        view = discord.ui.View(timeout=None)
+        view.add_item(TipSaveButton(self.tip_id, n))
+        try:
+            await interaction.response.edit_message(view=view)
+            await interaction.followup.send(note, ephemeral=True)
+        except Exception:
+            await interaction.response.send_message(note, ephemeral=True)
+
+async def search_tips(keyword=None, limit=10, saved_by=None, today=None):
+    """未期限切れのTIPSを 🔖数→新しい順 で返す。keywordはタイトル/タグの部分一致"""
+    today = today or day_str(now_jst())
+    q = ("SELECT t.*, (SELECT COUNT(*) FROM tip_saves s WHERE s.tip_id=t.id) AS saves FROM tips t "
+         "WHERE (t.expires IS NULL OR t.expires >= ?)")
+    args = [today]
+    if keyword:
+        q += " AND (t.title LIKE ? OR t.tags LIKE ?)"
+        args += [f"%{keyword}%", f"%{keyword}%"]
+    if saved_by:
+        q += " AND t.id IN (SELECT tip_id FROM tip_saves WHERE user_id=?)"
+        args.append(str(saved_by))
+    q += " ORDER BY saves DESC, t.ts DESC LIMIT ?"
+    args.append(limit)
+    async with db.execute(q, args) as c:
+        return await c.fetchall()
+
+def tip_line(r):
+    tag = f"（{r['tags']}）" if r["tags"] else ""
+    exp = f"　⏳{r['expires'][5:].replace('-', '/')}まで" if r["expires"] else ""
+    return f"🔖{r['saves']}　**{r['title']}**{tag}{exp} → <#{r['thread_id']}>"
+
+async def tip_of_day(day):
+    """その日の「今日のTIPS」1件（全員同じ・日替わり・🔖上位から選出）"""
+    rows = await search_tips(limit=10, today=day)
+    if not rows:
+        return None
+    return rows[zlib.crc32(day.encode()) % len(rows)]
+
+tips_grp = app_commands.Group(name="tips", description="暮らしのTIPSを探す・見返す")
+
+@tips_grp.command(name="sagasu", description="TIPSを検索（タイトル・タグの部分一致。期限切れは出ません）")
+@app_commands.describe(kensaku="キーワード 例 チャーハン／レシピ（空なら人気順）")
+async def tips_sagasu(interaction, kensaku: str = None):
+    rows = await search_tips(keyword=(kensaku or "").strip() or None)
+    if not rows:
+        await interaction.response.send_message("見つかりませんでした。#暮らしのtips📚 に最初の1件を投稿しよう！", ephemeral=True)
+        return
+    emb = discord.Embed(title=f"📚 TIPS検索{'：' + kensaku if kensaku else '（人気順）'}",
+                        description="\n".join(tip_line(r) for r in rows)[:4000], color=discord.Color.gold())
+    await interaction.response.send_message(embed=emb, ephemeral=True)
+
+@tips_grp.command(name="mine", description="自分が🔖保存したTIPS帳")
+async def tips_mine(interaction):
+    rows = await search_tips(saved_by=interaction.user.id, limit=25)
+    if not rows:
+        await interaction.response.send_message("まだTIPS帳は空です。#暮らしのtips📚 で役に立った投稿の 🔖 を押すとここに貯まります。", ephemeral=True)
+        return
+    emb = discord.Embed(title=f"🔖 {interaction.user.display_name} のTIPS帳（{len(rows)}）",
+                        description="\n".join(tip_line(r) for r in rows)[:4000], color=discord.Color.gold())
+    await interaction.response.send_message(embed=emb, ephemeral=True)
+
+@tips_grp.command(name="omakase", description="ランダムに1件")
+async def tips_omakase(interaction):
+    rows = await search_tips(limit=50)
+    if not rows:
+        await interaction.response.send_message("まだTIPSがありません。#暮らしのtips📚 に最初の1件をどうぞ！", ephemeral=True)
+        return
+    import random as _r
+    await interaction.response.send_message(embed=discord.Embed(title="🎲 おまかせTIPS", description=tip_line(_r.choice(rows)), color=discord.Color.gold()), ephemeral=True)
+
+bot.tree.add_command(tips_grp)
+
+async def ensure_tips_forum(guild, cat):
+    """#暮らしのtips📚（フォーラム）を用意。コミュニティ未設定などで作れない場合は案内を出す"""
+    tch = None
+    tid0 = await meta_get("ch_tips")
+    if tid0:
+        tch = guild.get_channel(int(tid0))
+    if tch is None:
+        tch = discord.utils.get(guild.channels, name=TIPS_CH_NAME)
+    if tch is None:
+        tags = [discord.ForumTag(name=n, emoji=discord.PartialEmoji(name=e)) for e, n in TIPS_TAGS]
+        try:
+            try:
+                tch = await guild.create_forum(TIPS_CH_NAME, category=cat, topic=TIPS_TOPIC, available_tags=tags, reason="暮らしのTIPS（/setup）")
+            except TypeError:
+                tch = await guild.create_forum(TIPS_CH_NAME, category=cat, topic=TIPS_TOPIC, reason="暮らしのTIPS（/setup)")
+                await tch.edit(available_tags=tags)
+        except Exception as e:
+            SETUP_ERRORS.append(f"#{TIPS_CH_NAME}（フォーラム）を作れませんでした（{e}）。サーバー設定→有効化→「コミュニティ」をONにしてから、もう一度 /setup を実行してください")
+            return None
+    await meta_set("ch_tips", tch.id)
+    return tch
+
 # ============================================================
 #  スラッシュコマンド
 # ============================================================
@@ -2538,6 +2730,7 @@ async def setup_command(interaction):
                 n_panels += 1
         role_note = "ロール：" + (f"作成 {', '.join(created)}" if created else "既存を利用") + f"／パネル {n_panels}/3 件 → {rch.mention}\n"
     audio_state = "あり ✅" if os.path.exists(RADIO_MP3) else f"なし ⚠️ VMに {RADIO_MP3} を置いてください"
+    tips_ch = await ensure_tips_forum(guild, cat)
     await meta_set("guild_id", guild.id)
     for key in VIEW_FACTORY:
         await bump_panel(key)
