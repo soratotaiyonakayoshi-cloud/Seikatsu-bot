@@ -296,7 +296,7 @@ async def build_misses(u, day, d1, d2, is_sunday):
         if not s:
             misses.append("🌙 睡眠時間 未報告")
         else:
-            hrs = float(s[-1]["note"] or 0)
+            hrs = sum(float(x["note"] or 0) for x in s)
             if hrs < u["sleep_min"]:
                 misses.append(f"🌙 睡眠不足 {fmt_hours(hrs)}（最低 {fmt_hours(u['sleep_min'])}）")
     if u["bath_daily"] and u["bath_set_day"] != day:
@@ -916,7 +916,7 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
         sleep_days = {}
         for e in evs:
             if e["kind"] == "sleep" and e["note"]:
-                sleep_days[e["day"]] = float(e["note"])
+                sleep_days[e["day"]] = sleep_days.get(e["day"], 0.0) + float(e["note"])
         sleeps = list(sleep_days.values())
         j = jr.get(uid)
         mtext = (j["mtext"] or "") if j else ""
@@ -1777,6 +1777,26 @@ async def kaji_command(interaction, ryouri: int = None, souji: int = None, sara:
         settei = await get_ch("settei")
         if settei:
             await settei.send(f"🧹 **{user.display_name}** が家事の頻度を設定：" + "／".join(f"{st['emoji']}{st['label']} {kaji_interval_text(st['n'])}" for st in sts))
+
+@bot.tree.command(name="suimin", description="睡眠時間を手動で記録（寝落ち・おやすみ押し忘れの救済。追加または上書き）")
+@app_commands.describe(jikan="睡眠時間(h) 例 3 や 6.5", memo="メモ 例 寝落ち（任意）", uwagaki="True にすると今日の睡眠記録をこれ1本に置き換え（誤入力の修正用）")
+async def suimin_command(interaction, jikan: float, memo: str = None, uwagaki: bool = False):
+    user = interaction.user
+    await ensure_user(user)
+    now = now_jst()
+    day = day_str(now)
+    if not (0 < jikan <= 24):
+        await interaction.response.send_message("⚠️ 時間は 0〜24 の範囲で指定してください（例 3 や 6.5）", ephemeral=True)
+        return
+    if uwagaki:
+        await db.execute("DELETE FROM events WHERE user_id=? AND day=? AND kind='sleep'", (str(user.id), day))
+    await add_event(user.id, "sleep", note=f"{jikan:.2f}")
+    rows = await events_on(user.id, day, "sleep")
+    total = sum(float(x["note"] or 0) for x in rows)
+    tag = f"（{memo.strip()}）" if memo and memo.strip() else ""
+    verb = "で上書き" if uwagaki else "を追加"
+    await interaction.response.send_message(f"😪 睡眠 {fmt_hours(jikan)} {verb}しました{tag}。今日の合計 {fmt_hours(total)}。", ephemeral=True)
+    await post_log("wake", f"😪 **{user.display_name}** 睡眠 {'=' if uwagaki else '+'}{fmt_hours(jikan)}{tag}　→ 今日 計 {fmt_hours(total)}")
 
 @bot.tree.command(name="oyasumi", description="お休み申告（その日は判定されず、連続達成も途切れない）")
 @app_commands.describe(riyuu="理由 例: 帰省／体調不良（「なし」で取り消し）", hi="日付 例: 明日／10/15／10/15-10/17（省略=今日）")
@@ -2650,7 +2670,7 @@ async def kiroku_command(interaction):
     radio = await events_on(user.id, day, "radio")
     today = [
         "☀️ 起床：" + (hhmm(datetime.fromtimestamp(w[0]["ts"], JST)) if w else "未報告"),
-        "🌙 睡眠：" + (fmt_hours(float(s[-1]["note"])) if s else "未記録"),
+        "🌙 睡眠：" + (fmt_hours(sum(float(x["note"] or 0) for x in s)) if s else "未記録"),
         "🍚 食事：" + ("、".join(f"{m['sub']}" + (f"({m['note']})" if m["note"] else "") for m in meals) if meals else "未報告"),
         "🧹 家事：" + ("、".join(CHORE_LABEL[c["sub"]] for c in chores) if chores else "なし"),
         "🛁 入浴：" + ((f"済（{len(bath)}回）" if len(bath) >= 2 else "済") if bath else "未報告"),

@@ -32,7 +32,7 @@ check("食事推定 19:00", B.infer_meal_sub(datetime(2026,8,5,19,0,tzinfo=JST))
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー4種 登録OK", True, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kaji", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "tsushinbo"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kaji", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "suimin", "tsushinbo"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n
@@ -398,6 +398,16 @@ async def main():
     finally:
         B.get_ch = orig_get_ch
         B.now_jst = orig_now
+
+    # 睡眠は合計で判定（寝落ち3h＋夜4h＝7h）
+    await B.ensure_user(M(21, "ねおち"))
+    await B.db.execute("UPDATE users SET sleep_min=6 WHERE id='21'"); await B.db.commit()
+    await B.add_event(21, "sleep", note="3.00", ts_dt=datetime(2026, 8, 5, 21, tzinfo=JST))
+    m21 = await B.build_misses(await B.get_user(21), "2026-08-05", d1, d2, False)
+    check("3hだけなら睡眠不足", any("睡眠不足" in x for x in m21), True)
+    await B.add_event(21, "sleep", note="4.00", ts_dt=datetime(2026, 8, 5, 22, tzinfo=JST))
+    m21 = await B.build_misses(await B.get_user(21), "2026-08-05", d1, d2, False)
+    check("3h+4h=7hで達成", any("睡眠" in x for x in m21), False)
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
