@@ -54,7 +54,7 @@ CH = {
     "hajimeni": ("はじめに📖", "参加者向けのガイド。困ったら `/help`。"),
     "jikoshokai": ("自己紹介🙋", "📝 ボタンでフォームから自己紹介カードを投稿（あとから更新OK）。"),
     "roles": ("ロール🏷", "リアクションで学部・学年・生活形態のロールを付け外し。"),
-    "wake": ("起床🌅", "☀️ 起きたら押す／🌙 寝る前に押す。睡眠時間は自動で計算されます。\n🏃 で毎朝のラジオ体操の呼び出し（メンション）をON/OFF。"),
+    "wake": ("起床🌅", "☀️ 起きたら押す／🌙 寝る前に押す（睡眠時間は自動計算）／😴 二度寝したら正直に押す。\n🏃 で毎朝のラジオ体操の呼び出し（メンション）をON/OFF。"),
     "meal": ("ごはん🍚", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。"),
     "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
     "erai": ("えらい🌟", "最低限とは別に、今日がんばったことを報告して褒め合う場所。🌟ボタン（または /erai）から。判定はされません。"),
@@ -499,7 +499,7 @@ class WakeView(discord.ui.View):
         existing = await events_on(user.id, day_str(now), "wake")
         if existing:
             t = hhmm(datetime.fromtimestamp(existing[0]["ts"], JST))
-            await interaction.response.send_message(f"今日はもう {t} に起床報告済みです。", ephemeral=True)
+            await interaction.response.send_message(f"今日はもう {t} に起床報告済みです。二度寝から帰ってきたなら 😴 を押してね。", ephemeral=True)
             return
         bed_dt = await last_bed_within(user.id, now)
         if bed_dt is None:
@@ -515,6 +515,16 @@ class WakeView(discord.ui.View):
         await add_event(user.id, "bed", ts_dt=now)
         await interaction.response.send_message(f"🌙 {hhmm(now)} おやすみ。起きたら ☀️ を押してね。", ephemeral=True)
         await post_log("wake", f"🌙 **{user.display_name}** {hhmm(now)} おやすみ")
+
+    @discord.ui.button(label="😴 二度寝した", style=discord.ButtonStyle.secondary, custom_id="sk_nizone")
+    async def nizone(self, interaction, button):
+        user = interaction.user
+        now = now_jst()
+        await ensure_user(user)
+        await add_event(user.id, "nizone")
+        deg = len(await events_on(user.id, day_str(now), "nizone")) + 1  # 1回押したら「二度寝」
+        await interaction.response.send_message(f"😴 {hhmm(now)}　本日 {deg} 度寝を記録しました。おかえりなさい。", ephemeral=True)
+        await post_log("wake", f"😴 **{user.display_name}** {hhmm(now)} 二度寝から生還（本日 {deg} 度寝）")
 
     @discord.ui.button(label="🏃 ラジオ体操の呼び出し ON/OFF", style=discord.ButtonStyle.secondary, custom_id="sk_radio_toggle", row=1)
     async def radio_toggle(self, interaction, button):
@@ -920,6 +930,7 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
             "meals": sum(1 for e in evs if e["kind"] == "meal"),
             "baths": len({e["day"] for e in evs if e["kind"] == "bath"}),
             "teeth": sum(1 for e in evs if e["kind"] == "teeth"),
+            "nizone": sum(1 for e in evs if e["kind"] == "nizone"),
             "efforts": 0, "praises": 0,
             "radio": sum(1 for e in evs if e["kind"] == "radio"),
             "late": mtext.count("寝坊"), "miss_n": sum(1 for l in mtext.split("\n") if l.strip()),
@@ -971,6 +982,7 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
         award("👏 ほめ上手賞", "praises", fmt=lambda v: f"{v}回"),
         award("🏃 ラジオ体操賞", "radio", fmt=lambda v: f"{v}回"),
         award("🐷 寝坊賞", "late", fmt=lambda v: f"{v}回"),
+        award("😴 二度寝賞", "nizone", fmt=lambda v: f"{v}回"),
         award("👹 こら賞", "miss_n", fmt=lambda v: f"未達 {v}件"),
     ) if a]
     d1s, d2s = d1[5:].replace("-", "/"), d2[5:].replace("-", "/")
@@ -2643,6 +2655,7 @@ async def kiroku_command(interaction):
         "🧹 家事：" + ("、".join(CHORE_LABEL[c["sub"]] for c in chores) if chores else "なし"),
         "🛁 入浴：" + ((f"済（{len(bath)}回）" if len(bath) >= 2 else "済") if bath else "未報告"),
         "🪥 歯磨き：" + (f"{len(await events_on(user.id, day, 'teeth'))} 回"),
+        "😴 二度寝：" + (lambda k: f"{k} 回（本日 {k + 1} 度寝）" if k else "なし（えらい）")(len(await events_on(user.id, day, "nizone"))),
         "🏃 ラジオ体操：" + ("参加" if radio else "—"),
         "🌟 今日のえらい：" + str(len(await db.execute_fetchall("SELECT 1 FROM efforts WHERE user_id=? AND day=?", (str(user.id), day)))) + " 件",
     ]

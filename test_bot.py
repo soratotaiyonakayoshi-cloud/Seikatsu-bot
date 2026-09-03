@@ -380,6 +380,25 @@ async def main():
     check("今日追加の個人項目は未達に出ない", any("散歩" in x for x in await B.build_misses(await B.get_user(20), "2026-08-05", d1, d2, False)), False)
     check("翌日は個人項目も判定", any("散歩" in x for x in await B.build_misses(await B.get_user(20), "2026-08-06", d1, d2, False)), True)
 
+    # 二度寝（記録と週次の二度寝賞）
+    for hh in (9, 11, 14):
+        await B.add_event(12, "nizone", ts_dt=datetime(2026, 8, 5, hh, tzinfo=JST))
+    await B.db.commit()
+    check("二度寝3回=四度寝", len(await B.events_on(12, "2026-08-05", "nizone")) + 1, 4)
+    sent3 = []
+    class FakeCh3:
+        async def send(self, content=None, **kw):
+            sent3.append((content, kw.get("embed")))
+    B.get_ch = lambda key: _fake_async(FakeCh3() if key in ("tsushinbo", "kora") else None)
+    B.now_jst = lambda: datetime(2026, 8, 9, 23, 5, tzinfo=JST)
+    try:
+        await B.weekly_summary(None, manual=True)
+        aw3 = next((f.value for f in sent3[0][1].fields if "各賞" in f.name), "")
+        check("二度寝賞がねぼうに", "😴 二度寝賞：**ねぼう**（3回）" in aw3, True)
+    finally:
+        B.get_ch = orig_get_ch
+        B.now_jst = orig_now
+
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
     check("meta 上書き", await B.meta_get("last_judge_day"), "2026-08-06")
