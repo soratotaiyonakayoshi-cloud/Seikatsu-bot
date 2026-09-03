@@ -166,6 +166,7 @@ CREATE TABLE IF NOT EXISTS intros(user_id TEXT PRIMARY KEY, f1 TEXT, f2 TEXT, f3
 CREATE TABLE IF NOT EXISTS off_days(day TEXT NOT NULL, user_id TEXT NOT NULL, reason TEXT, PRIMARY KEY(day, user_id));
 CREATE TABLE IF NOT EXISTS custom_items(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER);
 CREATE TABLE IF NOT EXISTS custom_checks(day TEXT NOT NULL, user_id TEXT NOT NULL, item_id INTEGER NOT NULL, PRIMARY KEY(day, user_id, item_id));
+CREATE TABLE IF NOT EXISTS fridge_items(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, name TEXT NOT NULL, due_day TEXT NOT NULL, created_day TEXT);
 """
 db = None
 
@@ -1588,6 +1589,10 @@ async def remind_loop():
         await remind_assignments()
     except Exception as e:
         print(f"remind error: {e!r}", flush=True)
+    try:
+        await fridge_remind()
+    except Exception as e:
+        print(f"fridge remind error: {e!r}", flush=True)
 
 # ---- /jikanwari ----
 jikanwari = app_commands.Group(name="jikanwari", description="履修科目の登録・確認")
@@ -1803,6 +1808,12 @@ async def today_digest(uid, now):
         due = [st for st in await kaji_status(u, day_str(now)) if st["due"]]
         if due:
             lines.append("🧹 今日やる家事：" + "／".join(f"{st['emoji']}{st['label']}（{kaji_interval_text(st['n'])}）" for st in due))
+    try:
+        fr = await fridge_soon(uid, day_str(now))
+        if fr:
+            lines.append("🧊 期限が近い食品：" + "／".join(fr))
+    except Exception:
+        pass
     try:
         tp = await tip_of_day(day_str(now))
         if tp:
@@ -2715,6 +2726,148 @@ async def tips_omakase(interaction):
     await interaction.response.send_message(embed=discord.Embed(title="🎲 おまかせTIPS", description=tip_line(_r.choice(rows)), color=discord.Color.gold()), ephemeral=True)
 
 bot.tree.add_command(tips_grp)
+
+# ------------------------------------------------------------
+#  冷蔵庫の期限リマインド🧊
+#  在庫管理はしない。「期限が近い食品だけの使い捨てメモ」。
+#  ☀️の朝ダイジェストと、REMIND_HOUR に #ごはん🍚 へのアラートで知らせる。
+#  消し忘れても期限から3日で自動削除＝リストが腐らない。
+# ------------------------------------------------------------
+FRIDGE_PRESETS = {  # kigen 省略時の目安日数（消費期限ベースで安全側）
+    "牛乳": 4, "卵": 14, "豆腐": 3, "納豆": 7, "もやし": 2, "食パン": 4,
+    "ヨーグルト": 7, "ひき肉": 2, "鶏肉": 2, "豚肉": 3, "牛肉": 3, "魚": 2, "刺身": 1,
+    "ハム": 5, "ベーコン": 7, "ウインナー": 7, "ちくわ": 4, "かまぼこ": 5, "油揚げ": 4,
+    "カット野菜": 2, "レタス": 5, "キャベツ": 7, "きゅうり": 4, "トマト": 5,
+    "ほうれん草": 3, "小松菜": 3, "きのこ": 4, "バナナ": 4, "生クリーム": 3, "チーズ": 14,
+}
+
+def fridge_preset_days(name):
+    n = unicodedata.normalize("NFKC", name or "").strip()
+    if n in FRIDGE_PRESETS:
+        return FRIDGE_PRESETS[n]
+    for k, d in FRIDGE_PRESETS.items():
+        if k in n:   # 「低脂肪牛乳」→牛乳 の部分一致
+            return d
+    return None
+
+def fridge_due_fmt(due_day):
+    _y, m, d = due_day.split("-")
+    return f"{int(m)}/{int(d)}"
+
+def fridge_label(due_day, today):
+    d = (date.fromisoformat(due_day) - date.fromisoformat(today)).days
+    if d < 0:
+        return f"⚠️{-d}日過ぎ"
+    if d == 0:
+        return "今日まで！"
+    if d == 1:
+        return "明日まで"
+    return f"あと{d}日"
+
+async def fridge_items_of(uid):
+    async with db.execute("SELECT * FROM fridge_items WHERE user_id=? ORDER BY due_day, id", (str(uid),)) as c:
+        return await c.fetchall()
+
+async def fridge_soon(uid, today):
+    """今日・明日が期限（＋期限切れでまだ自動削除されていない）ものの表示リスト"""
+    out = []
+    for r in await fridge_items_of(uid):
+        if (date.fromisoformat(r["due_day"]) - date.fromisoformat(today)).days <= 1:
+            out.append(f"**{r['name']}**（{fridge_label(r['due_day'], today)}）")
+    return out
+
+async def fridge_cleanup(today):
+    """期限から3日過ぎたものは自動削除（消し忘れてもリストが腐らない）"""
+    limit = (date.fromisoformat(today) - timedelta(days=3)).isoformat()
+    await db.execute("DELETE FROM fridge_items WHERE due_day < ?", (limit,))
+    await db.commit()
+
+async def fridge_remind():
+    """REMIND_HOUR に #ごはん🍚 へ、期限が今日・明日のものをまとめてアラート"""
+    today = day_str(now_jst())
+    await fridge_cleanup(today)
+    tomorrow = (date.fromisoformat(today) + timedelta(days=1)).isoformat()
+    async with db.execute("SELECT * FROM fridge_items WHERE due_day<=? ORDER BY user_id, due_day, id", (tomorrow,)) as c:
+        rows = await c.fetchall()
+    if not rows:
+        return
+    lines = [f"・<@{r['user_id']}> **{r['name']}**（{fridge_label(r['due_day'], today)}）" for r in rows]
+    await post_log("meal", "🧊 **冷蔵庫アラート**：期限が近いよ！使い切りレシピは `/tips sagasu` も参考に\n" + "\n".join(lines))
+
+reizouko_grp = app_commands.Group(name="reizouko", description="冷蔵庫の期限リマインド（期限が近い食品だけの使い捨てメモ）")
+
+@reizouko_grp.command(name="add", description="食品を登録。期限の前日と当日の朝にお知らせ（定番食品は kigen 省略OK）")
+@app_commands.describe(namae="食品名 例 牛乳（定番食品は候補に目安日数つきで出ます）", kigen="期限 例 9/7（省略すると定番食品は目安から自動設定）")
+async def reizouko_add(interaction, namae: str, kigen: str = None):
+    await ensure_user(interaction.user)
+    now = now_jst()
+    nm = unicodedata.normalize("NFKC", namae or "").strip()[:30]
+    if not nm:
+        await interaction.response.send_message("⚠️ 食品名を入れてください（例 `namae:牛乳`）", ephemeral=True)
+        return
+    if kigen:
+        d = parse_due(kigen)
+        if not d:
+            await interaction.response.send_message("⚠️ 期限の形式が読めませんでした。例: `9/7` `10月15日`", ephemeral=True)
+            return
+        due = day_str(d)
+    else:
+        days = fridge_preset_days(nm)
+        if days is None:
+            await interaction.response.send_message(f"「{nm}」の目安日数を知らないので、`kigen:9/7` のように期限も指定してください。", ephemeral=True)
+            return
+        due = day_str(now + timedelta(days=days))
+    await db.execute("INSERT INTO fridge_items(user_id,name,due_day,created_day) VALUES(?,?,?,?)",
+                     (str(interaction.user.id), nm, due, day_str(now)))
+    await db.commit()
+    await interaction.response.send_message(
+        f"🧊 **{nm}** を登録しました（期限 {fridge_due_fmt(due)}・{fridge_label(due, day_str(now))}）。"
+        f"前日と当日の朝にお知らせします。食べたら `/reizouko tabeta`。期限から3日過ぎると自動で消えます。" + hitokoto_suffix(),
+        ephemeral=True)
+
+@reizouko_add.autocomplete("namae")
+async def reizouko_namae_ac(interaction, current):
+    cur = unicodedata.normalize("NFKC", current or "").strip()
+    return [app_commands.Choice(name=f"{k}（目安{d}日）", value=k)
+            for k, d in FRIDGE_PRESETS.items() if not cur or cur in k][:25]
+
+@reizouko_grp.command(name="list", description="登録中の食品と期限を見る（自分にだけ表示）")
+async def reizouko_list(interaction):
+    today = day_str(now_jst())
+    rows = await fridge_items_of(interaction.user.id)
+    if not rows:
+        await interaction.response.send_message("いま登録されている食品はありません。`/reizouko add namae:牛乳` で登録すると、期限の前日と当日の朝にお知らせします。", ephemeral=True)
+        return
+    lines = [f"・**{r['name']}**　期限 {fridge_due_fmt(r['due_day'])}（{fridge_label(r['due_day'], today)}）" for r in rows]
+    await interaction.response.send_message("🧊 **冷蔵庫メモ**\n" + "\n".join(lines) +
+                                            "\n\n食べたら `/reizouko tabeta`。期限から3日過ぎたものは自動で消えます。", ephemeral=True)
+
+@reizouko_grp.command(name="tabeta", description="食べた・使い切った食品をメモから消す")
+@app_commands.describe(namae="消す食品（候補から選ぶのが確実）")
+async def reizouko_tabeta(interaction, namae: str):
+    uid = str(interaction.user.id)
+    row = None
+    if namae.isdigit():   # オートコンプリートで選ぶと id が入る
+        async with db.execute("SELECT * FROM fridge_items WHERE id=? AND user_id=?", (int(namae), uid)) as c:
+            row = await c.fetchone()
+    if not row:           # 手入力なら名前一致（同名は期限が近いものから）
+        nm = unicodedata.normalize("NFKC", namae or "").strip()
+        async with db.execute("SELECT * FROM fridge_items WHERE user_id=? AND name=? ORDER BY due_day, id LIMIT 1", (uid, nm)) as c:
+            row = await c.fetchone()
+    if not row:
+        await interaction.response.send_message("見つかりませんでした。`/reizouko list` で確認してね。", ephemeral=True)
+        return
+    await db.execute("DELETE FROM fridge_items WHERE id=?", (row["id"],))
+    await db.commit()
+    await interaction.response.send_message(f"🍽 **{row['name']}** を使い切りました。フードロスゼロ、えらい！" + hitokoto_suffix(), ephemeral=True)
+
+@reizouko_tabeta.autocomplete("namae")
+async def reizouko_tabeta_ac(interaction, current):
+    cur = unicodedata.normalize("NFKC", current or "").strip()
+    return [app_commands.Choice(name=f"{r['name']}（期限 {fridge_due_fmt(r['due_day'])}）", value=str(r["id"]))
+            for r in await fridge_items_of(interaction.user.id) if not cur or cur in r["name"]][:25]
+
+bot.tree.add_command(reizouko_grp)
 
 async def ensure_tips_forum(guild, cat):
     """#暮らしのtips📚（フォーラム）を用意。コミュニティ未設定などで作れない場合は案内を出す"""

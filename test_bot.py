@@ -34,7 +34,7 @@ check("食事推定 19:00", B.infer_meal_sub(datetime(2026,8,5,19,0,tzinfo=JST))
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー4種 登録OK", True, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "suimin", "tips", "tsushinbo", "watashi"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "reizouko", "saitei", "setup", "suimin", "tips", "tsushinbo", "watashi"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n
@@ -461,6 +461,24 @@ async def main():
     chart = B.render_personal_chart([{"day": "2026-09-01", "wake": 400, "sleep": 6.5, "ach": 1, "nizone": 0},
                                      {"day": "2026-09-02", "wake": 460, "sleep": 5.0, "ach": 0, "nizone": 1}], "テスト")
     check("個人グラフ生成", chart is not None and len(chart.getvalue()) > 10000, True)
+
+    # 冷蔵庫の期限リマインド🧊
+    check("冷蔵庫: プリセット 牛乳=4日", B.fridge_preset_days("牛乳"), 4)
+    check("冷蔵庫: 部分一致 低脂肪牛乳", B.fridge_preset_days("低脂肪牛乳"), 4)
+    check("冷蔵庫: 未知はNone", B.fridge_preset_days("キャビア"), None)
+    check("冷蔵庫: ラベル 今日", B.fridge_label("2026-09-03", "2026-09-03"), "今日まで！")
+    check("冷蔵庫: ラベル 明日", B.fridge_label("2026-09-04", "2026-09-03"), "明日まで")
+    check("冷蔵庫: ラベル あと3日", B.fridge_label("2026-09-06", "2026-09-03"), "あと3日")
+    check("冷蔵庫: ラベル 期限切れ", B.fridge_label("2026-09-01", "2026-09-03"), "⚠️2日過ぎ")
+    check("冷蔵庫: 期限表示", B.fridge_due_fmt("2026-09-07"), "9/7")
+    for nm, due in (("牛乳", "2026-09-03"), ("もやし", "2026-09-04"), ("卵", "2026-09-10"), ("古い豆腐", "2026-08-25")):
+        await B.db.execute("INSERT INTO fridge_items(user_id,name,due_day,created_day) VALUES('9',?,?,'2026-09-01')", (nm, due))
+    await B.db.commit()
+    soon = await B.fridge_soon("9", "2026-09-03")
+    check("冷蔵庫: 今日・明日＋期限切れの3件（卵は出ない）", len(soon), 3)
+    check("冷蔵庫: 表示に名前とラベル", any("牛乳" in s and "今日まで！" in s for s in soon), True)
+    await B.fridge_cleanup("2026-09-03")
+    check("冷蔵庫: 期限3日過ぎは自動削除", sorted(r["name"] for r in await B.fridge_items_of("9")), ["もやし", "卵", "牛乳"])
 
     # 叱責に処方TIPS💊（テストDBのTIPS: 5分チャーハン=レシピタグ、限定プリン=期限切れ）
     rx = await B.prescribe_tip("42", "2026-09-03", ["🍚 食事 1/2 回"])
