@@ -32,7 +32,7 @@ check("食事推定 19:00", B.infer_meal_sub(datetime(2026,8,5,19,0,tzinfo=JST))
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー4種 登録OK", True, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kaji", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "suimin", "tsushinbo"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "saitei", "setup", "suimin", "tsushinbo"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n
@@ -71,13 +71,11 @@ async def main():
     await B.add_event(2, "chore", "clean", ts_dt=t(10, 0, 4))
     ub = await B.get_user(2)
     m = await B.build_misses(ub, day, d1, d2, False)
-    check("B 平日：未達4件（家事は日曜まで判定しない）", len(m), 4)
+    check("B 未達4件（週合計の家事判定は廃止）", len(m), 4)
     check("B 寝坊メッセージ", m[0], "☀️ 寝坊 07:00 まで → 09:42")
     check("B 睡眠不足", m[1], "🌙 睡眠不足 4.5h（最低 6.0h）")
     check("B 入浴", m[2], "🛁 入浴 未報告")
     check("B 食事(昼2回は1種類)", m[3], "🍚 食事 1/2 回")
-    m_sun = await B.build_misses(ub, day, d1, d2, True)
-    check("B 日曜：家事 1/3 が加わる", m_sun[-1], "🧹 家事 今週 1/3 回")
 
     # C: 何も報告しない人（設定あり）
     c = M(3, "C")
@@ -408,6 +406,22 @@ async def main():
     await B.add_event(21, "sleep", note="4.00", ts_dt=datetime(2026, 8, 5, 22, tzinfo=JST))
     m21 = await B.build_misses(await B.get_user(21), "2026-08-05", d1, d2, False)
     check("3h+4h=7hで達成", any("睡眠" in x for x in m21), False)
+
+    # 自動バックアップ（7世代）
+    import os as _os
+    bdir = B.BACKUP_DIR
+    dest = await B.backup_db(keep=3)
+    check("バックアップ作成", _os.path.exists(dest), True)
+    for dd in range(1, 6):
+        open(_os.path.join(bdir, f"seikatsu-2020-01-0{dd}.db"), "w").close()
+    await B.backup_db(keep=3)
+    rest = sorted(f for f in _os.listdir(bdir) if f.startswith("seikatsu-"))
+    check("世代は3つに剪定", len(rest), 3)
+    for f in rest:
+        _os.remove(_os.path.join(bdir, f))
+    _os.rmdir(bdir)
+    # 週合計が設定されていても判定されない（廃止）
+    check("chores_weekは対象外", B.has_any_setting({**dict(ub), "wake_deadline": None, "sleep_min": None, "bath_daily": 0, "meals_min": None, "radio_daily": 0, "teeth_min": 0, "kaji_cook": 0, "kaji_clean": 0, "kaji_dish": 0, "kaji_wash": 0, "kaji_trash": 0, "chores_week": 3}), False)
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
