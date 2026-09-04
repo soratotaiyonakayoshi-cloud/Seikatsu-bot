@@ -30,6 +30,7 @@ except ImportError:
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 DB_PATH = os.getenv("DB_PATH", "seikatsu.db")
 JUDGE_HOUR = int(os.getenv("JUDGE_HOUR", "23"))
+WAKE_GRACE_MIN = int(os.getenv("WAKE_GRACE_MIN", "5"))   # 起床締切の操作猶予（分）＝起きてからボタンを押すまでのタイムラグはノーカウント
 KORA_EMOJI_NAME = os.getenv("KORA_EMOJI", "こら")
 ERAI_EMOJI_NAME = os.getenv("ERAI_EMOJI", "えらい")   # 達成した人に付ける絵文字（無ければ ✨）
 RADIO_TIME = os.getenv("RADIO_TIME", "06:30")          # ラジオ体操の開始時刻(HH:MM)
@@ -297,7 +298,7 @@ async def build_misses(u, day, d1, d2, is_sunday):
             misses.append(f"☀️ 起床 未報告（{dl} まで）")
         else:
             t = hhmm(datetime.fromtimestamp(w[0]["ts"], JST))
-            if t > dl:
+            if t > grace_deadline(dl):   # 締切＋操作猶予を過ぎたら寝坊
                 misses.append(f"☀️ 寝坊 {dl} まで → {t}")
     if u["sleep_min"] and u["sleep_set_day"] != day:
         s = await events_on(uid, day, "sleep")
@@ -345,6 +346,14 @@ def effective_deadline(u, dt):
         t = min(h * 60 + m + shift, 23 * 60 + 59)
         return f"{t // 60:02d}:{t % 60:02d}"
     return dl
+
+def grace_deadline(dl):
+    """判定用の締切＝表示上の締切＋操作猶予。起きてからスマホを開いてボタンを押すまでの数分で寝坊にしない"""
+    if not dl:
+        return None
+    h, m = map(int, dl.split(":"))
+    t = min(h * 60 + m + WAKE_GRACE_MIN, 23 * 60 + 59)
+    return f"{t // 60:02d}:{t % 60:02d}"
 
 async def all_items_skipped(u, day):
     """この日、実際に判定される項目が1つも無い（すべて今日設定・未設定）＝設定初日の人"""
@@ -483,7 +492,7 @@ async def record_wake(interaction, wake_dt, bed_dt, already_responded=False):
     u = await get_user(user.id)
     late = ""
     dl = effective_deadline(u, wake_dt) if u else None
-    if dl and hhmm(wake_dt) > dl:
+    if dl and hhmm(wake_dt) > grace_deadline(dl):
         late = f" ⚠️ 締切 {dl} を過ぎてます"
     msg = f"✅ {hhmm(wake_dt)} 起床（{sleep_txt}）{late}"
     digest = await today_digest(user.id, wake_dt)
