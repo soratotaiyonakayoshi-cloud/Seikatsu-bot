@@ -244,9 +244,13 @@ async def last_bed_within(uid, now, hours=20):
         r = await c.fetchone()
     return datetime.fromtimestamp(r["ts"], JST) if r else None
 
-async def count_events_between(uid, kind, d1, d2):
-    async with db.execute("SELECT COUNT(*) AS n FROM events WHERE user_id=? AND kind=? AND day BETWEEN ? AND ?",
-                          (str(uid), kind, d1, d2)) as c:
+async def count_events_between(uid, kind, d1, d2, sub=None):
+    q = "SELECT COUNT(*) AS n FROM events WHERE user_id=? AND kind=? AND day BETWEEN ? AND ?"
+    args = [str(uid), kind, d1, d2]
+    if sub is not None:
+        q += " AND sub=?"
+        args.append(sub)
+    async with db.execute(q, args) as c:
         return (await c.fetchone())["n"]
 
 async def distinct_main_meals(uid, day):
@@ -628,7 +632,7 @@ class ChoreButton(discord.ui.Button):
         await ensure_user(user)
         await add_event(user.id, "chore", self.key)
         d1, d2 = week_range(now)
-        n = await count_events_between(user.id, "chore", d1, d2)
+        n = await count_events_between(user.id, "chore", d1, d2, sub=self.key)   # 押したボタンの回数だけ（全家事の合計にしない）
         await interaction.response.send_message(f"✅ {CHORE_LABEL[self.key]} を記録（今週 {n} 回目）" + hitokoto_suffix(), ephemeral=True)
         await post_log("chore", f"{CHORE_LABEL[self.key]} **{user.display_name}**（今週 {n} 回目）")
 

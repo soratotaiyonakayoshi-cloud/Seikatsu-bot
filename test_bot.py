@@ -467,6 +467,15 @@ async def main():
                                      {"day": "2026-09-02", "wake": 460, "sleep": 5.0, "ach": 0, "nizone": 1}], "テスト")
     check("個人グラフ生成", chart is not None and len(chart.getvalue()) > 10000, True)
 
+    # 家事カウントは「押したボタンごと・本人のみ」
+    for _ in range(2):
+        await B.add_event(31, "chore", "clean", ts_dt=t(10))
+    await B.add_event(31, "chore", "wash_run", ts_dt=t(11)); await B.add_event(31, "chore", "hang", ts_dt=t(12))
+    await B.add_event(32, "chore", "clean", ts_dt=t(10))  # 別人の掃除は混ぜない
+    check("家事: 掃除は本人の2回だけ", await B.count_events_between(31, "chore", d1, d2, sub="clean"), 2)
+    check("家事: 洗濯工程は工程ごと", await B.count_events_between(31, "chore", d1, d2, sub="wash_run"), 1)
+    check("家事: sub省略は従来通り全種合計", await B.count_events_between(31, "chore", d1, d2), 4)
+
     # 起床締切の操作猶予（＋10分）
     check("猶予: 6:30→6:40", B.grace_deadline("06:30"), "06:40")
     check("猶予: 23:55は23:59まで", B.grace_deadline("23:55"), "23:59")
