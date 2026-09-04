@@ -467,17 +467,17 @@ async def main():
                                      {"day": "2026-09-02", "wake": 460, "sleep": 5.0, "ach": 0, "nizone": 1}], "テスト")
     check("個人グラフ生成", chart is not None and len(chart.getvalue()) > 10000, True)
 
-    # 起床締切の操作猶予（＋5分）
-    check("猶予: 6:30→6:35", B.grace_deadline("06:30"), "06:35")
-    check("猶予: 23:58は23:59まで", B.grace_deadline("23:58"), "23:59")
+    # 起床締切の操作猶予（＋10分）
+    check("猶予: 6:30→6:40", B.grace_deadline("06:30"), "06:40")
+    check("猶予: 23:55は23:59まで", B.grace_deadline("23:55"), "23:59")
     g1 = M(21, "ぎりぎりセーフ"); await B.ensure_user(g1)
     await B.db.execute("UPDATE users SET wake_deadline='06:30' WHERE id='21'"); await B.db.commit()
-    await B.add_event(21, "wake", ts_dt=t(6, 33))
-    check("猶予内(6:33)の報告は寝坊にならない", await B.build_misses(await B.get_user(21), day, d1, d2, False), [])
+    await B.add_event(21, "wake", ts_dt=t(6, 40))
+    check("猶予内(6:40)の報告は寝坊にならない", await B.build_misses(await B.get_user(21), day, d1, d2, False), [])
     g2 = M(22, "ぎりぎりアウト"); await B.ensure_user(g2)
     await B.db.execute("UPDATE users SET wake_deadline='06:30' WHERE id='22'"); await B.db.commit()
-    await B.add_event(22, "wake", ts_dt=t(6, 36))
-    check("猶予超え(6:36)は寝坊・表示は元の締切", await B.build_misses(await B.get_user(22), day, d1, d2, False), ["☀️ 寝坊 06:30 まで → 06:36"])
+    await B.add_event(22, "wake", ts_dt=t(6, 41))
+    check("猶予超え(6:41)は寝坊・表示は元の締切", await B.build_misses(await B.get_user(22), day, d1, d2, False), ["☀️ 寝坊 06:30 まで → 06:41"])
 
     # 課題一覧embed（パネルとコマンドの共通処理）
     check("課題一覧embed（履修者には出る）", (await B.kadai_list_embed("1")) is not None, True)

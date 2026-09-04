@@ -30,7 +30,7 @@ except ImportError:
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 DB_PATH = os.getenv("DB_PATH", "seikatsu.db")
 JUDGE_HOUR = int(os.getenv("JUDGE_HOUR", "23"))
-WAKE_GRACE_MIN = int(os.getenv("WAKE_GRACE_MIN", "5"))   # 起床締切の操作猶予（分）＝起きてからボタンを押すまでのタイムラグはノーカウント
+WAKE_GRACE_MIN = int(os.getenv("WAKE_GRACE_MIN", "10"))   # 起床締切の操作猶予（分）＝起きてからボタンを押すまでのタイムラグはノーカウント
 KORA_EMOJI_NAME = os.getenv("KORA_EMOJI", "こら")
 ERAI_EMOJI_NAME = os.getenv("ERAI_EMOJI", "えらい")   # 達成した人に付ける絵文字（無ければ ✨）
 RADIO_TIME = os.getenv("RADIO_TIME", "06:30")          # ラジオ体操の開始時刻(HH:MM)
