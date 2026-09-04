@@ -467,6 +467,14 @@ async def main():
                                      {"day": "2026-09-02", "wake": 460, "sleep": 5.0, "ach": 0, "nizone": 1}], "テスト")
     check("個人グラフ生成", chart is not None and len(chart.getvalue()) > 10000, True)
 
+    # 📝チェックリストの導線（各パネルのショートカット＋☀️返事の行差し替え）
+    check("📝ショートカットが4パネル全部に", all(any(str(getattr(i, "custom_id", "")).startswith("sk_mycheck_") for i in V().children)
+                                             for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView)), True)
+    check("行差し替え: 単独リストは丸ごと更新", B.mycheck_replace_line("📝 **今日のチェック**（x）　✅ 0/2", "NEW"), "NEW")
+    check("行差し替え: ☀️返事は本文を保持", B.mycheck_replace_line("✅ 6:30 起床\n📅 今日の授業：数学\n📝 **今日のチェック**（x）　✅ 0/2\n-# 💡 豆", "NEW"),
+          "✅ 6:30 起床\n📅 今日の授業：数学\nNEW\n-# 💡 豆")
+    check("行差し替え: 行が無ければリストだけに", B.mycheck_replace_line("ただの文", "NEW"), "NEW")
+
     # 家事カウントは「押したボタンごと・本人のみ」
     for _ in range(2):
         await B.add_event(31, "chore", "clean", ts_dt=t(10))
