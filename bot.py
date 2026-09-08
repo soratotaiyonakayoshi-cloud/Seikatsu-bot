@@ -202,7 +202,9 @@ async def db_init():
               "ALTER TABLE users ADD COLUMN meals_set_day TEXT",
               "ALTER TABLE users ADD COLUMN teeth_set_day TEXT",
               "ALTER TABLE users ADD COLUMN radio_set_day TEXT",
-              "ALTER TABLE users ADD COLUMN chores_set_day TEXT"):
+              "ALTER TABLE users ADD COLUMN chores_set_day TEXT",
+              "ALTER TABLE users ADD COLUMN benkyou_min INTEGER NOT NULL DEFAULT 0",
+              "ALTER TABLE users ADD COLUMN benkyou_set_day TEXT"):
         try:
             await db.execute(m)
             await db.commit()
@@ -332,6 +334,10 @@ async def build_misses(u, day, d1, d2, is_sunday):
         n = len(await events_on(uid, day, "teeth"))
         if n < u["teeth_min"]:
             misses.append(f"🪥 歯磨き {n}/{u['teeth_min']} 回")
+    if u["benkyou_min"] and u["benkyou_set_day"] != day:
+        studied = await fetch_studied(day)   # None=連携未設定/API不通→この項目は判定しない
+        if studied is not None and str(uid) not in studied:
+            misses.append("📖 勉強 未達（みんなで暗記！！で今日1問も解いてない）")
     # 家事の種類ごとの頻度（/kaji）
     for st in await kaji_status(u, day):
         if st["due"]:
@@ -380,7 +386,8 @@ async def all_items_skipped(u, day):
     if any(v and sd != day for v, sd in (
             (u["wake_deadline"], u["wake_set_day"]), (u["sleep_min"], u["sleep_set_day"]),
             (u["bath_daily"], u["bath_set_day"]), (u["teeth_min"], u["teeth_set_day"]),
-            (u["meals_min"], u["meals_set_day"]), (u["radio_daily"], u["radio_set_day"]))):
+            (u["meals_min"], u["meals_set_day"]), (u["radio_daily"], u["radio_set_day"]),
+            (u["benkyou_min"], u["benkyou_set_day"]))):
         return False
     for col, _l, _e, _s in KAJI_CATS:
         if u[col] and (u["kaji_since"] or day) != day:
@@ -393,7 +400,8 @@ async def all_items_skipped(u, day):
 
 def has_any_setting(u):
     return bool(u["wake_deadline"] or u["sleep_min"] or u["bath_daily"] or u["meals_min"] or u["radio_daily"]
-                or u["kaji_cook"] or u["kaji_clean"] or u["kaji_dish"] or u["kaji_wash"] or u["kaji_trash"] or u["teeth_min"])
+                or u["kaji_cook"] or u["kaji_clean"] or u["kaji_dish"] or u["kaji_wash"] or u["kaji_trash"]
+                or u["teeth_min"] or u["benkyou_min"])
 
 def settings_text(u):
     parts = []
@@ -403,6 +411,7 @@ def settings_text(u):
     parts.append(f"🪥 歯磨き 1日{u['teeth_min']}回" if u["teeth_min"] else "🪥 歯磨き —")
     parts.append("🏃 ラジオ体操 毎日" if u["radio_daily"] else "🏃 ラジオ体操 —")
     parts.append(f"🍚 食事 1日{u['meals_min']}回" if u["meals_min"] else "🍚 食事 —")
+    parts.append("📖 勉強 毎日（みんなで暗記！！で1問以上）" if u["benkyou_min"] else "📖 勉強 —")
     kaji = [f"{e} {lb} {kaji_interval_text(u[col])}" for col, lb, e, _ in KAJI_CATS if u[col]]
     parts.append(("🧹 家事 " + "／".join(kaji)) if kaji else "🧹 家事 —")
     return "\n".join(parts)
@@ -867,6 +876,29 @@ async def streak_of(uid, day):
     return n
 
 MILESTONES = (3, 7, 14, 30, 50, 100, 365)
+
+_study_cache = {"day": None, "ids": None, "ts": 0}
+
+async def fetch_studied(day):
+    """みんなで暗記！！でその日1問でも解いたDiscordIDの集合。未設定・不通なら None（＝📖は判定しない。冤罪防止）"""
+    if not GAKUSHU_SECRET:
+        return None
+    now_ts = int(now_jst().timestamp())
+    if _study_cache["day"] == day and now_ts - _study_cache["ts"] < 120:
+        return _study_cache["ids"]
+    ids = None
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as sess:
+            async with sess.get(GAKUSHU_URL.rstrip("/") + "/api/seikatsu", params={"secret": GAKUSHU_SECRET, "day": day}) as r:
+                if r.status < 300:
+                    ids = set((await r.json()).get("studied") or [])
+                else:
+                    print(f"gakushu 勉強取得エラー {r.status}: {await r.text()}", flush=True)
+    except Exception as e:
+        print(f"gakushu 勉強取得失敗: {e!r}", flush=True)
+    _study_cache.update(day=day, ids=ids, ts=now_ts)
+    return ids
 
 async def gakushu_report(uid, name, day, achieved, streak, misses_n):
     """みんなで暗記！！(gakushu-rpg) へ判定結果を送る（達成日はメダル付与・🌅生活ランキング）。未設定なら何もしない"""
@@ -3720,10 +3752,12 @@ async def nakama_of(uid, wake_deadline):
                        nyuyoku="毎日入浴する", shokuji="1日の最低食事回数 1〜3（0で解除）",
                        rajio="毎朝のラジオ体操に参加する", kyujitsu="土日は起床締切を何時間遅らせるか 例 2（0で解除）",
                        hamigaki="1日の最低歯磨き回数 例 2（0で解除）",
+                       benkyou="毎日みんなで暗記！！で勉強する（1問でも解けばOK。Falseで解除）",
                        ryouri="料理：何日に1回 例 1=毎日（0で解除）", souji="掃除：何日に1回 例 7", sara="皿洗い：何日に1回 例 1",
                        sentaku="洗濯：何日に1回 例 3（5工程のどれかでOK）", gomi="ごみ捨て：何日に1回 例 3")
 async def saitei_command(interaction, kishou: str = None, suimin: float = None, nyuyoku: bool = None,
                          shokuji: int = None, rajio: bool = None, kyujitsu: float = None, hamigaki: int = None,
+                         benkyou: bool = None,
                          ryouri: int = None, souji: int = None, sara: int = None, sentaku: int = None, gomi: int = None):
     user = interaction.user
     await ensure_user(user)
@@ -3747,6 +3781,8 @@ async def saitei_command(interaction, kishou: str = None, suimin: float = None, 
         await db.execute("UPDATE users SET teeth_min=?, teeth_set_day=? WHERE id=?", (max(0, min(10, hamigaki)), today, str(user.id)))
     if kyujitsu is not None:
         await db.execute("UPDATE users SET holiday_shift=?, wake_set_day=? WHERE id=?", (int(max(0.0, min(12.0, kyujitsu)) * 60), today, str(user.id)))
+    if benkyou is not None:
+        await db.execute("UPDATE users SET benkyou_min=?, benkyou_set_day=? WHERE id=?", (1 if benkyou else 0, today, str(user.id)))
     if shokuji is not None:
         await db.execute("UPDATE users SET meals_min=?, meals_set_day=? WHERE id=?", (min(3, shokuji) if shokuji > 0 else None, today, str(user.id)))
     kaji_changed = False
@@ -3762,7 +3798,7 @@ async def saitei_command(interaction, kishou: str = None, suimin: float = None, 
     mate_txt = ""
     if u["wake_deadline"]:
         mate_txt = f"\n\n👥 同じ {u['wake_deadline']} 起床の仲間：" + ("、".join(mates) if mates else "まだいない（最初の一人！）")
-    changed_any = any(v is not None for v in (kishou, suimin, nyuyoku, shokuji, rajio, kyujitsu, hamigaki, ryouri, souji, sara, sentaku, gomi))
+    changed_any = any(v is not None for v in (kishou, suimin, nyuyoku, shokuji, rajio, kyujitsu, hamigaki, benkyou, ryouri, souji, sara, sentaku, gomi))
     grace = "\n\n🍀 今日設定・変更した項目は、**明日から**判定に入ります（初日から叱られない仕様）。" if changed_any else ""
     await interaction.response.send_message(f"🛠 **{user.display_name} の最低限**\n{settings_text(u)}{mate_txt}{grace}", ephemeral=True)
     if changed_any:

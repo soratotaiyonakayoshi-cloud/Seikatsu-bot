@@ -467,6 +467,22 @@ async def main():
                                      {"day": "2026-09-02", "wake": 460, "sleep": 5.0, "ach": 0, "nizone": 1}], "テスト")
     check("個人グラフ生成", chart is not None and len(chart.getvalue()) > 10000, True)
 
+    # 📖 勉強（みんなで暗記！！連携）
+    b1 = M(61, "勉強する人"); await B.ensure_user(b1)
+    b2 = M(62, "サボる人"); await B.ensure_user(b2)
+    await B.db.execute("UPDATE users SET benkyou_min=1 WHERE id IN ('61','62')"); await B.db.commit()
+    check("勉強: 連携未設定なら判定しない（冤罪防止）", await B.build_misses(await B.get_user(62), day, d1, d2, False), [])
+    B.GAKUSHU_SECRET = "test"
+    B._study_cache.update(day=day, ids={"61"}, ts=int(B.now_jst().timestamp()))
+    check("勉強: 解いた人は未達なし", await B.build_misses(await B.get_user(61), day, d1, d2, False), [])
+    check("勉強: 解いてない人は未達", await B.build_misses(await B.get_user(62), day, d1, d2, False),
+          ["📖 勉強 未達（みんなで暗記！！で今日1問も解いてない）"])
+    B._study_cache.update(day=day, ids=None, ts=int(B.now_jst().timestamp()))
+    check("勉強: API不通の日は判定しない", await B.build_misses(await B.get_user(62), day, d1, d2, False), [])
+    B.GAKUSHU_SECRET = ""
+    check("勉強: has_any_setting に含む", B.has_any_setting(await B.get_user(62)), True)
+    check("勉強: 設定表示に📖", "📖 勉強 毎日" in B.settings_text(await B.get_user(62)), True)
+
     # 夜勤🏭（起床・睡眠・ラジオ体操だけ免除）
     nw_eve = datetime(2026, 8, 5, 21, 0, tzinfo=JST)
     nw_am = datetime(2026, 8, 6, 8, 0, tzinfo=JST)

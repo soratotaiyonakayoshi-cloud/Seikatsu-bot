@@ -58,6 +58,7 @@
 - 🧹 家事（種類ごと・`/saitei` の ryouri/souji/sara/sentaku/gomi）：料理・掃除・皿洗い・洗濯それぞれ「N日に1回」。最後にやった日（未記録なら設定日）からN日空いたら未達。毎日判定。洗濯は5工程のどれかで「やった」扱い
 - 🏃 ラジオ体操：`rajio:True` の人は、その朝の再生中にVCにいなかったら未達
 - 🏭 夜勤：#起床🌅 の「今夜は夜勤」を押すと、対象の朝（夜に押せば翌朝・昼前に押せばその朝）の起床・睡眠・ラジオ体操を判定せず、朝の呼び出しメンションからも外す。ストリーク継続。他の項目は通常判定
+- 📖 勉強：`/saitei benkyou:True` の人は、[みんなで暗記！！](https://gakushu-rpg.pages.dev)でその日**1問も解いていなければ**未達（どの教材・ゲームでもOK）。両方Discordログインなので紐付け作業は不要。`GAKUSHU_SECRET` 設定時のみ有効で、API不通の日はこの項目を判定しない
 - 💊 処方TIPS：叱責には、未達項目に効きそうな #暮らしのtips📚 の投稿を1件添える（寝坊・睡眠→💤ねむり、食事・料理→🍳レシピ、家事→そのラベル→🧹家事ハック の順で検索。該当が無ければ付かない。選出は日付×人で安定）
 
 ## セットアップ
@@ -122,6 +123,7 @@ cd ~/seikatsu-bot && git pull && sudo systemctl restart seikatsu-bot
 
 ### みんなで暗記！！（gakushu-rpg）連携
 `.env` に `GAKUSHU_SECRET`（Cloudflare側 `VC_SECRET` と同じ値）を入れると、毎晩の判定結果を `/api/seikatsu` へ送信。達成した日は 🎫メダル10枚＋連続ボーナス（7日+30…）、HUDの🌅生活ランキング／プロフィールに反映。gakushu-rpg 側は `npm run seikatsu:remote` → `npm run deploy` が必要。
+逆方向の連携が **📖 勉強の最低限**：`/saitei benkyou:True` の人は、判定時に `GET /api/seikatsu?day=` で「その日1問以上解いたか」を照会して判定する（両アプリともDiscordログインなのでID紐付け不要）。
 
 ## 今後の予定
 - 使ってみて出てきた要望に応じて調整
