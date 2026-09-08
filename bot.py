@@ -64,7 +64,7 @@ CH = {
              "🧊 冷蔵庫＝期限が近い食品のメモ。登録すると期限の前日・当日の朝にお知らせ（3日過ぎたら自動で消えます）。"),
     "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
     "erai": ("えらい🌟", "最低限とは別に、今日がんばったことを報告して褒め合う場所。🌟ボタン（または /erai）から。判定はされません。\n"
-             "📌 やること宣言＝今日限りのメモ。終わったら✅、23時に引き継ぎ確認、放置なら翌朝ひっそり消えます（叱責なし）。"),
+             "📌 やること宣言＝今日限りのメモ（1行に1つ・まとめて宣言OK）。終わったら✅、23時に引き継ぎ確認、放置なら翌朝ひっそり消えます（叱責なし）。"),
     "bath": ("おふろ🛁", "🛁 お風呂に入ったら押す。🪥 歯磨きも（1日に何回でも）。"),
     "kora": ("叱責👹", "毎晩の判定で、最低限を守れなかった人が晒される場所。"),
     "tsushinbo": ("つうしんぼ📮", "毎週日曜の夜に、その週の通信簿（達成率ランキング・各賞）が届く場所。"),
@@ -173,7 +173,7 @@ CREATE TABLE IF NOT EXISTS custom_items(id INTEGER PRIMARY KEY AUTOINCREMENT, us
 CREATE TABLE IF NOT EXISTS custom_checks(day TEXT NOT NULL, user_id TEXT NOT NULL, item_id INTEGER NOT NULL, PRIMARY KEY(day, user_id, item_id));
 CREATE TABLE IF NOT EXISTS fridge_items(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, name TEXT NOT NULL, due_day TEXT NOT NULL, created_day TEXT);
 CREATE TABLE IF NOT EXISTS night_shifts(day TEXT NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY(day, user_id));
-CREATE TABLE IF NOT EXISTS memos(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, text TEXT NOT NULL, day TEXT NOT NULL, ts INTEGER, msg_id TEXT, carried INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS memos(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, text TEXT NOT NULL, day TEXT NOT NULL, ts INTEGER, msg_id TEXT, carried INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS memo_prompts(day TEXT NOT NULL, user_id TEXT NOT NULL, msg_id TEXT, PRIMARY KEY(day, user_id));
 """
 db = None
@@ -204,7 +204,8 @@ async def db_init():
               "ALTER TABLE users ADD COLUMN radio_set_day TEXT",
               "ALTER TABLE users ADD COLUMN chores_set_day TEXT",
               "ALTER TABLE users ADD COLUMN benkyou_min INTEGER NOT NULL DEFAULT 0",
-              "ALTER TABLE users ADD COLUMN benkyou_set_day TEXT"):
+              "ALTER TABLE users ADD COLUMN benkyou_set_day TEXT",
+              "ALTER TABLE memos ADD COLUMN done INTEGER NOT NULL DEFAULT 0"):
         try:
             await db.execute(m)
             await db.commit()
@@ -2822,30 +2823,17 @@ async def erai_command(interaction):
 #  23時の判定後に引き継ぎ確認、放置すれば翌朝自動で消える（叱責はしない）。
 # ------------------------------------------------------------
 async def open_memos(uid, day):
-    async with db.execute("SELECT * FROM memos WHERE user_id=? AND day=? ORDER BY id", (str(uid), day)) as c:
+    async with db.execute("SELECT * FROM memos WHERE user_id=? AND day=? AND done=0 ORDER BY id", (str(uid), day)) as c:
         return await c.fetchall()
 
-async def memo_edit_public(row, content):
-    """宣言メッセージを書き換える（完了✅など）。失敗しても本体処理は続行"""
-    if not row["msg_id"]:
+async def memo_delete_public_by_id(msg_id):
+    if not msg_id:
         return
     ch = await get_ch("erai")
     if not ch:
         return
     try:
-        m = await ch.fetch_message(int(row["msg_id"]))
-        await m.edit(content=content, view=None)
-    except Exception:
-        pass
-
-async def memo_delete_public(row):
-    if not row["msg_id"]:
-        return
-    ch = await get_ch("erai")
-    if not ch:
-        return
-    try:
-        m = await ch.fetch_message(int(row["msg_id"]))
+        m = await ch.fetch_message(int(msg_id))
         await m.delete()
     except Exception:
         pass
@@ -2853,9 +2841,49 @@ async def memo_delete_public(row):
 def memo_done_text(name, text, guild):
     return f"✅ **{name}**：~~{text}~~　やりきった！{erai_emoji(guild)}"
 
+async def memo_group_payload(rows, guild):
+    """メモ群（同じ宣言メッセージのタスクたち）から公開メッセージの本文とViewを作る"""
+    u = await get_user(rows[0]["user_id"])
+    name = u["name"] if u else "？"
+    open_rows = [r for r in rows if not r["done"]]
+    if len(rows) == 1:
+        r = rows[0]
+        content = memo_done_text(name, r["text"], guild) if r["done"] else \
+            f"📌 **{name}**：{r['text']}" + ("　🌅持ち越し" if r["carried"] else "")
+    else:
+        tail = f"　ぜんぶやりきった！{erai_emoji(guild)}" if not open_rows else f"（✅ {len(rows) - len(open_rows)}/{len(rows)}）"
+        lines = [(f"✅ ~~{r['text']}~~" if r["done"] else f"⬜ {r['text']}" + ("　🌅" if r["carried"] else "")) for r in rows]
+        content = f"{'✅' if not open_rows else '📌'} **{name}** のやること{tail}\n" + "\n".join(lines)
+    view = None
+    if open_rows:
+        view = discord.ui.View(timeout=None)
+        for r in open_rows[:25]:
+            view.add_item(MemoDoneButton(r["id"], text=(r["text"] if len(rows) > 1 else None)))
+    return content, view
+
+async def refresh_memo_message(msg_id):
+    """宣言メッセージをDBの今の状態で描き直す。メモが1件も残っていなければメッセージごと消す"""
+    if not msg_id:
+        return
+    ch = await get_ch("erai")
+    if not ch:
+        return
+    async with db.execute("SELECT * FROM memos WHERE msg_id=? ORDER BY id", (str(msg_id),)) as c:
+        rows = await c.fetchall()
+    if not rows:
+        await memo_delete_public_by_id(msg_id)
+        return
+    content, view = await memo_group_payload(rows, ch.guild)
+    try:
+        m = await ch.fetch_message(int(msg_id))
+        await m.edit(content=content, view=view)
+    except Exception:
+        pass
+
 class MemoDoneButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_memo_done:(?P<id>\d+)"):
-    def __init__(self, memo_id):
-        super().__init__(discord.ui.Button(label="✅ やりきった", style=discord.ButtonStyle.success, custom_id=f"sk_memo_done:{memo_id}"))
+    def __init__(self, memo_id, text=None):
+        label = ("✅ " + text)[:80] if text else "✅ やりきった"
+        super().__init__(discord.ui.Button(label=label, style=discord.ButtonStyle.success, custom_id=f"sk_memo_done:{memo_id}"))
         self.memo_id = int(memo_id)
 
     @classmethod
@@ -2865,37 +2893,61 @@ class MemoDoneButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_me
     async def callback(self, interaction):
         async with db.execute("SELECT * FROM memos WHERE id=?", (self.memo_id,)) as c:
             row = await c.fetchone()
-        if not row:
+        if not row or row["done"]:
             await interaction.response.send_message("このメモはもうありません。", ephemeral=True)
             return
         if row["user_id"] != str(interaction.user.id):
             await interaction.response.send_message("宣言した本人だけが押せます。応援は絵文字リアクションでどうぞ！", ephemeral=True)
             return
-        await db.execute("DELETE FROM memos WHERE id=?", (self.memo_id,))
+        await db.execute("UPDATE memos SET done=1 WHERE id=?", (self.memo_id,))
         await db.commit()
-        await interaction.response.edit_message(content=memo_done_text(interaction.user.display_name, row["text"], interaction.guild), view=None)
+        async with db.execute("SELECT * FROM memos WHERE msg_id=? ORDER BY id", (str(interaction.message.id),)) as c:
+            rows = await c.fetchall()
+        if rows:
+            content, view = await memo_group_payload(rows, interaction.guild)
+            await interaction.response.edit_message(content=content, view=view)
+        else:
+            await interaction.response.edit_message(content=memo_done_text(interaction.user.display_name, row["text"], interaction.guild), view=None)
+
+def parse_memo_lines(raw):
+    """フォームの複数行入力 → タスクのリスト（1行=1つ・行頭の箇条書き記号は除去・最大10件）"""
+    out = []
+    for line in (raw or "").splitlines():
+        t = line.strip().lstrip("・-*•●○➀").strip()[:80]
+        if t:
+            out.append(t)
+    return out[:10]
 
 class MemoModal(discord.ui.Modal, title="📌 やることメモ"):
-    what = discord.ui.TextInput(label="やること（今日ぶん・短くてOK）", placeholder="例：参考文献を探す／振込／ゴミ袋を買う", max_length=80)
+    what = discord.ui.TextInput(label="やること（1行に1つ・まとめて宣言OK）", style=discord.TextStyle.paragraph,
+                                placeholder="例：\n参考文献を探す\n振込\nゴミ袋を買う", max_length=400)
 
     async def on_submit(self, interaction):
         user = interaction.user
         await ensure_user(user)
         now = now_jst()
-        text = self.what.value.strip()
-        cur = await db.execute("INSERT INTO memos(user_id,text,day,ts) VALUES(?,?,?,?)",
-                               (str(user.id), text, day_str(now), int(now.timestamp())))
-        mid = cur.lastrowid
+        tasks = parse_memo_lines(self.what.value)
+        if not tasks:
+            await interaction.response.send_message("⚠️ やることが読み取れませんでした。1行に1つ書いてね。", ephemeral=True)
+            return
+        ids = []
+        for t in tasks:
+            cur = await db.execute("INSERT INTO memos(user_id,text,day,ts) VALUES(?,?,?,?)",
+                                   (str(user.id), t, day_str(now), int(now.timestamp())))
+            ids.append(cur.lastrowid)
         await db.commit()
         ch = await get_ch("erai")
         if ch:
-            view = discord.ui.View(timeout=None)
-            view.add_item(MemoDoneButton(mid))
-            msg = await ch.send(f"📌 **{user.display_name}**：{text}", view=view)
-            await db.execute("UPDATE memos SET msg_id=? WHERE id=?", (str(msg.id), mid))
+            q = ",".join("?" * len(ids))
+            async with db.execute(f"SELECT * FROM memos WHERE id IN ({q}) ORDER BY id", ids) as c:
+                rows = await c.fetchall()
+            content, view = await memo_group_payload(rows, interaction.guild)
+            msg = await ch.send(content, view=view)
+            await db.execute(f"UPDATE memos SET msg_id=? WHERE id IN ({q})", [str(msg.id)] + ids)
             await db.commit()
+        head = f"「{tasks[0]}」" if len(tasks) == 1 else f"{len(tasks)}件"
         await interaction.response.send_message(
-            f"📌 「{text}」を宣言しました。終わったら ✅ を。23時に残っていたら引き継ぐか聞きます（放置すると翌朝ひっそり消えます）" + hitokoto_suffix(),
+            f"📌 {head}を宣言しました。終わったら ✅ を。23時に残っていたら引き継ぐか聞きます（放置すると翌朝ひっそり消えます）" + hitokoto_suffix(),
             ephemeral=True)
         if ch:
             await bump_panel("erai")
@@ -2909,10 +2961,10 @@ class MemoListButton(discord.ui.Button):
         async with db.execute("SELECT * FROM memos WHERE id=? AND user_id=?", (self.memo_id, str(interaction.user.id))) as c:
             row = await c.fetchone()
         note = ""
-        if row:
-            await db.execute("DELETE FROM memos WHERE id=?", (row["id"],))
+        if row and not row["done"]:
+            await db.execute("UPDATE memos SET done=1 WHERE id=?", (row["id"],))
             await db.commit()
-            await memo_edit_public(row, memo_done_text(interaction.user.display_name, row["text"], interaction.guild))
+            await refresh_memo_message(row["msg_id"])
             note = f"✅ 「{row['text']}」やりきった！\n\n"
         rows = await open_memos(interaction.user.id, day_str(now_jst()))
         if rows:
@@ -2951,7 +3003,7 @@ class MemoCarryButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_m
             return
         now = now_jst()
         target = day_str(now + timedelta(days=1)) if now.hour >= JUDGE_HOUR else day_str(now)
-        cur = await db.execute("UPDATE memos SET day=?, carried=carried+1 WHERE user_id=? AND day<?", (target, self.uid, target))
+        cur = await db.execute("UPDATE memos SET day=?, carried=carried+1 WHERE user_id=? AND day<? AND done=0", (target, self.uid, target))
         await db.execute("DELETE FROM memo_prompts WHERE user_id=? AND msg_id=?", (self.uid, str(interaction.message.id)))
         await db.commit()
         await interaction.response.edit_message(content=f"🌅 {cur.rowcount}件を明日へ引き継ぎました。ぼちぼちいこう。", view=None)
@@ -2970,13 +3022,13 @@ class MemoDropButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_me
             await interaction.response.send_message("本人だけが選べます。", ephemeral=True)
             return
         today = day_str(now_jst())
-        async with db.execute("SELECT * FROM memos WHERE user_id=? AND day<=?", (self.uid, today)) as c:
+        async with db.execute("SELECT * FROM memos WHERE user_id=? AND day<=? AND done=0", (self.uid, today)) as c:
             rows = await c.fetchall()
-        for r in rows:
-            await memo_delete_public(r)
-        await db.execute("DELETE FROM memos WHERE user_id=? AND day<=?", (self.uid, today))
+        await db.execute("DELETE FROM memos WHERE user_id=? AND day<=? AND done=0", (self.uid, today))
         await db.execute("DELETE FROM memo_prompts WHERE user_id=? AND msg_id=?", (self.uid, str(interaction.message.id)))
         await db.commit()
+        for mid in {r["msg_id"] for r in rows if r["msg_id"]}:
+            await refresh_memo_message(mid)   # ✅済みが残っていれば表示更新、空なら宣言ごと削除
         await interaction.response.edit_message(content="🗑 消しました。やらない決断もえらい。また明日！", view=None)
 
 async def memo_carry_prompts(day):
@@ -3006,12 +3058,35 @@ async def memo_carry_prompts(day):
         await bump_panel("erai")
 
 async def memo_cleanup(today):
-    """引き継がれなかった昨日以前のメモを自動削除し、宣言・確認メッセージも畳む。古い夜勤記録も掃除"""
+    """引き継がれなかった昨日以前のメモを自動削除し、宣言・確認メッセージも畳む。古い夜勤記録も掃除。
+    宣言メッセージの扱い：✅だけの宣言は歴史として残す／一部✅は✅だけ残す形に固定／全部未完了なら削除"""
     async with db.execute("SELECT * FROM memos WHERE day<?", (today,)) as c:
-        rows = await c.fetchall()
-    for r in rows:
-        await memo_delete_public(r)
+        stale = await c.fetchall()
+    by_msg = {}
+    for r in stale:
+        if r["msg_id"]:
+            by_msg.setdefault(r["msg_id"], []).append(r)
     await db.execute("DELETE FROM memos WHERE day<?", (today,))
+    await db.commit()
+    ch = await get_ch("erai")
+    for mid, group in by_msg.items():
+        async with db.execute("SELECT 1 FROM memos WHERE msg_id=? LIMIT 1", (mid,)) as c:
+            survivors = await c.fetchone()
+        done_rows = [r for r in group if r["done"]]
+        open_rows = [r for r in group if not r["done"]]
+        if survivors:
+            await refresh_memo_message(mid)   # 引き継がれた分が残っている→描き直し（流れた行は消える）
+        elif done_rows and open_rows and ch:
+            try:                              # 一部だけ✅→✅だけ残す形に固定
+                m = await ch.fetch_message(int(mid))
+                u = await get_user(group[0]["user_id"])
+                nm = u["name"] if u else "？"
+                await m.edit(content=f"✅ **{nm}** のやること\n" + "\n".join(f"✅ ~~{r['text']}~~" for r in done_rows), view=None)
+            except Exception:
+                pass
+        elif not done_rows:
+            await memo_delete_public_by_id(mid)   # 何も達成されず流れた→宣言ごと消す
+        # 全部✅のメッセージはそのまま歴史として残す
     ch = await get_ch("erai")
     async with db.execute("SELECT * FROM memo_prompts WHERE day<?", (today,)) as c:
         prows = await c.fetchall()

@@ -518,6 +518,23 @@ async def main():
     check("メモ: 昨日以前は自動消滅・今日は残る", [r["text"] for r in await B.open_memos("51", nxt)], ["振込", "ゴミ袋を買う"])
     async with B.db.execute("SELECT COUNT(*) AS n FROM memo_prompts") as c:
         check("メモ: 古い引き継ぎ確認も掃除", (await c.fetchone())["n"], 0)
+    check("メモ: 複数行パース（箇条書き記号・空行を整理）", B.parse_memo_lines("・参考文献を探す\n\n- 振込\nゴミ袋を買う  "),
+          ["参考文献を探す", "振込", "ゴミ袋を買う"])
+    check("メモ: 最大10件", len(B.parse_memo_lines("\n".join(f"t{i}" for i in range(15)))), 10)
+    for txt in ("A", "B", "C"):
+        await B.db.execute("INSERT INTO memos(user_id,text,day,ts,msg_id) VALUES('71',?,?,1,'777')", (txt, day))
+    await B.db.execute("UPDATE memos SET done=1 WHERE user_id='71' AND text='B'"); await B.db.commit()
+    check("メモ: 完了済みは一覧から消える", [r["text"] for r in await B.open_memos("71", day)], ["A", "C"])
+    async with B.db.execute("SELECT * FROM memos WHERE msg_id='777' ORDER BY id") as c:
+        grows = await c.fetchall()
+    gc_content, gc_view = await B.memo_group_payload(grows, None)
+    check("メモ: グループ本文に✅と⬜と進捗", "✅ ~~B~~" in gc_content and "⬜ A" in gc_content and "（✅ 1/3）" in gc_content, True)
+    check("メモ: 未完了ぶんだけ✅ボタン", len(gc_view.children), 2)
+    await B.db.execute("UPDATE memos SET done=1 WHERE user_id='71'"); await B.db.commit()
+    async with B.db.execute("SELECT * FROM memos WHERE msg_id='777' ORDER BY id") as c:
+        grows = await c.fetchall()
+    gc_content2, gc_view2 = await B.memo_group_payload(grows, None)
+    check("メモ: 全完了で祝い文＋ボタンなし", "ぜんぶやりきった" in gc_content2 and gc_view2 is None, True)
     check("えらいパネルに📌 2ボタン", {"sk_memo_add", "sk_memo_list"} <= {i.custom_id for i in B.EraiView().children}, True)
     check("起床パネルに🏭", any(i.custom_id == "sk_yakin" for i in B.WakeView().children), True)
 
