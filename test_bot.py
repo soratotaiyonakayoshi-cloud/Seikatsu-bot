@@ -538,6 +538,21 @@ async def main():
     check("えらいパネルに📌 2ボタン", {"sk_memo_add", "sk_memo_list"} <= {i.custom_id for i in B.EraiView().children}, True)
     check("起床パネルに🏭", any(i.custom_id == "sk_yakin" for i in B.WakeView().children), True)
 
+    # 作業部屋🖥
+    check("作業: fmt 45分", B.fmt_work(45 * 60), "45分")
+    check("作業: fmt 1時間23分", B.fmt_work(83 * 60), "1時間23分")
+    st_ = int(datetime(2026, 8, 5, 23, 30, tzinfo=JST).timestamp())
+    en_ = int(datetime(2026, 8, 6, 1, 0, tzinfo=JST).timestamp())
+    check("作業: 日またぎで分割", [(d, e - s) for d, s, e in B.split_session(st_, en_)],
+          [("2026-08-05", 1800), ("2026-08-06", 3600)])
+    check("作業: 同日は1区間", len(B.split_session(st_, st_ + 600)), 1)
+    await B.db.execute("INSERT INTO work_sessions(user_id,start_ts,end_ts,day) VALUES('81',0,7200,?)", (day,))
+    await B.db.execute("INSERT INTO work_sessions(user_id,start_ts,end_ts,day) VALUES('82',0,3600,?)", (day,))
+    await B.db.commit()
+    wa = await B.work_award(d1, d2)
+    check("作業: もくもく賞は最長の人（2時間）", wa is not None and "2時間0分" in wa, True)
+    check("作業: チャンネル定義", B.CH["worklog"][0], "作業ログ🖥")
+
     # 📝チェックリストの導線（各パネルのショートカット＋☀️返事の行差し替え）
     check("📝ショートカットが4パネル全部に", all(any(str(getattr(i, "custom_id", "")).startswith("sk_mycheck_") for i in V().children)
                                              for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView)), True)

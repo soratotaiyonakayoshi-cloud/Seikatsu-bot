@@ -38,6 +38,9 @@ RADIO_MP3 = os.getenv("RADIO_MP3", "radio.mp3")        # 音源ファイル（�
 FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg")
 BACKUP_DIR = os.getenv("BACKUP_DIR", "backups")   # 毎晩の判定後に seikatsu.db を7世代バックアップ
 RADIO_VC_NAME = "ラジオ体操🏃"
+WORK_VC_NAME = "作業部屋🖥"
+WORK_MIN_LOG_SEC = 600   # これ未満のセッションはログを流さない（時間は記録する）
+WORK_TO_GAKUSHU = os.getenv("WORK_TO_GAKUSHU", "1") == "1"   # 作業部屋の時間をみんなで暗記！！の作業時間にも加算
 # 改名前の旧チャンネル名（/setup が既存チャンネルを見つけて改名するために使う）
 OLD_CH_NAMES = {"wake": "起床", "meal": "ごはん", "chore": "家事", "bath": "おふろ", "kora": "こら",
                 "kadai": "課題", "tsushinbo": "つうしんぼ", "settei": "設定"}
@@ -65,6 +68,8 @@ CH = {
     "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
     "erai": ("えらい🌟", "最低限とは別に、今日がんばったことを報告して褒め合う場所。🌟ボタン（または /erai）から。判定はされません。\n"
              "📌 やること宣言＝今日限りのメモ（1行に1つ・まとめて宣言OK）。終わったら✅、23時に引き継ぎ確認、放置なら翌朝ひっそり消えます（叱責なし）。"),
+    "worklog": ("作業ログ🖥", f"🔊{WORK_VC_NAME} に入ると計測開始・出ると終了。入室中に ✍ ボタンで「何をやるか」をひとこと宣言できます。\n"
+                "10分未満のセッションはログに残りません（時間は記録）。`/kiroku` に今週の作業時間、通信簿に🖥もくもく賞。"),
     "bath": ("おふろ🛁", "🛁 お風呂に入ったら押す。🪥 歯磨きも（1日に何回でも）。"),
     "kora": ("叱責👹", "毎晩の判定で、最低限を守れなかった人が晒される場所。"),
     "tsushinbo": ("つうしんぼ📮", "毎週日曜の夜に、その週の通信簿（達成率ランキング・各賞）が届く場所。"),
@@ -175,6 +180,8 @@ CREATE TABLE IF NOT EXISTS fridge_items(id INTEGER PRIMARY KEY AUTOINCREMENT, us
 CREATE TABLE IF NOT EXISTS night_shifts(day TEXT NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY(day, user_id));
 CREATE TABLE IF NOT EXISTS memos(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, text TEXT NOT NULL, day TEXT NOT NULL, ts INTEGER, msg_id TEXT, carried INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS memo_prompts(day TEXT NOT NULL, user_id TEXT NOT NULL, msg_id TEXT, PRIMARY KEY(day, user_id));
+CREATE TABLE IF NOT EXISTS work_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, start_ts INTEGER NOT NULL, end_ts INTEGER, day TEXT NOT NULL, note TEXT, msg_id TEXT);
+CREATE INDEX IF NOT EXISTS idx_work_user_day ON work_sessions(user_id, day);
 """
 db = None
 
@@ -439,7 +446,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(SetteiView())
         self.add_view(IntroView())
         self.add_dynamic_items(DoneButton, MealFixButton, PraiseButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
-                               MemoDoneButton, MemoCarryButton, MemoDropButton)
+                               MemoDoneButton, MemoCarryButton, MemoDropButton, WorkNoteButton)
         self.add_view(EraiView())
         # コマンドの同期はグローバルではなくサーバー単位で行う（即時反映）。on_ready 参照。
 
@@ -1136,6 +1143,12 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
         award("😴 二度寝賞", "nizone", fmt=lambda v: f"{v}回"),
         award("👹 こら賞", "miss_n", fmt=lambda v: f"未達 {v}件"),
     ) if a]
+    try:
+        wa = await work_award(d1, d2)
+        if wa:
+            awards.append(wa)
+    except Exception as e:
+        print(f"もくもく賞集計エラー: {e!r}", flush=True)
     d1s, d2s = d1[5:].replace("-", "/"), d2[5:].replace("-", "/")
     if kind == "week":
         emb = discord.Embed(title=f"📮 今週の通信簿（{d1s}〜{d2s}）" + ("（手動）" if manual else ""), color=discord.Color.gold())
@@ -1476,6 +1489,10 @@ async def on_ready():
             await bot.tree.sync()
         except Exception as e:
             print(f"グローバルコマンド削除エラー: {e!r}", flush=True)
+    try:
+        await reconcile_work_sessions()   # 再起動中に入退室があっても作業セッションを立て直す
+    except Exception as e:
+        print(f"作業部屋の再同期エラー: {e!r}", flush=True)
     if not judge_loop.is_running():
         judge_loop.start()
     if not radio_loop.is_running():
@@ -3101,6 +3118,182 @@ async def memo_cleanup(today):
     await db.execute("DELETE FROM night_shifts WHERE day<?", ((date.fromisoformat(today) - timedelta(days=60)).isoformat(),))
     await db.commit()
 
+# ------------------------------------------------------------
+#  作業部屋🖥
+#  🔊作業部屋🖥（VC）に入ると計測開始・出ると終了。#作業ログ🖥 に
+#  「はじめました（📌今日のやること付き）」→ 退室で「おつかれさま！1h23分」に育つ。
+#  ✍ボタンで作業内容をひとこと宣言（任意）。10分未満はログを流さない。
+#  ミュート等の切替では計測をリセットしない（NOKOで踏んだバグの再発防止）。
+# ------------------------------------------------------------
+def fmt_work(seconds):
+    m = int((seconds or 0) // 60)
+    return f"{m // 60}時間{m % 60}分" if m >= 60 else f"{m}分"
+
+def split_session(start_ts, end_ts):
+    """セッションをJSTの日付ごとに分割 → [(day, start, end), ...]（寝落ちで日をまたいでも統計が壊れない）"""
+    out = []
+    s = start_ts
+    while s < end_ts:
+        d0 = datetime.fromtimestamp(s, JST)
+        nxt = int((d0.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)).timestamp())
+        e = min(end_ts, nxt)
+        out.append((day_str(d0), s, e))
+        s = e
+    return out or [(day_str(datetime.fromtimestamp(start_ts, JST)), start_ts, end_ts)]
+
+async def gakushu_vc_report(uid, seconds):
+    """作業時間をみんなで暗記！！の作業時間（/api/vc）にも加算。失敗しても本体処理は続行"""
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as sess:
+            async with sess.post(GAKUSHU_URL.rstrip("/") + "/api/vc",
+                                 json={"secret": GAKUSHU_SECRET, "uid": str(uid), "seconds": int(seconds)}) as r:
+                if r.status >= 300:
+                    print(f"gakushu 作業時間加算エラー {r.status}", flush=True)
+    except Exception as e:
+        print(f"gakushu 作業時間加算失敗: {e!r}", flush=True)
+
+class WorkNoteModal(discord.ui.Modal, title="✍ 何をやる？"):
+    txt = discord.ui.TextInput(label="作業内容をひとこと", placeholder="例：レポート執筆／英検の単語／課題の実験レポ", max_length=80)
+
+    def __init__(self, session_id):
+        super().__init__()
+        self.session_id = int(session_id)
+
+    async def on_submit(self, interaction):
+        note = self.txt.value.strip()[:80]
+        await db.execute("UPDATE work_sessions SET note=? WHERE id=?", (note, self.session_id))
+        await db.commit()
+        now = now_jst()
+        memos_txt = "／".join(r["text"] for r in await open_memos(str(interaction.user.id), day_str(now)))
+        content = (f"🖥 **{interaction.user.display_name}** さんが作業中：**{note}**"
+                   + (f"\n📌 {memos_txt}" if memos_txt else ""))
+        try:
+            await interaction.response.edit_message(content=content)
+        except Exception:
+            await interaction.response.send_message("✍ 記録しました。", ephemeral=True)
+
+class WorkNoteButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_work_note:(?P<id>\d+)"):
+    def __init__(self, session_id):
+        super().__init__(discord.ui.Button(label="✍ 何やるか宣言", style=discord.ButtonStyle.secondary, custom_id=f"sk_work_note:{session_id}"))
+        self.session_id = int(session_id)
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["id"])
+
+    async def callback(self, interaction):
+        async with db.execute("SELECT * FROM work_sessions WHERE id=?", (self.session_id,)) as c:
+            row = await c.fetchone()
+        if not row or row["end_ts"] is not None:
+            await interaction.response.send_message("このセッションはもう終了しています。", ephemeral=True)
+            return
+        if row["user_id"] != str(interaction.user.id):
+            await interaction.response.send_message("作業中の本人だけが宣言できます。", ephemeral=True)
+            return
+        await interaction.response.send_modal(WorkNoteModal(self.session_id))
+
+async def work_start(member):
+    await ensure_user(member)
+    uid = str(member.id)
+    await work_close(uid, member.display_name)   # 万一開きっぱなしがあれば静かに閉じてから
+    now = now_jst()
+    cur = await db.execute("INSERT INTO work_sessions(user_id,start_ts,day) VALUES(?,?,?)", (uid, int(now.timestamp()), day_str(now)))
+    sid = cur.lastrowid
+    await db.commit()
+    ch = await get_ch("worklog")
+    if not ch:
+        return
+    memos_txt = "／".join(r["text"] for r in await open_memos(uid, day_str(now)))
+    view = discord.ui.View(timeout=None)
+    view.add_item(WorkNoteButton(sid))
+    try:
+        msg = await ch.send(f"🖥 **{member.display_name}** さんが作業をはじめました" + (f"\n📌 {memos_txt}" if memos_txt else ""), view=view)
+        await db.execute("UPDATE work_sessions SET msg_id=? WHERE id=?", (str(msg.id), sid))
+        await db.commit()
+    except Exception as e:
+        print(f"作業ログ投稿失敗: {e!r}", flush=True)
+
+async def work_close(uid, name, end_ts=None):
+    """開いているセッションを閉じて日ごとに記録。10分未満はログ削除、以上なら「おつかれさま」へ書き換え"""
+    uid = str(uid)
+    async with db.execute("SELECT * FROM work_sessions WHERE user_id=? AND end_ts IS NULL ORDER BY id DESC LIMIT 1", (uid,)) as c:
+        row = await c.fetchone()
+    if not row:
+        return
+    end_ts = max(end_ts or int(now_jst().timestamp()), row["start_ts"])
+    segs = split_session(row["start_ts"], end_ts)
+    d0, _s0, e0 = segs[0]
+    await db.execute("UPDATE work_sessions SET end_ts=?, day=? WHERE id=?", (e0, d0, row["id"]))
+    for d, s, e in segs[1:]:
+        await db.execute("INSERT INTO work_sessions(user_id,start_ts,end_ts,day,note) VALUES(?,?,?,?,?)", (uid, s, e, d, row["note"]))
+    await db.commit()
+    total = end_ts - row["start_ts"]
+    ch = await get_ch("worklog")
+    if ch and row["msg_id"]:
+        try:
+            m = await ch.fetch_message(int(row["msg_id"]))
+            if total < WORK_MIN_LOG_SEC:
+                await m.delete()   # ちょい入室はログに残さない（時間は記録済み）
+            else:
+                await m.edit(content=f"🖥 **{name}** 作業おつかれさま！ **{fmt_work(total)}**"
+                             + (f"：{row['note']}" if row["note"] else "") + hitokoto_suffix(), view=None)
+        except Exception:
+            pass
+    if total >= 60 and GAKUSHU_SECRET and WORK_TO_GAKUSHU:
+        await gakushu_vc_report(uid, total)
+
+async def reconcile_work_sessions():
+    """再起動時の整合：VCにいない人の開きっぱなしセッションを閉じ、いる人のセッションを開く"""
+    wid = await meta_get("ch_workvc")
+    vc = bot.get_channel(int(wid)) if wid else None
+    present = {str(m.id): m for m in vc.members if not m.bot} if vc else {}
+    async with db.execute("SELECT DISTINCT user_id FROM work_sessions WHERE end_ts IS NULL") as c:
+        open_uids = [r["user_id"] for r in await c.fetchall()]
+    for uid in open_uids:
+        if uid not in present:
+            u = await get_user(uid)
+            await work_close(uid, u["name"] if u else "？")
+    for uid, m in present.items():
+        if uid not in open_uids:
+            await work_start(m)
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    if member.bot:
+        return
+    b_id = before.channel.id if before.channel else None
+    a_id = after.channel.id if after.channel else None
+    if b_id == a_id:
+        return   # ミュート・画面共有の切替は無視
+    wid = await meta_get("ch_workvc")
+    if not wid:
+        return
+    wid = int(wid)
+    try:
+        if a_id == wid and b_id != wid:
+            await work_start(member)
+        elif b_id == wid and a_id != wid:
+            await work_close(member.id, member.display_name)
+    except Exception as e:
+        print(f"作業部屋エラー: {e!r}", flush=True)
+
+async def work_award(d1, d2):
+    """週次通信簿の🖥もくもく賞（同点は全員）"""
+    async with db.execute("SELECT user_id, SUM(end_ts-start_ts) AS s FROM work_sessions "
+                          "WHERE day BETWEEN ? AND ? AND end_ts IS NOT NULL GROUP BY user_id HAVING s>0 ORDER BY s DESC", (d1, d2)) as c:
+        rows = await c.fetchall()
+    if not rows:
+        return None
+    best = rows[0]["s"]
+    names = []
+    for r in rows:
+        if r["s"] != best:
+            break
+        u = await get_user(r["user_id"])
+        names.append(u["name"] if u else "？")
+    return "🖥 もくもく賞：" + "、".join(f"**{n}**" for n in names) + f"（{fmt_work(best)}）"
+
 
 # ============================================================
 #  暮らしのTIPS📚（フォーラム×Bot：投稿を知識ストック化・🔖保存・検索・今日のTIPS）
@@ -3757,6 +3950,8 @@ async def setup_command(interaction):
                              lambda n: guild.create_text_channel(n, category=cat))
     vc = await find_or_rename("radio", RADIO_VC_NAME, OLD_RADIO_VC_NAME, guild.voice_channels,
                               lambda n: guild.create_voice_channel(n, category=cat))
+    await find_or_rename("workvc", WORK_VC_NAME, WORK_VC_NAME, guild.voice_channels,
+                         lambda n: guild.create_voice_channel(n, category=cat))
     haj = await get_ch("hajimeni")
     if haj:
         await make_readonly(haj, guild, "ガイド用チャンネルは読み取り専用")
@@ -3950,6 +4145,11 @@ async def kiroku_command(interaction):
         yakin_n = (await c.fetchone())["n"]
     if yakin_n:
         week.append(f"🏭夜勤 {yakin_n} 回")
+    async with db.execute("SELECT COALESCE(SUM(end_ts-start_ts),0) AS s FROM work_sessions "
+                          "WHERE user_id=? AND day BETWEEN ? AND ? AND end_ts IS NOT NULL", (str(user.id), d1, d2)) as c:
+        work_s = (await c.fetchone())["s"]
+    if work_s:
+        week.append(f"🖥作業 {fmt_work(work_s)}")
     u = await get_user(user.id)
     emb = discord.Embed(title=f"📖 {user.display_name} の記録", color=discord.Color.gold())
     emb.add_field(name=f"今日（{day}）", value="\n".join(today), inline=False)
