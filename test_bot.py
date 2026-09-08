@@ -467,6 +467,44 @@ async def main():
                                      {"day": "2026-09-02", "wake": 460, "sleep": 5.0, "ach": 0, "nizone": 1}], "テスト")
     check("個人グラフ生成", chart is not None and len(chart.getvalue()) > 10000, True)
 
+    # 夜勤🏭（起床・睡眠・ラジオ体操だけ免除）
+    nw_eve = datetime(2026, 8, 5, 21, 0, tzinfo=JST)
+    nw_am = datetime(2026, 8, 6, 8, 0, tzinfo=JST)
+    check("夜勤: 夜に押すと翌日が対象", B.yakin_target_day(nw_eve), "2026-08-06")
+    check("夜勤: 朝に押すと当日が対象（夜勤明け）", B.yakin_target_day(nw_am), "2026-08-06")
+    y1 = M(41, "夜勤者"); await B.ensure_user(y1)
+    await B.db.execute("UPDATE users SET wake_deadline='07:00', sleep_min=6, radio_daily=1, meals_min=1 WHERE id='41'")
+    await B.db.execute("INSERT OR IGNORE INTO night_shifts(day,user_id) VALUES(?, '41')", (day,))
+    await B.db.commit()
+    m41 = await B.build_misses(await B.get_user(41), day, d1, d2, False)
+    check("夜勤: 起床・睡眠・ラジオ体操は判定されない", m41, ["🍚 食事 0/1 回"])
+    check("夜勤: is_night_shift", await B.is_night_shift(41, day), True)
+    check("夜勤: 別の日は通常", await B.is_night_shift(41, "2026-08-09"), False)
+
+    # やることメモ📌（今日限り・引き継ぎ・自動消滅）
+    await B.db.execute("INSERT INTO memos(user_id,text,day,ts) VALUES('51','振込',?,1)", (day,))
+    await B.db.execute("INSERT INTO memos(user_id,text,day,ts) VALUES('51','ゴミ袋を買う',?,1)", (day,))
+    await B.db.execute("INSERT INTO memos(user_id,text,day,ts,carried) VALUES('51','古いメモ','2026-08-01',1,0)")
+    await B.db.commit()
+    ms = await B.open_memos("51", day)
+    check("メモ: 今日の未完了は2件", [r["text"] for r in ms], ["振込", "ゴミ袋を買う"])
+    check("メモ: 一覧テキスト", "振込" in B.memo_list_text(ms) and "押したら完了" in B.memo_list_text(ms), True)
+    nxt = "2026-08-06"
+    await B.db.execute("UPDATE memos SET day=?, carried=carried+1 WHERE user_id='51' AND day<?", (nxt, nxt))
+    await B.db.commit()
+    ms2 = await B.open_memos("51", nxt)
+    check("メモ: 引き継ぎで翌日へ（持ち越し印つき）", len(ms2) == 3 and all(r["carried"] == 1 for r in ms2), True)
+    check("メモ: 持ち越しは一覧に🌅", "🌅持ち越し" in B.memo_list_text(ms2), True)
+    await B.db.execute("UPDATE memos SET day=? WHERE user_id='51' AND text='古いメモ'", ("2026-08-01",))
+    await B.db.execute("INSERT OR IGNORE INTO memo_prompts(day,user_id,msg_id) VALUES('2026-08-01','51',NULL)")
+    await B.db.commit()
+    await B.memo_cleanup(nxt)
+    check("メモ: 昨日以前は自動消滅・今日は残る", [r["text"] for r in await B.open_memos("51", nxt)], ["振込", "ゴミ袋を買う"])
+    async with B.db.execute("SELECT COUNT(*) AS n FROM memo_prompts") as c:
+        check("メモ: 古い引き継ぎ確認も掃除", (await c.fetchone())["n"], 0)
+    check("えらいパネルに📌 2ボタン", {"sk_memo_add", "sk_memo_list"} <= {i.custom_id for i in B.EraiView().children}, True)
+    check("起床パネルに🏭", any(i.custom_id == "sk_yakin" for i in B.WakeView().children), True)
+
     # 📝チェックリストの導線（各パネルのショートカット＋☀️返事の行差し替え）
     check("📝ショートカットが4パネル全部に", all(any(str(getattr(i, "custom_id", "")).startswith("sk_mycheck_") for i in V().children)
                                              for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView)), True)

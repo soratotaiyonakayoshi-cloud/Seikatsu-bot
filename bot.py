@@ -58,11 +58,13 @@ CH = {
     "hajimeni": ("はじめに📖", "参加者向けのガイド。困ったら `/help`。"),
     "jikoshokai": ("自己紹介🙋", "📝 ボタンでフォームから自己紹介カードを投稿（あとから更新OK）。"),
     "roles": ("ロール🏷", "リアクションで学部・学年・生活形態のロールを付け外し。"),
-    "wake": ("起床🌅", "☀️ 起きたら押す／🌙 寝る前に押す（睡眠時間は自動計算）／😴 二度寝したら正直に押す。\n🏃 で毎朝のラジオ体操の呼び出し（メンション）をON/OFF。"),
+    "wake": ("起床🌅", "☀️ 起きたら押す／🌙 寝る前に押す（睡眠時間は自動計算）／😴 二度寝したら正直に押す。\n"
+             "🏭 夜勤の夜に押すと、翌朝の起床・睡眠・ラジオ体操は判定なし（ストリークも継続）。\n🏃 で毎朝のラジオ体操の呼び出し（メンション）をON/OFF。"),
     "meal": ("ごはん🍚", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。\n"
              "🧊 冷蔵庫＝期限が近い食品のメモ。登録すると期限の前日・当日の朝にお知らせ（3日過ぎたら自動で消えます）。"),
     "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
-    "erai": ("えらい🌟", "最低限とは別に、今日がんばったことを報告して褒め合う場所。🌟ボタン（または /erai）から。判定はされません。"),
+    "erai": ("えらい🌟", "最低限とは別に、今日がんばったことを報告して褒め合う場所。🌟ボタン（または /erai）から。判定はされません。\n"
+             "📌 やること宣言＝今日限りのメモ。終わったら✅、23時に引き継ぎ確認、放置なら翌朝ひっそり消えます（叱責なし）。"),
     "bath": ("おふろ🛁", "🛁 お風呂に入ったら押す。🪥 歯磨きも（1日に何回でも）。"),
     "kora": ("叱責👹", "毎晩の判定で、最低限を守れなかった人が晒される場所。"),
     "tsushinbo": ("つうしんぼ📮", "毎週日曜の夜に、その週の通信簿（達成率ランキング・各賞）が届く場所。"),
@@ -170,6 +172,9 @@ CREATE TABLE IF NOT EXISTS off_days(day TEXT NOT NULL, user_id TEXT NOT NULL, re
 CREATE TABLE IF NOT EXISTS custom_items(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER);
 CREATE TABLE IF NOT EXISTS custom_checks(day TEXT NOT NULL, user_id TEXT NOT NULL, item_id INTEGER NOT NULL, PRIMARY KEY(day, user_id, item_id));
 CREATE TABLE IF NOT EXISTS fridge_items(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, name TEXT NOT NULL, due_day TEXT NOT NULL, created_day TEXT);
+CREATE TABLE IF NOT EXISTS night_shifts(day TEXT NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY(day, user_id));
+CREATE TABLE IF NOT EXISTS memos(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, text TEXT NOT NULL, day TEXT NOT NULL, ts INTEGER, msg_id TEXT, carried INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS memo_prompts(day TEXT NOT NULL, user_id TEXT NOT NULL, msg_id TEXT, PRIMARY KEY(day, user_id));
 """
 db = None
 
@@ -295,8 +300,9 @@ async def build_misses(u, day, d1, d2, is_sunday):
     """ユーザーの設定と当日の記録から、未達項目の文字列リストを返す。"""
     misses = []
     uid = u["id"]
+    yakin = await is_night_shift(uid, day)   # 夜勤の朝は起床・睡眠・ラジオ体操を判定しない
     dl = effective_deadline(u, date.fromisoformat(day))
-    if dl and u["wake_set_day"] != day:
+    if dl and u["wake_set_day"] != day and not yakin:
         w = await events_on(uid, day, "wake")
         if not w:
             misses.append(f"☀️ 起床 未報告（{dl} まで）")
@@ -304,7 +310,7 @@ async def build_misses(u, day, d1, d2, is_sunday):
             t = hhmm(datetime.fromtimestamp(w[0]["ts"], JST))
             if t > grace_deadline(dl):   # 締切＋操作猶予を過ぎたら寝坊
                 misses.append(f"☀️ 寝坊 {dl} まで → {t}")
-    if u["sleep_min"] and u["sleep_set_day"] != day:
+    if u["sleep_min"] and u["sleep_set_day"] != day and not yakin:
         s = await events_on(uid, day, "sleep")
         if not s:
             misses.append("🌙 睡眠時間 未報告")
@@ -315,7 +321,7 @@ async def build_misses(u, day, d1, d2, is_sunday):
     if u["bath_daily"] and u["bath_set_day"] != day:
         if not await events_on(uid, day, "bath"):
             misses.append("🛁 入浴 未報告")
-    if u["radio_daily"] and u["radio_set_day"] != day:
+    if u["radio_daily"] and u["radio_set_day"] != day and not yakin:
         if not await events_on(uid, day, "radio"):
             misses.append("🏃 ラジオ体操 未参加")
     if u["meals_min"] and u["meals_set_day"] != day:
@@ -358,6 +364,16 @@ def grace_deadline(dl):
     h, m = map(int, dl.split(":"))
     t = min(h * 60 + m + WAKE_GRACE_MIN, 23 * 60 + 59)
     return f"{t // 60:02d}:{t % 60:02d}"
+
+# ---- 夜勤🏭（起床・睡眠・ラジオ体操だけの部分お休み） ----
+def yakin_target_day(now):
+    """夜勤で免除する日。昼前に押したら今朝（夜勤明け）、昼以降なら明日の朝"""
+    d = now if now.hour < 12 else now + timedelta(days=1)
+    return day_str(d)
+
+async def is_night_shift(uid, day):
+    async with db.execute("SELECT 1 FROM night_shifts WHERE day=? AND user_id=?", (day, str(uid))) as c:
+        return (await c.fetchone()) is not None
 
 async def all_items_skipped(u, day):
     """この日、実際に判定される項目が1つも無い（すべて今日設定・未設定）＝設定初日の人"""
@@ -412,7 +428,8 @@ class SeikatsuBot(discord.Client):
         self.add_view(KadaiPanelView())
         self.add_view(SetteiView())
         self.add_view(IntroView())
-        self.add_dynamic_items(DoneButton, MealFixButton, PraiseButton, MealPraiseButton, GoalReviewButton, TipSaveButton)
+        self.add_dynamic_items(DoneButton, MealFixButton, PraiseButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
+                               MemoDoneButton, MemoCarryButton, MemoDropButton)
         self.add_view(EraiView())
         # コマンドの同期はグローバルではなくサーバー単位で行う（即時反映）。on_ready 参照。
 
@@ -579,6 +596,27 @@ class WakeView(discord.ui.View):
         deg = len(await events_on(user.id, day_str(now), "nizone")) + 1  # 1回押したら「二度寝」
         await interaction.response.send_message(f"😴 {hhmm(now)}　本日 {deg} 度寝を記録しました。おかえりなさい。" + hitokoto_suffix(), ephemeral=True)
         await post_log("wake", f"😴 **{user.display_name}** {hhmm(now)} 二度寝から生還（本日 {deg} 度寝）")
+
+    @discord.ui.button(label="🏭 今夜は夜勤", style=discord.ButtonStyle.secondary, custom_id="sk_yakin", row=1)
+    async def yakin(self, interaction, button):
+        user = interaction.user
+        now = now_jst()
+        await ensure_user(user)
+        target = yakin_target_day(now)
+        asa = "今朝" if target == day_str(now) else "明日の朝"
+        if await is_night_shift(user.id, target):   # 2度押しで取り消し
+            await db.execute("DELETE FROM night_shifts WHERE day=? AND user_id=?", (target, str(user.id)))
+            await db.commit()
+            await interaction.response.send_message(f"🏭 夜勤を取り消しました。{asa}の判定は通常に戻ります。", ephemeral=True)
+            await post_log("wake", f"🏭 **{user.display_name}** の夜勤はなしになりました")
+            return
+        await db.execute("INSERT OR IGNORE INTO night_shifts(day,user_id) VALUES(?,?)", (target, str(user.id)))
+        await db.commit()
+        await interaction.response.send_message(
+            f"🏭 夜勤を記録しました。{asa}の ☀️起床・🌙睡眠・🏃ラジオ体操 は判定されず、連続達成も途切れません。"
+            f"ラジオ体操の呼び出しも止めます。ご安全に！（間違えたらもう一度押すと取り消し）" + hitokoto_suffix(), ephemeral=True)
+        koukai = "夜勤明け" if target == day_str(now) else "今夜夜勤"
+        await post_log("wake", f"🏭 **{user.display_name}** は{koukai}。ちょーえらい！")
 
     @discord.ui.button(label="🏃 ラジオ体操の呼び出し ON/OFF", style=discord.ButtonStyle.secondary, custom_id="sk_radio_toggle", row=1)
     async def radio_toggle(self, interaction, button):
@@ -920,6 +958,10 @@ async def judge(guild, manual=False):
     h = hitokoto_suffix()
     if h:
         await kora_ch.send(h.lstrip("\n"))
+    try:
+        await memo_carry_prompts(day)   # 未完了のやることメモ📌の引き継ぎ確認
+    except Exception as e:
+        print(f"memo prompt error: {e!r}", flush=True)
     return f"判定完了：{len(results)}/{len(users)} 人が未達"
 
 # ------------------------------------------------------------
@@ -1307,8 +1349,9 @@ async def play_radio(guild, manual=False):
     if not os.path.exists(RADIO_MP3):
         return f"❌ 音源が見つかりません: {os.path.abspath(RADIO_MP3)}"
     wake_ch = await get_ch("wake")
-    async with db.execute("SELECT id FROM users WHERE radio_notify=1") as c:
-        notify_ids = [r["id"] for r in await c.fetchall()]
+    async with db.execute("SELECT id FROM users WHERE radio_notify=1 AND id NOT IN "
+                          "(SELECT user_id FROM night_shifts WHERE day=?)", (day_str(now_jst()),)) as c:
+        notify_ids = [r["id"] for r in await c.fetchall()]   # 夜勤明けの人は呼ばない
     mention = " ".join(f"<@{i}>" for i in notify_ids)
     if wake_ch:
         lead = "" if manual else "（1分後にスタート）"
@@ -1635,6 +1678,10 @@ async def remind_loop():
         await fridge_remind()
     except Exception as e:
         print(f"fridge remind error: {e!r}", flush=True)
+    try:
+        await memo_cleanup(day)   # 引き継がれなかったメモは朝に消える
+    except Exception as e:
+        print(f"memo cleanup error: {e!r}", flush=True)
 
 # ---- /jikanwari ----
 jikanwari = app_commands.Group(name="jikanwari", description="履修科目の登録・確認")
@@ -1965,6 +2012,12 @@ async def today_digest(uid, now):
         due = [st for st in await kaji_status(u, day_str(now)) if st["due"]]
         if due:
             lines.append("🧹 今日やる家事：" + "／".join(f"{st['emoji']}{st['label']}（{kaji_interval_text(st['n'])}）" for st in due))
+    try:
+        ms = await open_memos(uid, day_str(now))
+        if ms:
+            lines.append("📌 やること：" + "／".join(r["text"] + ("　🌅" if r["carried"] else "") for r in ms))
+    except Exception:
+        pass
     try:
         fr = await fridge_soon(uid, day_str(now))
         if fr:
@@ -2715,11 +2768,231 @@ class EraiView(discord.ui.View):
     async def erai(self, interaction, button):
         await interaction.response.send_modal(EraiModal())
 
+    @discord.ui.button(label="📌 やること宣言", style=discord.ButtonStyle.secondary, custom_id="sk_memo_add", row=1)
+    async def memo_add(self, interaction, button):
+        await interaction.response.send_modal(MemoModal())
+
+    @discord.ui.button(label="📌 やること一覧", style=discord.ButtonStyle.secondary, custom_id="sk_memo_list", row=1)
+    async def memo_list(self, interaction, button):
+        await ensure_user(interaction.user)
+        await send_memo_list(interaction)
+
 VIEW_FACTORY["erai"] = EraiView
 
 @bot.tree.command(name="erai", description="今日がんばったことを報告する（最低限とは別・判定なし・褒め合い用）")
 async def erai_command(interaction):
     await interaction.response.send_modal(EraiModal())
+
+# ------------------------------------------------------------
+#  やることメモ📌
+#  「さっき何したかったんだっけ」対策の今日限りメモ。日時指定なし。
+#  宣言が #えらい🌟 に流れて緊張を生み、✅でみんなに見える形で完了。
+#  23時の判定後に引き継ぎ確認、放置すれば翌朝自動で消える（叱責はしない）。
+# ------------------------------------------------------------
+async def open_memos(uid, day):
+    async with db.execute("SELECT * FROM memos WHERE user_id=? AND day=? ORDER BY id", (str(uid), day)) as c:
+        return await c.fetchall()
+
+async def memo_edit_public(row, content):
+    """宣言メッセージを書き換える（完了✅など）。失敗しても本体処理は続行"""
+    if not row["msg_id"]:
+        return
+    ch = await get_ch("erai")
+    if not ch:
+        return
+    try:
+        m = await ch.fetch_message(int(row["msg_id"]))
+        await m.edit(content=content, view=None)
+    except Exception:
+        pass
+
+async def memo_delete_public(row):
+    if not row["msg_id"]:
+        return
+    ch = await get_ch("erai")
+    if not ch:
+        return
+    try:
+        m = await ch.fetch_message(int(row["msg_id"]))
+        await m.delete()
+    except Exception:
+        pass
+
+def memo_done_text(name, text, guild):
+    return f"✅ **{name}**：~~{text}~~　やりきった！{erai_emoji(guild)}"
+
+class MemoDoneButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_memo_done:(?P<id>\d+)"):
+    def __init__(self, memo_id):
+        super().__init__(discord.ui.Button(label="✅ やりきった", style=discord.ButtonStyle.success, custom_id=f"sk_memo_done:{memo_id}"))
+        self.memo_id = int(memo_id)
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["id"])
+
+    async def callback(self, interaction):
+        async with db.execute("SELECT * FROM memos WHERE id=?", (self.memo_id,)) as c:
+            row = await c.fetchone()
+        if not row:
+            await interaction.response.send_message("このメモはもうありません。", ephemeral=True)
+            return
+        if row["user_id"] != str(interaction.user.id):
+            await interaction.response.send_message("宣言した本人だけが押せます。応援は絵文字リアクションでどうぞ！", ephemeral=True)
+            return
+        await db.execute("DELETE FROM memos WHERE id=?", (self.memo_id,))
+        await db.commit()
+        await interaction.response.edit_message(content=memo_done_text(interaction.user.display_name, row["text"], interaction.guild), view=None)
+
+class MemoModal(discord.ui.Modal, title="📌 やることメモ"):
+    what = discord.ui.TextInput(label="やること（今日ぶん・短くてOK）", placeholder="例：参考文献を探す／振込／ゴミ袋を買う", max_length=80)
+
+    async def on_submit(self, interaction):
+        user = interaction.user
+        await ensure_user(user)
+        now = now_jst()
+        text = self.what.value.strip()
+        cur = await db.execute("INSERT INTO memos(user_id,text,day,ts) VALUES(?,?,?,?)",
+                               (str(user.id), text, day_str(now), int(now.timestamp())))
+        mid = cur.lastrowid
+        await db.commit()
+        ch = await get_ch("erai")
+        if ch:
+            view = discord.ui.View(timeout=None)
+            view.add_item(MemoDoneButton(mid))
+            msg = await ch.send(f"📌 **{user.display_name}**：{text}", view=view)
+            await db.execute("UPDATE memos SET msg_id=? WHERE id=?", (str(msg.id), mid))
+            await db.commit()
+        await interaction.response.send_message(
+            f"📌 「{text}」を宣言しました。終わったら ✅ を。23時に残っていたら引き継ぐか聞きます（放置すると翌朝ひっそり消えます）" + hitokoto_suffix(),
+            ephemeral=True)
+        if ch:
+            await bump_panel("erai")
+
+class MemoListButton(discord.ui.Button):
+    def __init__(self, row_):
+        super().__init__(label=("✅ " + row_["text"])[:80], style=discord.ButtonStyle.secondary)
+        self.memo_id = row_["id"]
+
+    async def callback(self, interaction):
+        async with db.execute("SELECT * FROM memos WHERE id=? AND user_id=?", (self.memo_id, str(interaction.user.id))) as c:
+            row = await c.fetchone()
+        note = ""
+        if row:
+            await db.execute("DELETE FROM memos WHERE id=?", (row["id"],))
+            await db.commit()
+            await memo_edit_public(row, memo_done_text(interaction.user.display_name, row["text"], interaction.guild))
+            note = f"✅ 「{row['text']}」やりきった！\n\n"
+        rows = await open_memos(interaction.user.id, day_str(now_jst()))
+        if rows:
+            view = discord.ui.View(timeout=600)
+            for r in rows[:25]:
+                view.add_item(MemoListButton(r))
+            await interaction.response.edit_message(content=note + memo_list_text(rows), view=view)
+        else:
+            await interaction.response.edit_message(content=note + "📌 全部やりきった！えらい！", view=None)
+
+def memo_list_text(rows):
+    return "📌 **今日のやること**（押したら完了）\n" + "\n".join("・" + r["text"] + ("　🌅持ち越し" if r["carried"] else "") for r in rows)
+
+async def send_memo_list(interaction):
+    rows = await open_memos(interaction.user.id, day_str(now_jst()))
+    if not rows:
+        await interaction.response.send_message("📌 今日のやることは空っぽです。「📌 やること宣言」から気軽にどうぞ（日時指定なし・翌朝には勝手に消えます）。", ephemeral=True)
+        return
+    view = discord.ui.View(timeout=600)
+    for r in rows[:25]:
+        view.add_item(MemoListButton(r))
+    await interaction.response.send_message(memo_list_text(rows), view=view, ephemeral=True)
+
+class MemoCarryButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_memo_carry:(?P<uid>\d+)"):
+    def __init__(self, uid):
+        super().__init__(discord.ui.Button(label="🌅 明日へ引き継ぐ", style=discord.ButtonStyle.primary, custom_id=f"sk_memo_carry:{uid}"))
+        self.uid = str(uid)
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["uid"])
+
+    async def callback(self, interaction):
+        if str(interaction.user.id) != self.uid:
+            await interaction.response.send_message("本人だけが選べます。", ephemeral=True)
+            return
+        now = now_jst()
+        target = day_str(now + timedelta(days=1)) if now.hour >= JUDGE_HOUR else day_str(now)
+        cur = await db.execute("UPDATE memos SET day=?, carried=carried+1 WHERE user_id=? AND day<?", (target, self.uid, target))
+        await db.execute("DELETE FROM memo_prompts WHERE user_id=? AND msg_id=?", (self.uid, str(interaction.message.id)))
+        await db.commit()
+        await interaction.response.edit_message(content=f"🌅 {cur.rowcount}件を明日へ引き継ぎました。ぼちぼちいこう。", view=None)
+
+class MemoDropButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_memo_drop:(?P<uid>\d+)"):
+    def __init__(self, uid):
+        super().__init__(discord.ui.Button(label="🗑 もういい", style=discord.ButtonStyle.secondary, custom_id=f"sk_memo_drop:{uid}"))
+        self.uid = str(uid)
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["uid"])
+
+    async def callback(self, interaction):
+        if str(interaction.user.id) != self.uid:
+            await interaction.response.send_message("本人だけが選べます。", ephemeral=True)
+            return
+        today = day_str(now_jst())
+        async with db.execute("SELECT * FROM memos WHERE user_id=? AND day<=?", (self.uid, today)) as c:
+            rows = await c.fetchall()
+        for r in rows:
+            await memo_delete_public(r)
+        await db.execute("DELETE FROM memos WHERE user_id=? AND day<=?", (self.uid, today))
+        await db.execute("DELETE FROM memo_prompts WHERE user_id=? AND msg_id=?", (self.uid, str(interaction.message.id)))
+        await db.commit()
+        await interaction.response.edit_message(content="🗑 消しました。やらない決断もえらい。また明日！", view=None)
+
+async def memo_carry_prompts(day):
+    """判定後、未完了メモがある人へ引き継ぎ確認（1人1日1回・手動判定でも二重投稿しない）"""
+    ch = await get_ch("erai")
+    if not ch:
+        return
+    async with db.execute("SELECT DISTINCT user_id FROM memos WHERE day=?", (day,)) as c:
+        uids = [r["user_id"] for r in await c.fetchall()]
+    posted = False
+    for uid in uids:
+        async with db.execute("SELECT 1 FROM memo_prompts WHERE day=? AND user_id=?", (day, uid)) as c:
+            if await c.fetchone():
+                continue
+        rows = await open_memos(uid, day)
+        if not rows:
+            continue
+        view = discord.ui.View(timeout=None)
+        view.add_item(MemoCarryButton(uid))
+        view.add_item(MemoDropButton(uid))
+        msg = await ch.send(f"📌 <@{uid}> 未完了のやること：" + "／".join(r["text"] for r in rows) +
+                            "\n明日へ引き継ぐ？（何もしなければ朝にひっそり消えます）", view=view)
+        await db.execute("INSERT OR IGNORE INTO memo_prompts(day,user_id,msg_id) VALUES(?,?,?)", (day, uid, str(msg.id)))
+        await db.commit()
+        posted = True
+    if posted:
+        await bump_panel("erai")
+
+async def memo_cleanup(today):
+    """引き継がれなかった昨日以前のメモを自動削除し、宣言・確認メッセージも畳む。古い夜勤記録も掃除"""
+    async with db.execute("SELECT * FROM memos WHERE day<?", (today,)) as c:
+        rows = await c.fetchall()
+    for r in rows:
+        await memo_delete_public(r)
+    await db.execute("DELETE FROM memos WHERE day<?", (today,))
+    ch = await get_ch("erai")
+    async with db.execute("SELECT * FROM memo_prompts WHERE day<?", (today,)) as c:
+        prows = await c.fetchall()
+    for p in prows:
+        if ch and p["msg_id"]:
+            try:
+                m = await ch.fetch_message(int(p["msg_id"]))
+                await m.edit(content="🌫 引き継がれなかったやることは、朝の風で消えました。", view=None)
+            except Exception:
+                pass
+    await db.execute("DELETE FROM memo_prompts WHERE day<?", (today,))
+    await db.execute("DELETE FROM night_shifts WHERE day<?", ((date.fromisoformat(today) - timedelta(days=60)).isoformat(),))
+    await db.commit()
 
 
 # ============================================================
@@ -3562,6 +3835,10 @@ async def kiroku_command(interaction):
                           (str(user.id), d1, d2)) as c:
         avg = (await c.fetchone())["a"]
     week = [f"起床報告 {wake_days} 日", f"平均睡眠 {fmt_hours(avg) if avg else '—'}", f"家事 {chore_n} 回"]
+    async with db.execute("SELECT COUNT(*) AS n FROM night_shifts WHERE user_id=? AND day BETWEEN ? AND ?", (str(user.id), d1, d2)) as c:
+        yakin_n = (await c.fetchone())["n"]
+    if yakin_n:
+        week.append(f"🏭夜勤 {yakin_n} 回")
     u = await get_user(user.id)
     emb = discord.Embed(title=f"📖 {user.display_name} の記録", color=discord.Color.gold())
     emb.add_field(name=f"今日（{day}）", value="\n".join(today), inline=False)
