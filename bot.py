@@ -70,8 +70,10 @@ CH = {
              "📌 やること宣言＝今日限りのメモ（1行に1つ・まとめて宣言OK）。終わったら✅、23時に引き継ぎ確認、放置なら翌朝ひっそり消えます（叱責なし）。"),
     "worklog": ("作業ログ🖥", f"🔊{WORK_VC_NAME} に入ると計測開始・出ると終了。入室中に ✍ ボタンで「何をやるか」をひとこと宣言できます。\n"
                 "10分未満のセッションはログに残りません（時間は記録）。`/kiroku` に今週の作業時間、通信簿に🖥もくもく賞。"),
-    "bath": ("おふろ🛁", "🛁 お風呂に入ったら押す。🪥 歯磨きも（1日に何回でも）。\n"
-             "📦 使用期限メモ＝コンタクト・歯ブラシ等「開封からN日で交換」の品を登録。交換時期の朝にお知らせ、🔄で次のサイクルへ。"),
+    "bath": ("おふろ🛁", "🛁 お風呂に入ったら押す。🪥 歯磨きも（1日に何回でも）。"),
+    "goods": ("使用期限📦", "マンスリーコンタクト・歯ブラシ・スポンジなど「開封からN日で交換」する品のリマインド。\n"
+              "📦 開封した日に登録（定番品は日数入力も不要）→ 交換時期の前日・当日の朝にここでお知らせ → 🔄 を押すと次のサイクルへ。\n"
+              "期限を過ぎても消えません（☀️の返事に⚠️が出続けます）。判定・叱責はされません。"),
     "kora": ("叱責👹", "毎晩の判定で、最低限を守れなかった人が晒される場所。"),
     "tsushinbo": ("つうしんぼ📮", "毎週日曜の夜に、その週の通信簿（達成率ランキング・各賞）が届く場所。"),
     "kadai": ("課題📚", "🎓 で履修科目を登録 → 気づいた人が ➕ で課題を登録 → 同じ科目の履修者だけに通知＆リマインド（3日前・前日・当日）。\n"
@@ -445,6 +447,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(ChoreView())
         self.add_view(BathView())
         self.add_view(KadaiPanelView())
+        self.add_view(GoodsPanelView())
         self.add_view(SetteiView())
         self.add_view(IntroView())
         self.add_dynamic_items(DoneButton, MealFixButton, PraiseButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
@@ -722,15 +725,6 @@ class BathView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(MyCheckShortcut("bath"))
-
-    @discord.ui.button(label="📦 期限メモに登録", style=discord.ButtonStyle.secondary, custom_id="sk_goods_add", row=1)
-    async def goods_add(self, interaction, button):
-        await interaction.response.send_modal(GoodsAddModal())
-
-    @discord.ui.button(label="📦 期限メモを見る・交換", style=discord.ButtonStyle.secondary, custom_id="sk_goods_list", row=1)
-    async def goods_list(self, interaction, button):
-        await ensure_user(interaction.user)
-        await goods_show(interaction)
 
     @discord.ui.button(label="🛁 お風呂入った", style=discord.ButtonStyle.primary, custom_id="sk_bath")
     async def bath(self, interaction, button):
@@ -3811,7 +3805,7 @@ async def goods_remind():
         rows = await c.fetchall()
     if not rows:
         return
-    ch = await get_ch("bath")
+    ch = await get_ch("goods")
     if not ch:
         return
     lines = [f"・<@{r['user_id']}> **{r['name']}**（{fridge_label(r['due_day'], today)}・{r['cycle_days']}日ごと）" for r in rows]
@@ -3819,7 +3813,7 @@ async def goods_remind():
     for r in rows[:25]:
         view.add_item(GoodsResetButton(r["id"], label=f"🔄 {r['name']}"))
     await ch.send("📦 **使用期限アラート**：そろそろ交換の時期です\n" + "\n".join(lines), view=view)
-    await bump_panel("bath")
+    await bump_panel("goods")
 
 kigen_grp = app_commands.Group(name="kigen", description="生活用品の使用期限リマインド（コンタクト・歯ブラシ等の交換サイクル）")
 
@@ -3873,6 +3867,21 @@ async def kigen_remove(interaction, namae: str):
     await interaction.response.send_message(f"🗑 **{r['name']}** をリマインドから外しました。", ephemeral=True)
 
 bot.tree.add_command(kigen_grp)
+
+class GoodsPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="📦 期限メモに登録", style=discord.ButtonStyle.primary, custom_id="sk_goods_add", row=0)
+    async def goods_add(self, interaction, button):
+        await interaction.response.send_modal(GoodsAddModal())
+
+    @discord.ui.button(label="🔄 見る・交換した", style=discord.ButtonStyle.secondary, custom_id="sk_goods_list", row=0)
+    async def goods_list(self, interaction, button):
+        await ensure_user(interaction.user)
+        await goods_show(interaction)
+
+VIEW_FACTORY["goods"] = GoodsPanelView
 
 async def ensure_tips_forum(guild, cat):
     """#暮らしのtips📚（フォーラム）を用意。コミュニティ未設定などで作れない場合は案内を出す"""

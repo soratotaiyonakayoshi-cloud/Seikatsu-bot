@@ -31,9 +31,9 @@ check("食事推定 16:00", B.infer_meal_sub(datetime(2026,8,5,16,0,tzinfo=JST))
 check("食事推定 19:00", B.infer_meal_sub(datetime(2026,8,5,19,0,tzinfo=JST)), "夜")
 
 # ---- 永続ビュー（custom_id 必須制約）とコマンド登録 ----
-for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView, B.KadaiPanelView):
+for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView, B.KadaiPanelView, B.GoodsPanelView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
-check("永続ビュー5種 登録OK", True, True)
+check("永続ビュー6種 登録OK", True, True)
 check("ごはんパネルに🧊 2ボタン", {"sk_fridge_add", "sk_fridge_list"} <= {i.custom_id for i in B.MealView().children}, True)
 check("🧊は2段目・ごはんは1段目", sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_fridge")}) == [1]
       and sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_meal")}) == [0], True)
@@ -621,7 +621,10 @@ async def main():
     check("期限メモ: 交換で次サイクルへ", await B.goods_reset(gid, day), "2026-09-04")
     async with B.db.execute("SELECT opened_day FROM goods_items WHERE id=?", (gid,)) as c:
         check("期限メモ: 開封日も更新", (await c.fetchone())["opened_day"], day)
-    check("おふろパネルに📦 2ボタン", {"sk_goods_add", "sk_goods_list"} <= {i.custom_id for i in B.BathView().children}, True)
+    check("使用期限パネルに📦🔄 2ボタン", {i.custom_id for i in B.GoodsPanelView().children}, {"sk_goods_add", "sk_goods_list"})
+    check("使用期限パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("goods") is B.GoodsPanelView, True)
+    check("使用期限チャンネル定義", B.CH["goods"][0], "使用期限📦")
+    check("おふろパネルに📦は無い", any(str(getattr(i, "custom_id", "")).startswith("sk_goods") for i in B.BathView().children), False)
 
     # 叱責に処方TIPS💊（テストDBのTIPS: 5分チャーハン=レシピタグ、限定プリン=期限切れ）
     rx = await B.prescribe_tip("42", "2026-09-03", ["🍚 食事 1/2 回"])
