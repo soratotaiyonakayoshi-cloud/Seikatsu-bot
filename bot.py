@@ -2021,6 +2021,130 @@ async def jikanwari_remove(interaction, kamoku: str):
     c = await get_course(kamoku)
     await interaction.response.send_message(f"🗑 {course_label(c) if c else kamoku} を外しました。", ephemeral=True)
 
+def _row_get(c, k):
+    return c[k] if k in c.keys() else None
+
+def _wrap_jp(s, width, max_lines):
+    """全角=1・半角=0.55 の見た目幅で折り返し（英語科目名が早々に切れないように）"""
+    lines, cur, w = [], "", 0.0
+    for ch in s:
+        cw_ = 1.0 if ord(ch) > 0x2500 else 0.55
+        if w + cw_ > width and cur:
+            lines.append(cur)
+            cur, w = "", 0.0
+            if len(lines) == max_lines:
+                return lines
+        cur += ch
+        w += cw_
+    if cur and len(lines) < max_lines:
+        lines.append(cur)
+    return lines
+
+def render_timetable(username, rows):
+    """履修科目から時間割カードPNG（通信簿カードと同じブランド配色）。時限情報のある科目が無ければ None"""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib import font_manager
+        import matplotlib.patheffects as _pe
+    except Exception:
+        return None
+    f = _find_cjk_font()
+    if not f:
+        return None
+    fp = font_manager.FontProperties(fname=f)
+    fpb = font_manager.FontProperties(fname=_find_cjk_font_bold() or f)
+    cells, used_days, max_p = {}, set(), 4
+    for i, c in enumerate(rows):
+        for slot in (c["slots"] or "").split(","):
+            slot = slot.strip()
+            if len(slot) >= 2 and slot[0] in DAY_CHARS and slot[1:].isdigit():
+                di, p = DAY_CHARS.index(slot[0]), int(slot[1:])
+                cells.setdefault((di, p), []).append((i, c))
+                used_days.add(di)
+                max_p = max(max_p, p)
+    if not cells:
+        return None
+    day_idxs = [d for d in range(7) if d < 5 or d in used_days]   # 月〜金＋使っていれば土日
+    n_d, n_p = len(day_idxs), max_p
+    cw, chh = 1.5, 1.04
+    left_w, head_h, title_h = 0.62, 0.36, 0.52
+    fig_w = left_w + cw * n_d + 0.22
+    fig_h = title_h + head_h + chh * n_p + 0.22
+    fig = plt.figure(figsize=(fig_w, fig_h), dpi=150)
+    fig.patch.set_facecolor(CARD_CREAM)
+    terms = [t for t in (_row_get(c, "term") for c in rows) if t]
+    term = max(set(terms), key=terms.count) if terms else ""
+    t = fig.text(left_w / fig_w, 1 - 0.28 / fig_h, f"{_plain_name(username, 12)} の時間割", fontproperties=fpb,
+                 fontsize=13.5, color=CARD_INK, va="center")
+    t.set_path_effects([_pe.withStroke(linewidth=0.6, foreground=CARD_INK)])
+    if term:
+        fig.text(1 - 0.22 / fig_w, 1 - 0.28 / fig_h, str(term), fontproperties=fp, fontsize=10, color=CARD_ORANGE, va="center", ha="right")
+    ax = fig.add_axes([left_w / fig_w, 0.14 / fig_h, cw * n_d / fig_w, chh * n_p / fig_h])
+    ax.set_xlim(0, n_d)
+    ax.set_ylim(0, n_p)
+    ax.invert_yaxis()
+    ax.axis("off")
+    # 曜日ヘッダー
+    for xi, di in enumerate(day_idxs):
+        fx = (left_w + cw * (xi + 0.5)) / fig_w
+        fy = 1 - (title_h + head_h * 0.5) / fig_h
+        fig.text(fx, fy, DAY_CHARS[di], fontproperties=fpb, fontsize=11.5, color=CARD_INK, ha="center", va="center")
+    # 時限ラベル（左端：時限番号＋開始時刻）
+    for p in range(1, n_p + 1):
+        fy = 1 - (title_h + head_h + chh * (p - 0.5)) / fig_h
+        fig.text((left_w * 0.5) / fig_w, fy + 0.075 / fig_h, str(p), fontproperties=fpb, fontsize=11, color=CARD_INK, ha="center", va="center")
+        st = PERIOD_START.get(p, "")
+        if st:
+            fig.text((left_w * 0.5) / fig_w, fy - 0.115 / fig_h, st, fontproperties=fp, fontsize=7.5, color=CARD_MUTED, ha="center", va="center")
+    # 空グリッド
+    for xi in range(n_d):
+        for p in range(n_p):
+            ax.add_patch(plt.Rectangle((xi, p), 1, 1, facecolor="#f2ecdd", edgecolor=CARD_CREAM, linewidth=2.0))
+    # 授業セル（科目ごとに色チップ。同じコマに複数あれば分割）
+    for (di, p), lst in sorted(cells.items()):
+        xi = day_idxs.index(di)
+        n = len(lst)
+        for j, (ci, c) in enumerate(lst):
+            col = CARD_SERIES[ci % len(CARD_SERIES)]
+            y0, hh = p - 1 + j / n, 1 / n
+            ax.add_patch(plt.Rectangle((xi, y0), 1, hh, facecolor="#fffdf6", edgecolor=CARD_CREAM, linewidth=2.0))
+            ax.add_patch(plt.Rectangle((xi, y0), 0.05, hh, facecolor=col, edgecolor="none"))
+            nm = _plain_name(c["name"], 24)
+            lines = _wrap_jp(nm, 7.2, 3 if n == 1 else 2)
+            ax.text(xi + 0.11, y0 + 0.10 / n, "\n".join(lines), fontproperties=fpb,
+                    fontsize=8.5 if n == 1 else 7, color=CARD_INK, va="top", ha="left", linespacing=1.25)
+            room = c["room"]
+            if n == 1 and room:
+                ax.text(xi + 0.11, y0 + hh - 0.10, _plain_name(str(room), 11), fontproperties=fp,
+                        fontsize=7.5, color=CARD_MUTED, va="bottom", ha="left")
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+async def send_timetable(interaction):
+    rows = await user_course_rows(interaction.user.id)
+    if not rows:
+        await interaction.response.send_message("まだ履修科目がありません。「🎓 履修科目を登録」か `/jikanwari add` からどうぞ！", ephemeral=True)
+        return
+    buf = await asyncio.to_thread(render_timetable, interaction.user.display_name, rows)
+    unslotted = [r["name"] for r in rows
+                 if not any(len(s.strip()) >= 2 and s.strip()[0] in DAY_CHARS and s.strip()[1:].isdigit()
+                            for s in (r["slots"] or "").split(","))]
+    if not buf:
+        await interaction.response.send_message("時限情報のある科目が無いため、時間割を描けませんでした（自由入力の科目には時限がありません）。", ephemeral=True)
+        return
+    note = f"\n-# 時限が未登録のため載っていない科目：{', '.join(unslotted)}" if unslotted else ""
+    await interaction.response.send_message("🗓 いまの履修科目から時間割を作りました。" + note,
+                                            file=discord.File(buf, filename="jikanwari.png"), ephemeral=True)
+
+@jikanwari.command(name="hyou", description="履修科目から時間割の画像を書き出す（自分にだけ表示）")
+async def jikanwari_hyou(interaction):
+    await send_timetable(interaction)
+
 bot.tree.add_command(jikanwari)
 
 # ---- /kadai ----
@@ -2228,6 +2352,11 @@ class KadaiPanelView(discord.ui.View):
             await interaction.response.send_message("いま登録されている課題はありません 🎉", ephemeral=True)
             return
         await interaction.response.send_message(embed=emb, ephemeral=True)
+
+    @discord.ui.button(label="🗓 時間割画像", style=discord.ButtonStyle.secondary, custom_id="sk_jw_img", row=1)
+    async def jw_img(self, interaction, button):
+        await ensure_user(interaction.user)
+        await send_timetable(interaction)
 
 VIEW_FACTORY["kadai"] = KadaiPanelView
 

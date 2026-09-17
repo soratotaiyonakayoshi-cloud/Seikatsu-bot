@@ -37,7 +37,7 @@ check("永続ビュー6種 登録OK", True, True)
 check("ごはんパネルに🧊 2ボタン", {"sk_fridge_add", "sk_fridge_list"} <= {i.custom_id for i in B.MealView().children}, True)
 check("🧊は2段目・ごはんは1段目", sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_fridge")}) == [1]
       and sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_meal")}) == [0], True)
-check("課題パネルは4ボタン", {i.custom_id for i in B.KadaiPanelView().children}, {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list"})
+check("課題パネルは5ボタン", {i.custom_id for i in B.KadaiPanelView().children}, {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img"})
 check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
 check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kigen", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "reizouko", "saitei", "setup", "suimin", "tips", "tsushinbo", "watashi"])
 
@@ -567,6 +567,19 @@ async def main():
     check("通信簿カード: 空データでも生成", _card_orig("2026-08-03", "2026-08-09", [], [], []) is not None, True)
     check("通信簿カード: 名前の絵文字除去", B._plain_name("ねぼう🐷"), "ねぼう")
     check("通信簿カード: 絵文字フォント同梱", B._find_emoji_font() is not None and "NotoEmoji" in B._find_emoji_font(), True)
+
+    # 時間割カード🗓
+    tt_rows = [
+        {"name": "微分積分学および演習Ⅱ", "slots": "月1,木2", "room": "L0026", "term": "2026後期"},
+        {"name": "有機化学Ⅱ", "slots": "月2", "room": "142", "term": "2026後期"},
+        {"name": "Integrated English", "slots": "水3", "room": "L1131", "term": "2026後期"},
+        {"name": "生物化学", "slots": "水3", "room": "141", "term": "2026後期"},   # 同じコマの重複
+        {"name": "自由入力の科目", "slots": "", "room": None, "term": None},        # 時限なし→載らない
+        {"name": "土曜集中講義", "slots": "土5", "room": "講堂", "term": "2026後期"},
+    ]
+    ttb = B.render_timetable("しぐま", tt_rows)
+    check("時間割カード: PNG生成", ttb is not None and len(ttb.getvalue()) > 10000, True)
+    check("時間割カード: 時限なしのみは None", B.render_timetable("しぐま", [{"name": "x", "slots": "", "room": None, "term": None}]), None)
 
     # 📝チェックリストの導線（各パネルのショートカット＋☀️返事の行差し替え）
     check("📝ショートカットが4パネル全部に", all(any(str(getattr(i, "custom_id", "")).startswith("sk_mycheck_") for i in V().children)

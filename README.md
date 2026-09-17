@@ -43,7 +43,7 @@
 - `/kojin add namae:薬を飲む`／`remove`／`list` 自分だけの最低限項目。☀️起床の返事に出るチェックリストか、各報告パネル（起床・ごはん・家事・おふろ・設定）の 📝 ボタンで毎日チェック（未チェックは判定対象）
 - `/saitei kyujitsu:2` 土日は起床締切を2時間遅らせる
 - `/rajio` 【管理者】今すぐラジオ体操を流す（音が出るかのテスト用）
-- `/jikanwari add kamoku:<科目名で検索>`（最大5つ同時）／`list`／`remove` 履修科目の登録。マスタに無い科目は入力した名前で新規登録できる
+- `/jikanwari add kamoku:<科目名で検索>`（最大5つ同時）／`list`／`remove`／`hyou`（時間割の画像を書き出し。#課題📚 パネルの 🗓 ボタンでも） 履修科目の登録。マスタに無い科目は入力した名前で新規登録できる
 - `/kadai add kamoku:<自分の履修科目> kigen:10/15 naiyou:レポート提出`／`list`／`done`／`delete` 課題の登録・確認・完了・取り下げ
 - `/reizouko add namae:牛乳 kigen:9/7`／`list`／`tabeta` 冷蔵庫の期限リマインド（定番食品は kigen 省略で目安日数から自動）
 - `/kigen add namae:マンスリーコンタクト nichisuu:30`／`list`／`koukan`／`remove` 生活用品の使用期限リマインド（定番品は nichisuu 省略で目安から。交換したら `koukan` か 🔄 で次のサイクル）
