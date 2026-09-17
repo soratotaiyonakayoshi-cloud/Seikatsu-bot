@@ -639,7 +639,7 @@ async def main():
     check("使用期限パネルに📦🔄 2ボタン", {i.custom_id for i in B.GoodsPanelView().children}, {"sk_goods_add", "sk_goods_list"})
     check("使用期限パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("goods") is B.GoodsPanelView, True)
     check("使用期限チャンネル定義", B.CH["goods"][0], "使用期限📦")
-    check("どうぶつチャンネル定義", B.CH["animal"][0], "どうぶつ📸")
+    check("どうぶつチャンネル定義", B.CH["animal"][0], "どうぶつ🐄")
     check("おふろパネルに📦は無い", any(str(getattr(i, "custom_id", "")).startswith("sk_goods") for i in B.BathView().children), False)
 
     # 叱責に処方TIPS💊（テストDBのTIPS: 5分チャーハン=レシピタグ、限定プリン=期限切れ）
