@@ -1149,8 +1149,14 @@ def render_tsushinbo_card(d1, d2, ranking, award_items, series, manual=False):
             else:
                 axa.scatter([x0 + 0.012], [y], s=60, color=icon_c, clip_on=False)
             axa.text(x0 + 0.035, y, a["title"], fontproperties=fpb, fontsize=10.5, color=CARD_INK, va="center")
-            names = "、".join(_plain_name(n, 6) for n in a["names"][:3]) + ("ほか" if len(a["names"]) > 3 else "")
-            axa.text(x0 + 0.19, y, f"{names}（{a['value']}）"[:26], fontproperties=fp, fontsize=10.5, color="#4a453d", va="center")
+            # 受賞者が多いと隣の列にはみ出すので「先頭＋ほかn名」に短縮。値（回数など）は必ず残し、名前側だけ縮める
+            val = f"（{a['value']}）"
+            if len(a["names"]) == 1:
+                names = _plain_name(a["names"][0], max(3, 14 - len(val)))
+            else:
+                suffix = f" ほか{len(a['names']) - 1}名"
+                names = _plain_name(a["names"][0], max(3, 14 - len(val) - len(suffix))) + suffix
+            axa.text(x0 + 0.19, y, names + val, fontproperties=fp, fontsize=10, color="#4a453d", va="center")
     # 週間グラフ（起床・睡眠）
     days = [date.fromisoformat(d1) + timedelta(days=i) for i in range(7)]
     labels = [f"{d.month}/{d.day}({DAY_CHARS[d.weekday()]})" for d in days]
