@@ -70,6 +70,8 @@ CH = {
              "📌 やること宣言＝今日限りのメモ（1行に1つ・まとめて宣言OK）。終わったら✅、23時に引き継ぎ確認、放置なら翌朝ひっそり消えます（叱責なし）。"),
     "worklog": ("作業ログ🖥", f"🔊{WORK_VC_NAME} に入ると計測開始・出ると終了。入室中に ✍ ボタンで「何をやるか」をひとこと宣言できます。\n"
                 "10分未満のセッションはログに残りません（時間は記録）。`/kiroku` に今週の作業時間、通信簿に🖥もくもく賞。"),
+    "animal": ("どうぶつ📸", "犬・猫・鳥・道端のなんか・ミニホース…癒しの写真や動画をどうぞ（判定なし・ただの癒し）。\n"
+               "写真にはBotが🐾を付けます。1週間でいちばんリアクションを集めた写真の人は、通信簿で🐾癒し賞に。"),
     "bath": ("おふろ🛁", "🛁 お風呂に入ったら押す。🪥 歯磨きも（1日に何回でも）。"),
     "goods": ("使用期限📦", "マンスリーコンタクト・歯ブラシ・スポンジなど「開封からN日で交換」する品のリマインド。\n"
               "📦 開封した日に登録（定番品は日数入力も不要）→ 交換時期の前日・当日の朝にここでお知らせ → 🔄 を押すと次のサイクルへ。\n"
@@ -759,6 +761,14 @@ VIEW_FACTORY.update({"wake": WakeView, "meal": MealView, "chore": ChoreView, "ba
 async def on_message(message):
     if message.author.bot or not message.guild:
         return
+    animal_ch = await meta_get("ch_animal")
+    if animal_ch and message.channel.id == int(animal_ch) and message.attachments \
+            and any((a.content_type or "").startswith(("image/", "video/")) for a in message.attachments):
+        try:
+            await message.add_reaction("🐾")   # 癒しの写真には自動で🐾。週間で一番リアクションを集めた人が癒し賞
+        except Exception:
+            pass
+        return
     meal_ch = await meta_get("ch_meal")
     if not meal_ch or message.channel.id != int(meal_ch) or not message.attachments:
         return
@@ -1054,6 +1064,27 @@ def render_week_chart(d1, series):
     buf.seek(0)
     return buf
 
+async def iyashi_winner(d1, d2):
+    """#どうぶつ📸 で今週いちばんリアクションを集めた写真の投稿者（🐾癒し賞）。無ければ None"""
+    ch = await get_ch("animal")
+    if not ch:
+        return None
+    try:
+        start = datetime.fromisoformat(d1 + "T00:00:00").replace(tzinfo=JST)
+        end = start + timedelta(days=(date.fromisoformat(d2) - date.fromisoformat(d1)).days + 1)
+        best_n, best_author = 0, None
+        async for m in ch.history(limit=300, after=start, before=end):
+            if m.author.bot or not m.attachments:
+                continue
+            n = sum(r.count for r in m.reactions)
+            if n > best_n:
+                best_n, best_author = n, m.author.display_name
+        if best_author:
+            return {"emoji": "🐾", "title": "癒し賞", "names": [best_author], "value": f"リアクション{best_n}"}
+    except Exception as e:
+        print(f"癒し賞集計エラー: {e!r}", flush=True)
+    return None
+
 # 通信簿カードの配色（Twitter勧誘パンフと同じブランドカラー）
 CARD_CREAM, CARD_INK, CARD_ORANGE, CARD_AMBER = "#f7f2e8", "#1b1815", "#d9701a", "#f2a349"
 CARD_MUTED, CARD_LINE, CARD_TRACK = "#8a8378", "#e2dacb", "#ede4d3"
@@ -1321,6 +1352,10 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
             award_items.append(wa)
     except Exception as e:
         print(f"もくもく賞集計エラー: {e!r}", flush=True)
+    if kind == "week":
+        iw = await iyashi_winner(d1, d2)
+        if iw:
+            award_items.append(iw)
     awards = [f"{a['emoji']} {a['title']}：" + "、".join(f"**{n}**" for n in a["names"]) + f"（{a['value']}）" for a in award_items]
     d1s, d2s = d1[5:].replace("-", "/"), d2[5:].replace("-", "/")
     if kind == "week":
