@@ -70,7 +70,8 @@ CH = {
              "📌 やること宣言＝今日限りのメモ（1行に1つ・まとめて宣言OK）。終わったら✅、23時に引き継ぎ確認、放置なら翌朝ひっそり消えます（叱責なし）。"),
     "worklog": ("作業ログ🖥", f"🔊{WORK_VC_NAME} に入ると計測開始・出ると終了。入室中に ✍ ボタンで「何をやるか」をひとこと宣言できます。\n"
                 "10分未満のセッションはログに残りません（時間は記録）。`/kiroku` に今週の作業時間、通信簿に🖥もくもく賞。"),
-    "bath": ("おふろ🛁", "🛁 お風呂に入ったら押す。🪥 歯磨きも（1日に何回でも）。"),
+    "bath": ("おふろ🛁", "🛁 お風呂に入ったら押す。🪥 歯磨きも（1日に何回でも）。\n"
+             "📦 使用期限メモ＝コンタクト・歯ブラシ等「開封からN日で交換」の品を登録。交換時期の朝にお知らせ、🔄で次のサイクルへ。"),
     "kora": ("叱責👹", "毎晩の判定で、最低限を守れなかった人が晒される場所。"),
     "tsushinbo": ("つうしんぼ📮", "毎週日曜の夜に、その週の通信簿（達成率ランキング・各賞）が届く場所。"),
     "kadai": ("課題📚", "🎓 で履修科目を登録 → 気づいた人が ➕ で課題を登録 → 同じ科目の履修者だけに通知＆リマインド（3日前・前日・当日）。\n"
@@ -181,6 +182,7 @@ CREATE TABLE IF NOT EXISTS night_shifts(day TEXT NOT NULL, user_id TEXT NOT NULL
 CREATE TABLE IF NOT EXISTS memos(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, text TEXT NOT NULL, day TEXT NOT NULL, ts INTEGER, msg_id TEXT, carried INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS memo_prompts(day TEXT NOT NULL, user_id TEXT NOT NULL, msg_id TEXT, PRIMARY KEY(day, user_id));
 CREATE TABLE IF NOT EXISTS work_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, start_ts INTEGER NOT NULL, end_ts INTEGER, day TEXT NOT NULL, note TEXT, msg_id TEXT);
+CREATE TABLE IF NOT EXISTS goods_items(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, name TEXT NOT NULL, cycle_days INTEGER NOT NULL, due_day TEXT NOT NULL, opened_day TEXT);
 CREATE INDEX IF NOT EXISTS idx_work_user_day ON work_sessions(user_id, day);
 """
 db = None
@@ -446,7 +448,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(SetteiView())
         self.add_view(IntroView())
         self.add_dynamic_items(DoneButton, MealFixButton, PraiseButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
-                               MemoDoneButton, MemoCarryButton, MemoDropButton, WorkNoteButton)
+                               MemoDoneButton, MemoCarryButton, MemoDropButton, WorkNoteButton, GoodsResetButton)
         self.add_view(EraiView())
         # コマンドの同期はグローバルではなくサーバー単位で行う（即時反映）。on_ready 参照。
 
@@ -720,6 +722,15 @@ class BathView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(MyCheckShortcut("bath"))
+
+    @discord.ui.button(label="📦 期限メモに登録", style=discord.ButtonStyle.secondary, custom_id="sk_goods_add", row=1)
+    async def goods_add(self, interaction, button):
+        await interaction.response.send_modal(GoodsAddModal())
+
+    @discord.ui.button(label="📦 期限メモを見る・交換", style=discord.ButtonStyle.secondary, custom_id="sk_goods_list", row=1)
+    async def goods_list(self, interaction, button):
+        await ensure_user(interaction.user)
+        await goods_show(interaction)
 
     @discord.ui.button(label="🛁 お風呂入った", style=discord.ButtonStyle.primary, custom_id="sk_bath")
     async def bath(self, interaction, button):
@@ -1732,6 +1743,10 @@ async def remind_loop():
         await memo_cleanup(day)   # 引き継がれなかったメモは朝に消える
     except Exception as e:
         print(f"memo cleanup error: {e!r}", flush=True)
+    try:
+        await goods_remind()   # 生活用品の交換期限アラート
+    except Exception as e:
+        print(f"goods remind error: {e!r}", flush=True)
 
 # ---- /jikanwari ----
 jikanwari = app_commands.Group(name="jikanwari", description="履修科目の登録・確認")
@@ -2072,6 +2087,12 @@ async def today_digest(uid, now):
         fr = await fridge_soon(uid, day_str(now))
         if fr:
             lines.append("🧊 期限が近い食品：" + "／".join(fr))
+    except Exception:
+        pass
+    try:
+        gs = await goods_soon(uid, day_str(now))
+        if gs:
+            lines.append("📦 使用期限：" + "／".join(gs))
     except Exception:
         pass
     try:
@@ -3652,6 +3673,206 @@ async def reizouko_tabeta_ac(interaction, current):
             for r in await fridge_items_of(interaction.user.id) if not cur or cur in r["name"]][:25]
 
 bot.tree.add_command(reizouko_grp)
+
+# ------------------------------------------------------------
+#  生活用品の使用期限📦
+#  マンスリーコンタクト・歯ブラシ・スポンジなど「開封からN日で交換」するものの
+#  リマインド。冷蔵庫🧊と違って勝手には消えず、🔄交換でサイクルが回る。判定はしない。
+# ------------------------------------------------------------
+GOODS_PRESETS = {  # 開封・使用開始からの交換目安（日）。あくまで目安、nichisuu で自由に変更可
+    "マンスリーコンタクト": 30, "2weekコンタクト": 14, "コンタクト洗浄液": 90, "目薬": 30,
+    "歯ブラシ": 30, "カミソリの刃": 14, "キッチンスポンジ": 30, "ふきん": 30,
+    "浄水カートリッジ": 60, "マスカラ": 90, "リップ": 180, "化粧水": 180, "日焼け止め": 365,
+}
+
+def goods_preset_days(name):
+    n = unicodedata.normalize("NFKC", name or "").strip()
+    if n in GOODS_PRESETS:
+        return GOODS_PRESETS[n]
+    for k, d in GOODS_PRESETS.items():
+        if k in n:   # 「左目のマンスリーコンタクト」→マンスリーコンタクト の部分一致
+            return d
+    return None
+
+async def goods_items_of(uid):
+    async with db.execute("SELECT * FROM goods_items WHERE user_id=? ORDER BY due_day, id", (str(uid),)) as c:
+        return await c.fetchall()
+
+async def goods_soon(uid, today):
+    """今日・明日が期限＋期限切れのものの表示リスト（自動では消えない。🔄交換でリセット）"""
+    out = []
+    for r in await goods_items_of(uid):
+        if (date.fromisoformat(r["due_day"]) - date.fromisoformat(today)).days <= 1:
+            out.append(f"**{r['name']}**（{fridge_label(r['due_day'], today)}）")
+    return out
+
+async def goods_reset(item_id, today=None):
+    """交換・開封し直し → 今日から次のサイクルへ。新しい期限dayを返す"""
+    today = today or day_str(now_jst())
+    async with db.execute("SELECT * FROM goods_items WHERE id=?", (item_id,)) as c:
+        r = await c.fetchone()
+    if not r:
+        return None
+    due = (date.fromisoformat(today) + timedelta(days=r["cycle_days"])).isoformat()
+    await db.execute("UPDATE goods_items SET due_day=?, opened_day=? WHERE id=?", (due, today, item_id))
+    await db.commit()
+    return due
+
+async def goods_register(interaction, namae, nichisuu):
+    """品を「今日開封」として登録（パネルのフォームと /kigen add の共通処理）"""
+    await ensure_user(interaction.user)
+    today = day_str(now_jst())
+    nm = unicodedata.normalize("NFKC", namae or "").strip()[:30]
+    if not nm:
+        await interaction.response.send_message("⚠️ 品名を入れてください（例 マンスリーコンタクト）", ephemeral=True)
+        return
+    days = nichisuu if nichisuu else goods_preset_days(nm)
+    if not days:
+        await interaction.response.send_message(f"「{nm}」の目安日数を知らないので、何日ごとに交換するか指定してください（例 `30`）。", ephemeral=True)
+        return
+    days = max(1, min(730, int(days)))
+    due = (date.fromisoformat(today) + timedelta(days=days)).isoformat()
+    await db.execute("INSERT INTO goods_items(user_id,name,cycle_days,due_day,opened_day) VALUES(?,?,?,?,?)",
+                     (str(interaction.user.id), nm, days, due, today))
+    await db.commit()
+    await interaction.response.send_message(
+        f"📦 **{nm}** を今日開封として登録しました（{days}日ごと・次の交換 {fridge_due_fmt(due)}）。"
+        f"期限の前日と当日の朝にお知らせします。交換したら 🔄 で次のサイクルへ。" + hitokoto_suffix(), ephemeral=True)
+
+class GoodsAddModal(discord.ui.Modal, title="📦 使用期限メモに登録"):
+    nm = discord.ui.TextInput(label="品名（例 マンスリーコンタクト・歯ブラシ）", max_length=30)
+    dd = discord.ui.TextInput(label="何日ごと？（例 30。定番品は空欄で目安から自動）", required=False, max_length=4)
+
+    async def on_submit(self, interaction):
+        raw = self.dd.value.strip()
+        if raw and not raw.isdigit():
+            await interaction.response.send_message("⚠️ 日数は数字で入れてください（例 30）", ephemeral=True)
+            return
+        await goods_register(interaction, self.nm.value, int(raw) if raw else None)
+
+class GoodsResetSelect(discord.ui.Select):
+    def __init__(self, rows, today):
+        opts = [discord.SelectOption(label=f"{r['name']}（{fridge_label(r['due_day'], today)}・{r['cycle_days']}日ごと）"[:100],
+                                     value=str(r["id"])) for r in rows[:25]]
+        super().__init__(placeholder="🔄 交換・開封し直したものを選ぶ（複数OK）", options=opts, min_values=1, max_values=len(opts))
+
+    async def callback(self, interaction):
+        notes = []
+        for v in self.values:
+            async with db.execute("SELECT * FROM goods_items WHERE id=? AND user_id=?", (int(v), str(interaction.user.id))) as c:
+                r = await c.fetchone()
+            if r:
+                due = await goods_reset(r["id"])
+                notes.append(f"**{r['name']}**（次は {fridge_due_fmt(due)}）")
+        content = ("🔄 " + "、".join(notes) + "　リセットしました。えらい！" + hitokoto_suffix()) if notes else "対象が見つかりませんでした。"
+        await interaction.response.edit_message(content=content, view=None)
+
+async def goods_show(interaction):
+    today = day_str(now_jst())
+    rows = await goods_items_of(interaction.user.id)
+    if not rows:
+        await interaction.response.send_message("📦 登録されている品はありません。「📦 期限メモに登録」か `/kigen add namae:マンスリーコンタクト` でどうぞ。開封した日に登録すると、交換時期の朝にお知らせします。", ephemeral=True)
+        return
+    lines = [f"・**{r['name']}**　次の交換 {fridge_due_fmt(r['due_day'])}（{fridge_label(r['due_day'], today)}・{r['cycle_days']}日ごと）" for r in rows]
+    view = discord.ui.View(timeout=300)
+    view.add_item(GoodsResetSelect(rows, today))
+    await interaction.response.send_message("📦 **使用期限メモ**\n" + "\n".join(lines) +
+                                            "\n\n交換したら下のプルダウンでリセット。やめる品は `/kigen remove` で。",
+                                            view=view, ephemeral=True)
+
+class GoodsResetButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_goods_reset:(?P<id>\d+)"):
+    def __init__(self, item_id, label=None):
+        super().__init__(discord.ui.Button(label=(label or "🔄 交換した")[:80], style=discord.ButtonStyle.primary,
+                                           custom_id=f"sk_goods_reset:{item_id}"))
+        self.item_id = int(item_id)
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["id"])
+
+    async def callback(self, interaction):
+        async with db.execute("SELECT * FROM goods_items WHERE id=?", (self.item_id,)) as c:
+            r = await c.fetchone()
+        if not r:
+            await interaction.response.send_message("この品はもう登録されていません。", ephemeral=True)
+            return
+        if r["user_id"] != str(interaction.user.id):
+            await interaction.response.send_message("本人だけが押せます。", ephemeral=True)
+            return
+        due = await goods_reset(r["id"])
+        await interaction.response.send_message(f"🔄 **{r['name']}** を交換しました。次は {fridge_due_fmt(due)} です。えらい！" + hitokoto_suffix(), ephemeral=True)
+
+async def goods_remind():
+    """REMIND_HOUR に #おふろ🛁 へ、交換期限が今日・明日のものをまとめてアラート（🔄ボタンで即リセット）。
+    期限を過ぎたものは毎朝は騒がず、☀️の返事に⚠️で出続ける"""
+    today = day_str(now_jst())
+    tomorrow = (date.fromisoformat(today) + timedelta(days=1)).isoformat()
+    async with db.execute("SELECT * FROM goods_items WHERE due_day IN (?,?) ORDER BY user_id, due_day, id", (today, tomorrow)) as c:
+        rows = await c.fetchall()
+    if not rows:
+        return
+    ch = await get_ch("bath")
+    if not ch:
+        return
+    lines = [f"・<@{r['user_id']}> **{r['name']}**（{fridge_label(r['due_day'], today)}・{r['cycle_days']}日ごと）" for r in rows]
+    view = discord.ui.View(timeout=None)
+    for r in rows[:25]:
+        view.add_item(GoodsResetButton(r["id"], label=f"🔄 {r['name']}"))
+    await ch.send("📦 **使用期限アラート**：そろそろ交換の時期です\n" + "\n".join(lines), view=view)
+    await bump_panel("bath")
+
+kigen_grp = app_commands.Group(name="kigen", description="生活用品の使用期限リマインド（コンタクト・歯ブラシ等の交換サイクル）")
+
+@kigen_grp.command(name="add", description="開封・使用開始した品を登録（定番品は nichisuu 省略で目安から自動）")
+@app_commands.describe(namae="品名 例 マンスリーコンタクト（定番品は候補に目安つきで出ます）", nichisuu="何日ごとに交換するか 例 30（省略で定番品は目安から）")
+async def kigen_add(interaction, namae: str, nichisuu: int = None):
+    await goods_register(interaction, namae, nichisuu)
+
+@kigen_add.autocomplete("namae")
+async def kigen_namae_ac(interaction, current):
+    cur = unicodedata.normalize("NFKC", current or "").strip()
+    return [app_commands.Choice(name=f"{k}（目安{d}日）", value=k)
+            for k, d in GOODS_PRESETS.items() if not cur or cur in k][:25]
+
+@kigen_grp.command(name="list", description="登録中の品と次の交換時期を見る（自分にだけ表示）")
+async def kigen_list(interaction):
+    await goods_show(interaction)
+
+async def ac_my_goods(interaction, current):
+    cur = unicodedata.normalize("NFKC", current or "").strip()
+    return [app_commands.Choice(name=f"{r['name']}（次の交換 {fridge_due_fmt(r['due_day'])}）", value=str(r["id"]))
+            for r in await goods_items_of(interaction.user.id) if not cur or cur in r["name"]][:25]
+
+@kigen_grp.command(name="koukan", description="交換・開封し直した品のサイクルをリセット")
+@app_commands.describe(namae="交換した品（候補から選ぶ）")
+@app_commands.autocomplete(namae=ac_my_goods)
+async def kigen_koukan(interaction, namae: str):
+    r = None
+    if namae.isdigit():
+        async with db.execute("SELECT * FROM goods_items WHERE id=? AND user_id=?", (int(namae), str(interaction.user.id))) as c:
+            r = await c.fetchone()
+    if not r:
+        await interaction.response.send_message("見つかりませんでした。`/kigen list` で確認してね。", ephemeral=True)
+        return
+    due = await goods_reset(r["id"])
+    await interaction.response.send_message(f"🔄 **{r['name']}** を交換しました。次は {fridge_due_fmt(due)} です。" + hitokoto_suffix(), ephemeral=True)
+
+@kigen_grp.command(name="remove", description="品をリマインドから外す")
+@app_commands.describe(namae="外す品（候補から選ぶ）")
+@app_commands.autocomplete(namae=ac_my_goods)
+async def kigen_remove(interaction, namae: str):
+    r = None
+    if namae.isdigit():
+        async with db.execute("SELECT * FROM goods_items WHERE id=? AND user_id=?", (int(namae), str(interaction.user.id))) as c:
+            r = await c.fetchone()
+    if not r:
+        await interaction.response.send_message("見つかりませんでした。`/kigen list` で確認してね。", ephemeral=True)
+        return
+    await db.execute("DELETE FROM goods_items WHERE id=?", (r["id"],))
+    await db.commit()
+    await interaction.response.send_message(f"🗑 **{r['name']}** をリマインドから外しました。", ephemeral=True)
+
+bot.tree.add_command(kigen_grp)
 
 async def ensure_tips_forum(guild, cat):
     """#暮らしのtips📚（フォーラム）を用意。コミュニティ未設定などで作れない場合は案内を出す"""

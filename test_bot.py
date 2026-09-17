@@ -39,7 +39,7 @@ check("🧊は2段目・ごはんは1段目", sorted({i.row for i in B.MealView(
       and sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_meal")}) == [0], True)
 check("課題パネルは4ボタン", {i.custom_id for i in B.KadaiPanelView().children}, {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list"})
 check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "reizouko", "saitei", "setup", "suimin", "tips", "tsushinbo", "watashi"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kigen", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "reizouko", "saitei", "setup", "suimin", "tips", "tsushinbo", "watashi"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n
@@ -603,6 +603,25 @@ async def main():
     check("冷蔵庫: 表示に名前とラベル", any("牛乳" in s and "今日まで！" in s for s in soon), True)
     await B.fridge_cleanup("2026-09-03")
     check("冷蔵庫: 期限3日過ぎは自動削除", sorted(r["name"] for r in await B.fridge_items_of("9")), ["もやし", "卵", "牛乳"])
+
+    # 生活用品の使用期限📦
+    check("期限メモ: プリセット マンスリー=30日", B.goods_preset_days("マンスリーコンタクト"), 30)
+    check("期限メモ: 部分一致", B.goods_preset_days("左のマンスリーコンタクト"), 30)
+    check("期限メモ: 未知はNone", B.goods_preset_days("謎の水"), None)
+    await B.db.execute("INSERT INTO goods_items(user_id,name,cycle_days,due_day,opened_day) VALUES('91','コンタクト',30,?,'2026-07-06')", (day,))
+    await B.db.execute("INSERT INTO goods_items(user_id,name,cycle_days,due_day,opened_day) VALUES('91','歯ブラシ',30,'2026-08-06','2026-07-07')")
+    await B.db.execute("INSERT INTO goods_items(user_id,name,cycle_days,due_day,opened_day) VALUES('91','日焼け止め',365,'2026-12-01','2026-08-01')")
+    await B.db.execute("INSERT INTO goods_items(user_id,name,cycle_days,due_day,opened_day) VALUES('91','古いスポンジ',30,'2026-08-01','2026-07-02')")
+    await B.db.commit()
+    gs = await B.goods_soon("91", day)
+    check("期限メモ: 今日・明日・超過の3件（先の日焼け止めは出ない）", len(gs), 3)
+    check("期限メモ: 超過は⚠️表示のまま消えない", any("⚠️4日過ぎ" in s for s in gs), True)
+    async with B.db.execute("SELECT id FROM goods_items WHERE user_id='91' AND name='コンタクト'") as c:
+        gid = (await c.fetchone())["id"]
+    check("期限メモ: 交換で次サイクルへ", await B.goods_reset(gid, day), "2026-09-04")
+    async with B.db.execute("SELECT opened_day FROM goods_items WHERE id=?", (gid,)) as c:
+        check("期限メモ: 開封日も更新", (await c.fetchone())["opened_day"], day)
+    check("おふろパネルに📦 2ボタン", {"sk_goods_add", "sk_goods_list"} <= {i.custom_id for i in B.BathView().children}, True)
 
     # 叱責に処方TIPS💊（テストDBのTIPS: 5分チャーハン=レシピタグ、限定プリン=期限切れ）
     rx = await B.prescribe_tip("42", "2026-09-03", ["🍚 食事 1/2 回"])
