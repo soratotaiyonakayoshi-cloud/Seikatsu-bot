@@ -566,6 +566,7 @@ async def main():
     check("通信簿カード: PNG生成", cardb is not None and len(cardb.getvalue()) > 20000, True)
     check("通信簿カード: 空データでも生成", _card_orig("2026-08-03", "2026-08-09", [], [], []) is not None, True)
     check("通信簿カード: 名前の絵文字除去", B._plain_name("ねぼう🐷"), "ねぼう")
+    check("通信簿カード: 絵文字フォント同梱", B._find_emoji_font() is not None and "NotoEmoji" in B._find_emoji_font(), True)
 
     # 📝チェックリストの導線（各パネルのショートカット＋☀️返事の行差し替え）
     check("📝ショートカットが4パネル全部に", all(any(str(getattr(i, "custom_id", "")).startswith("sk_mycheck_") for i in V().children)

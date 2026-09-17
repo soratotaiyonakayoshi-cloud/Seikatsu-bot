@@ -1065,6 +1065,14 @@ def _plain_name(s, limit=10):
                   or 0xF900 <= ord(ch) <= 0xFAFF or 0xFF00 <= ord(ch) <= 0xFFEF).strip() or "？"
     return out[:limit] + ("…" if len(out) > limit else "")
 
+def _find_emoji_font():
+    """モノクロ絵文字フォント（各賞アイコン用）。リポジトリ同梱のNoto Emoji優先"""
+    for f in (os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "NotoEmoji.ttf"),
+              "C:/Windows/Fonts/seguiemj.ttf"):
+        if os.path.exists(f):
+            return f
+    return None
+
 def render_tsushinbo_card(d1, d2, ranking, award_items, series, manual=False):
     """通信簿を1枚のカード画像に（ヘッダー・ランキング・各賞・週間グラフ）。描けなければ None → テキストにフォールバック"""
     try:
@@ -1079,6 +1087,8 @@ def render_tsushinbo_card(d1, d2, ranking, award_items, series, manual=False):
         return None
     fp = font_manager.FontProperties(fname=f)
     fpb = font_manager.FontProperties(fname=f, weight="bold")
+    ef = _find_emoji_font()
+    efp = font_manager.FontProperties(fname=ef) if ef else None
     n_r = max(1, len(ranking))
     n_a = (len(award_items) + 1) // 2
     h_head, h_rank, h_chart = 0.7, 0.55 + 0.46 * n_r, 2.2
@@ -1132,7 +1142,12 @@ def render_tsushinbo_card(d1, d2, ranking, award_items, series, manual=False):
             x0 = 0.0 if col == 0 else 0.52
             y = n_a - 1 - row + 0.5
             neta = a["title"] in ("寝坊賞", "二度寝賞", "こら賞")
-            axa.scatter([x0 + 0.012], [y], s=60, color=(CARD_MUTED if neta else CARD_ORANGE), clip_on=False)
+            icon_c = CARD_MUTED if neta else CARD_ORANGE
+            em = (a.get("emoji") or "").replace("️", "")   # VS16はフォントに無いので除去
+            if efp and em:
+                axa.text(x0 + 0.012, y, em, fontproperties=efp, fontsize=12, color=icon_c, ha="center", va="center")
+            else:
+                axa.scatter([x0 + 0.012], [y], s=60, color=icon_c, clip_on=False)
             axa.text(x0 + 0.035, y, a["title"], fontproperties=fpb, fontsize=10.5, color=CARD_INK, va="center")
             names = "、".join(_plain_name(n, 6) for n in a["names"][:3]) + ("ほか" if len(a["names"]) > 3 else "")
             axa.text(x0 + 0.19, y, f"{names}（{a['value']}）"[:26], fontproperties=fp, fontsize=10.5, color="#4a453d", va="center")
