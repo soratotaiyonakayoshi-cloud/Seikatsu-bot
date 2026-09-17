@@ -1054,6 +1054,133 @@ def render_week_chart(d1, series):
     buf.seek(0)
     return buf
 
+# 通信簿カードの配色（Twitter勧誘パンフと同じブランドカラー）
+CARD_CREAM, CARD_INK, CARD_ORANGE, CARD_AMBER = "#f7f2e8", "#1b1815", "#d9701a", "#f2a349"
+CARD_MUTED, CARD_LINE, CARD_TRACK = "#8a8378", "#e2dacb", "#ede4d3"
+CARD_SERIES = ["#d9701a", "#3d8f83", "#5b7fa6", "#8a6fae", "#c2527a", "#7a8a3f", "#b8860b", "#556270"]
+
+def _plain_name(s, limit=10):
+    """画像描画用に絵文字などフォントに無い文字を落とす（豆腐▯対策）"""
+    out = "".join(ch for ch in str(s) if ord(ch) < 0x2600 or 0x3000 <= ord(ch) <= 0x9FFF
+                  or 0xF900 <= ord(ch) <= 0xFAFF or 0xFF00 <= ord(ch) <= 0xFFEF).strip() or "？"
+    return out[:limit] + ("…" if len(out) > limit else "")
+
+def render_tsushinbo_card(d1, d2, ranking, award_items, series, manual=False):
+    """通信簿を1枚のカード画像に（ヘッダー・ランキング・各賞・週間グラフ）。描けなければ None → テキストにフォールバック"""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib import font_manager
+    except Exception:
+        return None
+    f = _find_cjk_font()
+    if not f:
+        return None
+    fp = font_manager.FontProperties(fname=f)
+    fpb = font_manager.FontProperties(fname=f, weight="bold")
+    n_r = max(1, len(ranking))
+    n_a = (len(award_items) + 1) // 2
+    h_head, h_rank, h_chart = 0.7, 0.55 + 0.46 * n_r, 2.2
+    h_awd = (0.55 + 0.42 * n_a) if award_items else 0.05
+    heights = [h_head, h_rank, h_awd, h_chart, h_chart]
+    fig_h = sum(heights) + 0.8
+    fig = plt.figure(figsize=(8.6, fig_h), dpi=150)
+    fig.patch.set_facecolor(CARD_CREAM)
+    gs = fig.add_gridspec(5, 1, height_ratios=heights, hspace=0.38,
+                          left=0.06, right=0.965, top=1 - 0.06 / fig_h, bottom=0.55 / fig_h)
+    # ヘッダー（墨色の帯）
+    axh = fig.add_subplot(gs[0])
+    axh.axis("off")
+    axh.add_patch(plt.Rectangle((0, 0), 1, 1, transform=axh.transAxes, color=CARD_INK, clip_on=False))
+    axh.text(0.03, 0.5, "今週の通信簿", transform=axh.transAxes, fontproperties=fpb, fontsize=19, color=CARD_CREAM, va="center")
+    axh.text(0.97, 0.5, f"{d1[5:].replace('-', '/')} 〜 {d2[5:].replace('-', '/')}" + ("（手動）" if manual else ""),
+             transform=axh.transAxes, fontproperties=fp, fontsize=11, color=CARD_AMBER, va="center", ha="right")
+    # ランキング（達成率バー）
+    axr = fig.add_subplot(gs[1])
+    axr.axis("off")
+    axr.set_xlim(0, 1)
+    axr.set_ylim(0, n_r + 1.0)
+    axr.text(0, n_r + 0.5, "最低限 達成率ランキング", fontproperties=fpb, fontsize=13, color=CARD_INK)
+    if not ranking:
+        axr.text(0.02, n_r - 0.5, "判定対象の人がいませんでした（/saitei で設定）", fontproperties=fp, fontsize=11, color=CARD_MUTED)
+    medal_c = ["#d9a521", "#a8adb8", "#c08552"]
+    for i, x in enumerate(ranking):
+        y = n_r - 1 - i + 0.5
+        axr.scatter([0.02], [y], s=290, color=(medal_c[i] if i < 3 else CARD_TRACK), zorder=2, clip_on=False)
+        axr.text(0.02, y, str(i + 1), fontproperties=fpb, fontsize=10, ha="center", va="center", zorder=3,
+                 color=CARD_INK if i < 3 else CARD_MUTED)
+        axr.text(0.055, y, _plain_name(x["name"]), fontproperties=fpb, fontsize=12, color=CARD_INK, va="center")
+        rate = x["ach"] / x["judged"] if x["judged"] else 0
+        bx, bw = 0.34, 0.36
+        axr.barh([y], [bw], left=bx, height=0.36, color=CARD_TRACK, zorder=1)
+        if rate > 0:
+            axr.barh([y], [bw * rate], left=bx, height=0.36, color=(CARD_ORANGE if rate >= 0.999 else CARD_AMBER), zorder=2)
+        axr.text(bx + bw + 0.015, y, f"{x['ach']}/{x['judged']}日  {round(rate * 100)}%",
+                 fontproperties=fp, fontsize=11, color=CARD_INK, va="center")
+        if x["streak"] >= 2:
+            axr.text(1.0, y, f"連続{x['streak']}日", fontproperties=fpb, fontsize=10.5, color=CARD_ORANGE, va="center", ha="right")
+    # 各賞（2列）
+    axa = fig.add_subplot(gs[2])
+    axa.axis("off")
+    if award_items:
+        axa.set_xlim(0, 1)
+        axa.set_ylim(0, n_a + 1.0)
+        axa.text(0, n_a + 0.5, "今週の各賞", fontproperties=fpb, fontsize=13, color=CARD_INK)
+        for idx, a in enumerate(award_items):
+            col, row = idx % 2, idx // 2
+            x0 = 0.0 if col == 0 else 0.52
+            y = n_a - 1 - row + 0.5
+            neta = a["title"] in ("寝坊賞", "二度寝賞", "こら賞")
+            axa.scatter([x0 + 0.012], [y], s=60, color=(CARD_MUTED if neta else CARD_ORANGE), clip_on=False)
+            axa.text(x0 + 0.035, y, a["title"], fontproperties=fpb, fontsize=10.5, color=CARD_INK, va="center")
+            names = "、".join(_plain_name(n, 6) for n in a["names"][:3]) + ("ほか" if len(a["names"]) > 3 else "")
+            axa.text(x0 + 0.19, y, f"{names}（{a['value']}）"[:26], fontproperties=fp, fontsize=10.5, color="#4a453d", va="center")
+    # 週間グラフ（起床・睡眠）
+    days = [date.fromisoformat(d1) + timedelta(days=i) for i in range(7)]
+    labels = [f"{d.month}/{d.day}({DAY_CHARS[d.weekday()]})" for d in days]
+    xs = list(range(7))
+    ax1 = fig.add_subplot(gs[3])
+    ax2 = fig.add_subplot(gs[4])
+    for ax, title in ((ax1, "起床時刻（時）"), (ax2, "睡眠時間（h）")):
+        ax.set_facecolor(CARD_CREAM)
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+        for sp in ("left", "bottom"):
+            ax.spines[sp].set_color(CARD_LINE)
+        ax.tick_params(colors=CARD_MUTED, labelsize=9)
+        ax.grid(axis="y", color=CARD_LINE, alpha=0.9, linewidth=0.8)
+        ax.set_title(title, fontproperties=fpb, fontsize=12, color=CARD_INK, loc="left")
+        ax.set_xticks(xs)
+        ax.set_xticklabels(labels, fontproperties=fp)
+    wake_all, sleep_all = [], []
+    for si, sr in enumerate(series):
+        ccol = CARD_SERIES[si % len(CARD_SERIES)]
+        wv = [sr["wake"].get(d.isoformat(), float("nan")) for d in days]
+        sv = [sr["sleep"].get(d.isoformat(), float("nan")) for d in days]
+        wake_all += [v for v in wv if v == v]
+        sleep_all += [v for v in sv if v == v]
+        nm = _plain_name(sr["name"], 8)
+        ax1.plot(xs, wv, marker="o", markersize=4.5, linewidth=2, color=ccol, label=nm)
+        ax2.plot(xs, sv, marker="o", markersize=4.5, linewidth=2, color=ccol, label=nm)
+    if wake_all:
+        ax1.set_ylim(max(0.0, min(wake_all) - 1), max(wake_all) + 1)
+    if sleep_all:
+        ax2.set_ylim(max(0.0, min(sleep_all) - 1), max(sleep_all) + 1)
+    if series:
+        ax1.legend(prop=fp, fontsize=8, frameon=False, ncol=min(4, len(series)),
+                   loc="lower right", bbox_to_anchor=(1.0, 1.0))   # グラフの外（右上）に置いて線と被らせない
+    else:
+        for ax in (ax1, ax2):
+            ax.text(0.5, 0.5, "今週は記録がありませんでした", transform=ax.transAxes,
+                    fontproperties=fp, fontsize=11, color=CARD_MUTED, ha="center", va="center")
+    fig.text(0.5, 0.18 / fig_h, "来週もほどほどに、最低限を守ろう", fontproperties=fp, fontsize=9.5, color=CARD_MUTED, ha="center")
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
 async def period_summary(guild, d1, d2, kind="week", manual=False):
     """kind='week'：今週の通信簿（#つうしんぼ📮）／kind='month'：月間表彰"""
     now = now_jst()
@@ -1119,8 +1246,8 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
         rate = round(x["ach"] * 100 / x["judged"])
         medal = ["🥇", "🥈", "🥉"][i] if i < 3 else f"{i + 1}."
         lines.append(f"{medal} **{x['name']}**　達成 {x['ach']}/{x['judged']}日（{rate}%）" + (f"　🔥{x['streak']}日連続" if x["streak"] >= 2 else ""))
-    def award(title, key, pick_min=False, need=lambda x: True, fmt=lambda v: str(v)):
-        """同点は全員表彰"""
+    def award(emoji, title, key, pick_min=False, need=lambda x: True, fmt=lambda v: str(v)):
+        """同点は全員表彰。テキストにも通信簿カードにも使える構造で返す"""
         cands = [x for x in stats if x[key] is not None and need(x)]
         if not cands:
             return None
@@ -1128,32 +1255,33 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
         if not pick_min and not best_val:
             return None
         winners = [x for x in cands if x[key] == best_val]
-        return f"{title}：" + "、".join(f"**{w['name']}**" for w in winners) + f"（{fmt(best_val)}）"
+        return {"emoji": emoji, "title": title, "names": [w["name"] for w in winners], "value": fmt(best_val)}
     kaikin_need = 3 if kind == "week" else 15
     kaikin = [x for x in judged if x["judged"] >= kaikin_need and x["ach"] == x["judged"]]
     mt_names, mt_best = await meshitero_winners(d1, d2)
-    awards = [a for a in (
-        ("👑 皆勤賞：" + "、".join(f"**{x['name']}**" for x in kaikin)) if kaikin else None,
-        award("🌅 早起き賞", "wake_avg", pick_min=True, need=lambda x: x["wake_n"] >= 3, fmt=lambda v: f"平均 {int(v)//60}:{int(v)%60:02d}"),
-        award("🛌 ぐっすり賞", "sleep_avg", need=lambda x: x["sleep_avg"] is not None, fmt=lambda v: f"平均 {v:.1f}h"),
-        award("🧹 家事賞", "chores", fmt=lambda v: f"{v}回"),
-        award("🍚 ごはん賞", "meals", fmt=lambda v: f"{v}回報告"),
-        ("🍜 飯テロ賞：" + "、".join(f"**{n}**" for n in mt_names) + f"（👏{mt_best}）") if mt_names else None,
-        award("🛁 きれい好き賞", "baths", fmt=lambda v: f"{v}日"),
-        award("🪥 歯磨き賞", "teeth", fmt=lambda v: f"{v}回"),
-        award("🌟 がんばり屋賞", "efforts", fmt=lambda v: f"{v}件"),
-        award("👏 ほめ上手賞", "praises", fmt=lambda v: f"{v}回"),
-        award("🏃 ラジオ体操賞", "radio", fmt=lambda v: f"{v}回"),
-        award("🐷 寝坊賞", "late", fmt=lambda v: f"{v}回"),
-        award("😴 二度寝賞", "nizone", fmt=lambda v: f"{v}回"),
-        award("👹 こら賞", "miss_n", fmt=lambda v: f"未達 {v}件"),
+    award_items = [a for a in (
+        {"emoji": "👑", "title": "皆勤賞", "names": [x["name"] for x in kaikin], "value": "全日達成"} if kaikin else None,
+        award("🌅", "早起き賞", "wake_avg", pick_min=True, need=lambda x: x["wake_n"] >= 3, fmt=lambda v: f"平均 {int(v)//60}:{int(v)%60:02d}"),
+        award("🛌", "ぐっすり賞", "sleep_avg", need=lambda x: x["sleep_avg"] is not None, fmt=lambda v: f"平均 {v:.1f}h"),
+        award("🧹", "家事賞", "chores", fmt=lambda v: f"{v}回"),
+        award("🍚", "ごはん賞", "meals", fmt=lambda v: f"{v}回報告"),
+        {"emoji": "🍜", "title": "飯テロ賞", "names": mt_names, "value": f"拍手{mt_best}"} if mt_names else None,
+        award("🛁", "きれい好き賞", "baths", fmt=lambda v: f"{v}日"),
+        award("🪥", "歯磨き賞", "teeth", fmt=lambda v: f"{v}回"),
+        award("🌟", "がんばり屋賞", "efforts", fmt=lambda v: f"{v}件"),
+        award("👏", "ほめ上手賞", "praises", fmt=lambda v: f"{v}回"),
+        award("🏃", "ラジオ体操賞", "radio", fmt=lambda v: f"{v}回"),
+        award("🐷", "寝坊賞", "late", fmt=lambda v: f"{v}回"),
+        award("😴", "二度寝賞", "nizone", fmt=lambda v: f"{v}回"),
+        award("👹", "こら賞", "miss_n", fmt=lambda v: f"未達 {v}件"),
     ) if a]
     try:
         wa = await work_award(d1, d2)
         if wa:
-            awards.append(wa)
+            award_items.append(wa)
     except Exception as e:
         print(f"もくもく賞集計エラー: {e!r}", flush=True)
+    awards = [f"{a['emoji']} {a['title']}：" + "、".join(f"**{n}**" for n in a["names"]) + f"（{a['value']}）" for a in award_items]
     d1s, d2s = d1[5:].replace("-", "/"), d2[5:].replace("-", "/")
     if kind == "week":
         emb = discord.Embed(title=f"📮 今週の通信簿（{d1s}〜{d2s}）" + ("（手動）" if manual else ""), color=discord.Color.gold())
@@ -1162,9 +1290,16 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
         if judged:
             mvp = judged[0]
             emb.description = f"👑 **月間MVP：{mvp['name']}**　達成 {mvp['ach']}/{mvp['judged']}日（{round(mvp['ach']*100/mvp['judged'])}%）"
-    emb.add_field(name="🏆 最低限 達成率ランキング", value="\n".join(lines)[:1024] if lines else "判定対象の人がいませんでした（/saitei で設定）", inline=False)
-    if awards:
-        emb.add_field(name=("🎖 今週の各賞" if kind == "week" else "🎖 月間各賞"), value="\n".join(awards)[:1024], inline=False)
+    card_buf = None
+    if kind == "week":
+        try:   # 週次はデザイン済みの通信簿カード（1枚画像）を優先。作れなければ従来のテキスト表示
+            card_buf = await asyncio.to_thread(render_tsushinbo_card, d1, d2, judged[:10], award_items, series, manual)
+        except Exception as e:
+            print(f"通信簿カード生成エラー: {e!r}", flush=True)
+    if not card_buf:
+        emb.add_field(name="🏆 最低限 達成率ランキング", value="\n".join(lines)[:1024] if lines else "判定対象の人がいませんでした（/saitei で設定）", inline=False)
+        if awards:
+            emb.add_field(name=("🎖 今週の各賞" if kind == "week" else "🎖 月間各賞"), value="\n".join(awards)[:1024], inline=False)
     if kind == "week":
         try:
             async with db.execute("SELECT t.*, (SELECT COUNT(*) FROM tip_saves s WHERE s.tip_id=t.id) AS saves FROM tips t "
@@ -1176,7 +1311,10 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
             print(f"今週のTIPS集計エラー: {e!r}", flush=True)
     emb.set_footer(text="来週もほどほどに、最低限を守ろう" if kind == "week" else "来月もほどほどに、最低限を守ろう")
     file = None
-    if kind == "week" and series:
+    if card_buf:
+        file = discord.File(card_buf, filename="tsushinbo.png")
+        emb.set_image(url="attachment://tsushinbo.png")
+    elif kind == "week" and series:
         try:
             buf = await asyncio.to_thread(render_week_chart, d1, series)
             if buf:
@@ -3307,7 +3445,7 @@ async def work_award(d1, d2):
             break
         u = await get_user(r["user_id"])
         names.append(u["name"] if u else "？")
-    return "🖥 もくもく賞：" + "、".join(f"**{n}**" for n in names) + f"（{fmt_work(best)}）"
+    return {"emoji": "🖥", "title": "もくもく賞", "names": names, "value": fmt_work(best)}
 
 
 # ============================================================

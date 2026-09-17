@@ -158,6 +158,8 @@ async def main():
     class FakeCh:
         async def send(self, content=None, **kw):
             sent.append((content, kw.get("embed")))
+    _card_orig = B.render_tsushinbo_card
+    B.render_tsushinbo_card = lambda *a, **k: None   # 通信簿テストは従来テキスト経路で検証（カードは単体テストで）
     orig_get_ch = B.get_ch
     async def fake_get_ch(key):
         return FakeCh() if key in ("tsushinbo", "kora") else None
@@ -550,8 +552,20 @@ async def main():
     await B.db.execute("INSERT INTO work_sessions(user_id,start_ts,end_ts,day) VALUES('82',0,3600,?)", (day,))
     await B.db.commit()
     wa = await B.work_award(d1, d2)
-    check("作業: もくもく賞は最長の人（2時間）", wa is not None and "2時間0分" in wa, True)
+    check("作業: もくもく賞は最長の人（2時間）", wa is not None and wa["title"] == "もくもく賞" and wa["value"] == "2時間0分", True)
     check("作業: チャンネル定義", B.CH["worklog"][0], "作業ログ🖥")
+
+    # 通信簿カード🎨（デザイン済みテンプレートに数字を流し込む1枚画像）
+    fake_rank = [{"name": "はやおき", "ach": 7, "judged": 7, "streak": 12},
+                 {"name": "ねぼう🐷", "ach": 3, "judged": 7, "streak": 0}]
+    fake_awards = [{"emoji": "👑", "title": "皆勤賞", "names": ["はやおき"], "value": "全日達成"},
+                   {"emoji": "🐷", "title": "寝坊賞", "names": ["ねぼう🐷"], "value": "3回"},
+                   {"emoji": "🖥", "title": "もくもく賞", "names": ["はやおき"], "value": "2時間0分"}]
+    fake_series = [{"name": "はやおき", "wake": {"2026-08-03": 6.5, "2026-08-05": 6.9}, "sleep": {"2026-08-03": 7.2, "2026-08-04": 6.0}}]
+    cardb = _card_orig("2026-08-03", "2026-08-09", fake_rank, fake_awards, fake_series)
+    check("通信簿カード: PNG生成", cardb is not None and len(cardb.getvalue()) > 20000, True)
+    check("通信簿カード: 空データでも生成", _card_orig("2026-08-03", "2026-08-09", [], [], []) is not None, True)
+    check("通信簿カード: 名前の絵文字除去", B._plain_name("ねぼう🐷"), "ねぼう")
 
     # 📝チェックリストの導線（各パネルのショートカット＋☀️返事の行差し替え）
     check("📝ショートカットが4パネル全部に", all(any(str(getattr(i, "custom_id", "")).startswith("sk_mycheck_") for i in V().children)
