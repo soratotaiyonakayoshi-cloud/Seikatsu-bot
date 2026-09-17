@@ -1065,6 +1065,14 @@ def _plain_name(s, limit=10):
                   or 0xF900 <= ord(ch) <= 0xFAFF or 0xFF00 <= ord(ch) <= 0xFFEF).strip() or "？"
     return out[:limit] + ("…" if len(out) > limit else "")
 
+def _find_cjk_font_bold():
+    """見出し用の太字フォント。無ければ None（ストロークの擬似太字だけで頑張る）"""
+    for f in ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
+              "C:/Windows/Fonts/meiryob.ttc", "C:/Windows/Fonts/YuGothB.ttc"):
+        if os.path.exists(f):
+            return f
+    return None
+
 def _find_emoji_font():
     """モノクロ絵文字フォント（各賞アイコン用）。リポジトリ同梱のNoto Emoji優先"""
     for f in (os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "NotoEmoji.ttf"),
@@ -1085,33 +1093,44 @@ def render_tsushinbo_card(d1, d2, ranking, award_items, series, manual=False):
     f = _find_cjk_font()
     if not f:
         return None
+    import matplotlib.patheffects as _pe
     fp = font_manager.FontProperties(fname=f)
-    fpb = font_manager.FontProperties(fname=f, weight="bold")
+    fb = _find_cjk_font_bold()
+    fpb = font_manager.FontProperties(fname=fb or f)   # Boldファイルがあれば本物の太字
     ef = _find_emoji_font()
     efp = font_manager.FontProperties(fname=ef) if ef else None
+
+    def _embold(t, lw=0.7):
+        """同色ストロークの擬似太字（Boldフォントが無い環境でも見出しを太らせる）"""
+        t.set_path_effects([_pe.withStroke(linewidth=lw, foreground=t.get_color())])
+        return t
     n_r = max(1, len(ranking))
     n_a = (len(award_items) + 1) // 2
-    h_head, h_rank, h_chart = 0.7, 0.55 + 0.46 * n_r, 2.2
+    h_rank, h_chart = 0.55 + 0.46 * n_r, 2.2
     h_awd = (0.55 + 0.42 * n_a) if award_items else 0.05
-    heights = [h_head, h_rank, h_awd, h_chart, h_chart]
-    fig_h = sum(heights) + 0.8
+    body = [h_rank, h_awd, h_chart, h_chart]
+    band_h, top_pad, gap_below = 0.62, 0.16, 0.30   # 帯の高さ・帯の上の余白・帯とランキングの間
+    body_gaps = 0.38 * (sum(body) / len(body)) * (len(body) - 1)
+    fig_h = top_pad + band_h + gap_below + sum(body) + body_gaps + 0.55
     fig = plt.figure(figsize=(8.6, fig_h), dpi=150)
     fig.patch.set_facecolor(CARD_CREAM)
-    gs = fig.add_gridspec(5, 1, height_ratios=heights, hspace=0.38,
-                          left=0.06, right=0.965, top=1 - 0.06 / fig_h, bottom=0.55 / fig_h)
-    # ヘッダー（墨色の帯）
-    axh = fig.add_subplot(gs[0])
+    gs = fig.add_gridspec(4, 1, height_ratios=body, hspace=0.38,
+                          left=0.06, right=0.965,
+                          top=1 - (top_pad + band_h + gap_below) / fig_h, bottom=0.55 / fig_h)
+    # ヘッダー（墨色の帯・左右いっぱい。位置はグリッドと独立に制御）
+    axh = fig.add_axes([0.0, 1 - (top_pad + band_h) / fig_h, 1.0, band_h / fig_h])
     axh.axis("off")
     axh.add_patch(plt.Rectangle((0, 0), 1, 1, transform=axh.transAxes, color=CARD_INK, clip_on=False))
-    axh.text(0.03, 0.5, "今週の通信簿", transform=axh.transAxes, fontproperties=fpb, fontsize=19, color=CARD_CREAM, va="center")
-    axh.text(0.97, 0.5, f"{d1[5:].replace('-', '/')} 〜 {d2[5:].replace('-', '/')}" + ("（手動）" if manual else ""),
+    _embold(axh.text(0.075, 0.5, "今週の通信簿", transform=axh.transAxes, fontproperties=fpb,
+                     fontsize=19, color=CARD_CREAM, va="center"), 0.9)
+    axh.text(0.94, 0.5, f"{d1[5:].replace('-', '/')} 〜 {d2[5:].replace('-', '/')}" + ("（手動）" if manual else ""),
              transform=axh.transAxes, fontproperties=fp, fontsize=11, color=CARD_AMBER, va="center", ha="right")
     # ランキング（達成率バー）
-    axr = fig.add_subplot(gs[1])
+    axr = fig.add_subplot(gs[0])
     axr.axis("off")
     axr.set_xlim(0, 1)
     axr.set_ylim(0, n_r + 1.0)
-    axr.text(0, n_r + 0.5, "最低限 達成率ランキング", fontproperties=fpb, fontsize=13, color=CARD_INK)
+    _embold(axr.text(0, n_r + 0.5, "最低限 達成率ランキング", fontproperties=fpb, fontsize=14, color=CARD_INK))
     if not ranking:
         axr.text(0.02, n_r - 0.5, "判定対象の人がいませんでした（/saitei で設定）", fontproperties=fp, fontsize=11, color=CARD_MUTED)
     medal_c = ["#d9a521", "#a8adb8", "#c08552"]
@@ -1131,12 +1150,12 @@ def render_tsushinbo_card(d1, d2, ranking, award_items, series, manual=False):
         if x["streak"] >= 2:
             axr.text(1.0, y, f"連続{x['streak']}日", fontproperties=fpb, fontsize=10.5, color=CARD_ORANGE, va="center", ha="right")
     # 各賞（2列）
-    axa = fig.add_subplot(gs[2])
+    axa = fig.add_subplot(gs[1])
     axa.axis("off")
     if award_items:
         axa.set_xlim(0, 1)
         axa.set_ylim(0, n_a + 1.0)
-        axa.text(0, n_a + 0.5, "今週の各賞", fontproperties=fpb, fontsize=13, color=CARD_INK)
+        _embold(axa.text(0, n_a + 0.5, "今週の各賞", fontproperties=fpb, fontsize=14, color=CARD_INK))
         for idx, a in enumerate(award_items):
             col, row = idx % 2, idx // 2
             x0 = 0.0 if col == 0 else 0.52
@@ -1161,8 +1180,8 @@ def render_tsushinbo_card(d1, d2, ranking, award_items, series, manual=False):
     days = [date.fromisoformat(d1) + timedelta(days=i) for i in range(7)]
     labels = [f"{d.month}/{d.day}({DAY_CHARS[d.weekday()]})" for d in days]
     xs = list(range(7))
-    ax1 = fig.add_subplot(gs[3])
-    ax2 = fig.add_subplot(gs[4])
+    ax1 = fig.add_subplot(gs[2])
+    ax2 = fig.add_subplot(gs[3])
     for ax, title in ((ax1, "起床時刻（時）"), (ax2, "睡眠時間（h）")):
         ax.set_facecolor(CARD_CREAM)
         for sp in ("top", "right"):
@@ -1171,7 +1190,7 @@ def render_tsushinbo_card(d1, d2, ranking, award_items, series, manual=False):
             ax.spines[sp].set_color(CARD_LINE)
         ax.tick_params(colors=CARD_MUTED, labelsize=9)
         ax.grid(axis="y", color=CARD_LINE, alpha=0.9, linewidth=0.8)
-        ax.set_title(title, fontproperties=fpb, fontsize=12, color=CARD_INK, loc="left")
+        _embold(ax.set_title(title, fontproperties=fpb, fontsize=12.5, color=CARD_INK, loc="left"), 0.6)
         ax.set_xticks(xs)
         ax.set_xticklabels(labels, fontproperties=fp)
     wake_all, sleep_all = [], []
