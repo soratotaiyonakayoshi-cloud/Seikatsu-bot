@@ -632,6 +632,32 @@ async def main():
     await B.fridge_cleanup("2026-09-03")
     check("冷蔵庫: 期限3日過ぎは自動削除", sorted(r["name"] for r in await B.fridge_items_of("9")), ["もやし", "卵", "牛乳"])
 
+    # ☀️押し忘れ救済（自動起床）
+    _orig_now_aw = B.now_jst
+    B.now_jst = lambda: datetime(2026, 8, 5, 7, 30, tzinfo=JST)
+    try:
+        u101 = M(101, "ねすごし"); await B.ensure_user(u101)
+        await B.db.execute("UPDATE users SET wake_deadline='07:00' WHERE id='101'"); await B.db.commit()
+        await B.add_event(101, "bed", ts_dt=datetime(2026, 8, 4, 23, 30, tzinfo=JST))
+        await B.auto_wake(u101, "発言")
+        w101 = await B.events_on(101, "2026-08-05", "wake")
+        s101 = await B.events_on(101, "2026-08-05", "sleep")
+        check("自動起床: 活動で☀️記録", len(w101), 1)
+        check("自動起床: 睡眠も🌙から自動計算(8h)", len(s101) == 1 and abs(float(s101[0]["note"]) - 8.0) < 0.01, True)
+        await B.auto_wake(u101, "発言")
+        check("自動起床: 二重記録しない", len(await B.events_on(101, "2026-08-05", "wake")), 1)
+        u102 = M(102, "夜更かし中"); await B.ensure_user(u102)
+        await B.db.execute("UPDATE users SET wake_deadline='07:00' WHERE id='102'"); await B.db.commit()
+        await B.add_event(102, "bed", ts_dt=datetime(2026, 8, 5, 6, 0, tzinfo=JST))   # 1.5時間前に就寝
+        await B.auto_wake(u102, "発言")
+        check("自動起床: 就寝直後の活動では記録しない", len(await B.events_on(102, "2026-08-05", "wake")), 0)
+        u103 = M(103, "🌙なし"); await B.ensure_user(u103)
+        await B.db.execute("UPDATE users SET wake_deadline='07:00' WHERE id='103'"); await B.db.commit()
+        await B.auto_wake(u103, "発言")
+        check("自動起床: 🌙が無ければ何もしない", len(await B.events_on(103, "2026-08-05", "wake")), 0)
+    finally:
+        B.now_jst = _orig_now_aw
+
     # 科目検索の複数語絞り込み（同名28件のAcademic Writing問題）＋事前リマインド
     rs = await B.search_courses("academic 畠山")
     check("科目検索: 教員名で絞れる（月1畠山が見つかる）", sorted(r["code"] for r in rs), ["EL1012g", "el0059"])

@@ -62,6 +62,7 @@ CH = {
     "jikoshokai": ("自己紹介🙋", "📝 ボタンでフォームから自己紹介カードを投稿（あとから更新OK）。"),
     "roles": ("ロール🏷", "リアクションで学部・学年・生活形態のロールを付け外し。"),
     "wake": ("起床🌅", "☀️ 起きたら押す／🌙 寝る前に押す（睡眠時間は自動計算）／😴 二度寝したら正直に押す。\n"
+             "🌙で寝た人は、☀️を押し忘れても朝の最初の発言・ボタン・VC入室で自動記録されます（押し忘れ救済）。\n"
              "🏭 夜勤の夜に押すと、翌朝の起床・睡眠・ラジオ体操は判定なし（ストリークも継続）。\n🏃 で毎朝のラジオ体操の呼び出し（メンション）をON/OFF。"),
     "meal": ("ごはん🍚", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。\n"
              "🧊 冷蔵庫＝期限が近い食品のメモ。登録すると期限の前日・当日の朝にお知らせ（3日過ぎたら自動で消えます）。"),
@@ -757,10 +758,63 @@ VIEW_FACTORY.update({"wake": WakeView, "meal": MealView, "chore": ChoreView, "ba
 # ------------------------------------------------------------
 #  #ごはん🍚 に写真を投げたら自動記録
 # ------------------------------------------------------------
+# ------------------------------------------------------------
+#  ☀️押し忘れ救済（自動起床）
+#  🌙を押して寝た人が、朝（就寝から3時間以上あと・4時以降）に最初の活動
+#  （発言・ボタン操作・VC入室）をしたら、起きている証拠として☀️を自動記録。
+#  睡眠時間も🌙から自動計算する。🌙が無い人は曖昧なので何もしない。
+# ------------------------------------------------------------
+_autowake_cache = {"day": None, "done": set()}
+
+async def auto_wake(user, hint=""):
+    now = now_jst()
+    day = day_str(now)
+    if _autowake_cache["day"] != day:
+        _autowake_cache.update(day=day, done=set())
+    uid = str(user.id)
+    if uid in _autowake_cache["done"] or now.hour < 4:
+        return
+    u = await get_user(uid)
+    if not u or not (u["wake_deadline"] or u["sleep_min"]):
+        _autowake_cache["done"].add(uid)   # 起床系を設定していない人は以後この日はスキップ
+        return
+    if await events_on(uid, day, "wake"):
+        _autowake_cache["done"].add(uid)
+        return
+    bed_dt = await last_bed_within(uid, now)
+    if not bed_dt or (now - bed_dt) < timedelta(hours=3):
+        return   # 🌙していない／就寝直後（まだ寝る前かもしれない）→ 何もしない
+    _autowake_cache["done"].add(uid)
+    await add_event(uid, "wake", ts_dt=now)
+    hrs = (now - bed_dt).total_seconds() / 3600
+    await add_event(uid, "sleep", note=f"{hrs:.2f}", ts_dt=now)
+    dl = effective_deadline(u, now)
+    late = f" ⚠️ 締切 {dl} 超過" if dl and hhmm(now) > grace_deadline(dl) else ""
+    await post_log("wake", f"☀️ **{u['name'] or user.display_name}** {hhmm(now)} 起床（睡眠 {fmt_hours(hrs)}・{hint}から自動記録）{late}")
+
+@bot.event
+async def on_interaction(interaction):
+    """どのボタン・コマンド操作も「起きている証拠」として押し忘れ救済に使う"""
+    try:
+        if not interaction.guild or interaction.user is None or interaction.user.bot:
+            return
+        if interaction.type not in (discord.InteractionType.application_command, discord.InteractionType.component):
+            return   # モーダル送信・オートコンプリートは対象外（☀️フローとの二重記録防止）
+        cid = (interaction.data or {}).get("custom_id", "")
+        if cid in ("sk_wake", "sk_bed", "sk_nizone"):
+            return   # 起床パネル自身の操作は本来のフローに任せる
+        await auto_wake(interaction.user, "ボタン操作")
+    except Exception as e:
+        print(f"自動起床エラー: {e!r}", flush=True)
+
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
         return
+    try:
+        await auto_wake(message.author, "発言")
+    except Exception as e:
+        print(f"自動起床エラー: {e!r}", flush=True)
     animal_ch = await meta_get("ch_animal")
     if animal_ch and message.channel.id == int(animal_ch) and message.attachments \
             and any((a.content_type or "").startswith(("image/", "video/")) for a in message.attachments):
@@ -3670,6 +3724,11 @@ async def on_voice_state_update(member, before, after):
     a_id = after.channel.id if after.channel else None
     if b_id == a_id:
         return   # ミュート・画面共有の切替は無視
+    if a_id is not None:
+        try:
+            await auto_wake(member, "VC入室")   # ラジオ体操・作業部屋への入室も起きている証拠
+        except Exception as e:
+            print(f"自動起床エラー: {e!r}", flush=True)
     wid = await meta_get("ch_workvc")
     if not wid:
         return
