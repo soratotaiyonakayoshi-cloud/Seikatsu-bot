@@ -1580,12 +1580,52 @@ async def backup_db(keep=7):
     print(f"バックアップ完了: {dest}（{len(olds[-keep:])}世代）", flush=True)
     return dest
 
+PREJUDGE_SKIP = ("☀️", "🌙", "🏃")   # 22時にはもう取り返せない項目（朝のこと）はリマインドしない
+
+def actionable_misses(misses):
+    """事前リマインドで知らせる価値のある（今からでも間に合う）未達だけ残す"""
+    return [m for m in misses if not m.startswith(PREJUDGE_SKIP)]
+
+async def prejudge_reminder(day):
+    """判定の1時間前に、まだ間に合う未達を本人メンションでそっと知らせる"""
+    ch = await get_ch("kora")
+    if not ch:
+        return
+    now = now_jst()
+    d1, d2 = week_range(now)
+    is_sunday = now.weekday() == 6
+    async with db.execute("SELECT * FROM users") as c:
+        all_users = await c.fetchall()
+    async with db.execute("SELECT DISTINCT user_id FROM custom_items") as c:
+        custom_uids = {r["user_id"] for r in await c.fetchall()}
+    async with db.execute("SELECT user_id FROM off_days WHERE day=?", (day,)) as c:
+        off = {r["user_id"] for r in await c.fetchall()}
+    lines = []
+    for u in all_users:
+        if (not has_any_setting(u) and u["id"] not in custom_uids) or u["id"] in off:
+            continue
+        if await all_items_skipped(u, day):
+            continue
+        misses = actionable_misses(await build_misses(u, day, d1, d2, is_sunday))
+        if misses:
+            lines.append((f"・<@{u['id']}>　" + "／".join(misses))[:180])
+    if not lines:
+        return
+    await ch.send(f"⏳ **判定まであと1時間！**（{JUDGE_HOUR}:00 に判定）いまからでも間に合う最低限：\n"
+                  + "\n".join(lines[:25]) + hitokoto_suffix())
+
 @tasks.loop(minutes=1)
 async def judge_loop():
     now = now_jst()
+    day = day_str(now)
+    if JUDGE_HOUR >= 1 and now.hour == JUDGE_HOUR - 1 and await meta_get("last_prejudge_day") != day:
+        await meta_set("last_prejudge_day", day)   # 先に記録して二重投稿を防ぐ
+        try:
+            await prejudge_reminder(day)
+        except Exception as e:
+            print(f"事前リマインドエラー: {e!r}", flush=True)
     if now.hour < JUDGE_HOUR:
         return
-    day = day_str(now)
     if await meta_get("last_judge_day") == day:
         return
     await meta_set("last_judge_day", day)  # 先に記録して二重実行を防ぐ
@@ -1767,15 +1807,21 @@ def course_label(c, with_code=False):
     return s[:100]
 
 async def search_courses(q, limit=25):
-    nq = norm_text(q)
-    if not nq:
+    """スペース区切りの複数語で絞り込み検索。各語は 科目名・コード・教員・曜日時限・学科・クラス・学部 のどれかに
+    部分一致すればOK（AND）。同名科目が大量にあるとき『academic 畠山』『writing 月1』のように絞れる"""
+    terms = [t for t in re.split(r"\s+", unicodedata.normalize("NFKC", q or "").strip()) if t]
+    if not terms:
         async with db.execute("SELECT * FROM courses ORDER BY custom DESC, faculty, year, name LIMIT ?", (limit,)) as c:
             return await c.fetchall()
-    like = f"%{nq}%"
+    conds, args = [], []
+    for t in terms:
+        conds.append("(nname LIKE ? OR code LIKE ? OR IFNULL(teacher,'') LIKE ? OR IFNULL(slots,'') LIKE ? "
+                     "OR IFNULL(dept,'') LIKE ? OR IFNULL(cls,'') LIKE ? OR IFNULL(faculty,'') LIKE ?)")
+        args += [f"%{t.casefold()}%"] + [f"%{t}%"] * 6
     async with db.execute(
-        "SELECT * FROM courses WHERE nname LIKE ? OR code LIKE ? "
-        "ORDER BY CASE WHEN nname LIKE ? THEN 0 ELSE 1 END, custom DESC, faculty, year, name, code LIMIT ?",
-        (like, f"%{q.strip()}%", f"{nq}%", limit)) as c:
+        "SELECT * FROM courses WHERE " + " AND ".join(conds) +
+        " ORDER BY CASE WHEN nname LIKE ? THEN 0 ELSE 1 END, custom DESC, faculty, year, name, code LIMIT ?",
+        args + [f"{norm_text(terms[0])}%", limit]) as c:
         return await c.fetchall()
 
 async def get_course(code):
@@ -1978,7 +2024,8 @@ async def resolve_course_value(v):
     return await get_course(v)
 
 @jikanwari.command(name="add", description="履修科目を登録（科目名で検索。最大5つまで一度に）")
-@app_commands.describe(kamoku="科目名で検索", kamoku2="2つ目", kamoku3="3つ目", kamoku4="4つ目", kamoku5="5つ目")
+@app_commands.describe(kamoku="科目名で検索（『academic 畠山』『writing 月1』のように教員名・曜日時限を混ぜて絞り込みOK）",
+                       kamoku2="2つ目", kamoku3="3つ目", kamoku4="4つ目", kamoku5="5つ目")
 @app_commands.autocomplete(kamoku=ac_all_courses, kamoku2=ac_all_courses, kamoku3=ac_all_courses, kamoku4=ac_all_courses, kamoku5=ac_all_courses)
 async def jikanwari_add(interaction, kamoku: str, kamoku2: str = None, kamoku3: str = None, kamoku4: str = None, kamoku5: str = None):
     user = interaction.user
@@ -2254,7 +2301,7 @@ bot.tree.add_command(kadai)
 
 # ---- #課題📚 パネル（履修登録と課題登録をボタンから） ----
 class CourseSearchModal(discord.ui.Modal, title="🎓 履修科目を探す"):
-    q = discord.ui.TextInput(label="科目名（一部でOK。例 微分、英語）", max_length=40)
+    q = discord.ui.TextInput(label="科目名（教員名・曜日時限も混ぜてOK 例 writing 月1）", max_length=40)
 
     async def on_submit(self, interaction):
         query = self.q.value.strip()

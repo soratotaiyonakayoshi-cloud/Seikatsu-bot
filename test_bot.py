@@ -632,6 +632,16 @@ async def main():
     await B.fridge_cleanup("2026-09-03")
     check("冷蔵庫: 期限3日過ぎは自動削除", sorted(r["name"] for r in await B.fridge_items_of("9")), ["もやし", "卵", "牛乳"])
 
+    # 科目検索の複数語絞り込み（同名28件のAcademic Writing問題）＋事前リマインド
+    rs = await B.search_courses("academic 畠山")
+    check("科目検索: 教員名で絞れる（月1畠山が見つかる）", sorted(r["code"] for r in rs), ["EL1012g", "el0059"])
+    rs2 = await B.search_courses("writing 月1")
+    check("科目検索: 曜日時限で絞れる", len(rs2) == 10 and all("月1" in r["slots"] for r in rs2), True)
+    check("事前リマインド: 朝の項目（もう取り返せない）は出さない",
+          B.actionable_misses(["☀️ 寝坊 06:30 まで → 09:00", "🌙 睡眠不足 4.5h（最低 6.0h）", "🏃 ラジオ体操 未参加",
+                               "🛁 入浴 未報告", "🍚 食事 1/2 回"]),
+          ["🛁 入浴 未報告", "🍚 食事 1/2 回"])
+
     # 生活用品の使用期限📦
     check("期限メモ: プリセット マンスリー=30日", B.goods_preset_days("マンスリーコンタクト"), 30)
     check("期限メモ: 部分一致", B.goods_preset_days("左のマンスリーコンタクト"), 30)
