@@ -31,6 +31,7 @@ TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 DB_PATH = os.getenv("DB_PATH", "seikatsu.db")
 JUDGE_HOUR = int(os.getenv("JUDGE_HOUR", "23"))
 WAKE_GRACE_MIN = int(os.getenv("WAKE_GRACE_MIN", "10"))   # 起床締切の操作猶予（分）＝起きてからボタンを押すまでのタイムラグはノーカウント
+WAKE_REMIND_MIN = int(os.getenv("WAKE_REMIND_MIN", "10"))  # ⏰起床リマインド（オプトイン）を締切の何分前に出すか
 KORA_EMOJI_NAME = os.getenv("KORA_EMOJI", "こら")
 ERAI_EMOJI_NAME = os.getenv("ERAI_EMOJI", "えらい")   # 達成した人に付ける絵文字（無ければ ✨）
 RADIO_TIME = os.getenv("RADIO_TIME", "06:30")          # ラジオ体操の開始時刻(HH:MM)
@@ -63,7 +64,8 @@ CH = {
     "roles": ("ロール🏷", "リアクションで学部・学年・生活形態のロールを付け外し。"),
     "wake": ("起床🌅", "☀️ 起きたら押す／🌙 寝る前に押す（睡眠時間は自動計算）／😴 二度寝したら正直に押す。\n"
              "🌙で寝た人は、☀️を押し忘れても朝の最初の発言・ボタン・VC入室で自動記録されます（押し忘れ救済）。\n"
-             "🏭 夜勤の夜に押すと、翌朝の起床・睡眠・ラジオ体操は判定なし（ストリークも継続）。\n🏃 で毎朝のラジオ体操の呼び出し（メンション）をON/OFF。"),
+             "🏭 夜勤の夜に押すと、翌朝の起床・睡眠・ラジオ体操は判定なし（ストリークも継続）。\n"
+             "🏃 で毎朝のラジオ体操の呼び出し、⏰ で締切前の起床リマインド（自分の締切の10分前にメンション＝実質アラーム）をON/OFF。"),
     "meal": ("ごはん🍚", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。\n"
              "🧊 冷蔵庫＝期限が近い食品のメモ。登録すると期限の前日・当日の朝にお知らせ（3日過ぎたら自動で消えます）。"),
     "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
@@ -219,7 +221,8 @@ async def db_init():
               "ALTER TABLE users ADD COLUMN chores_set_day TEXT",
               "ALTER TABLE users ADD COLUMN benkyou_min INTEGER NOT NULL DEFAULT 0",
               "ALTER TABLE users ADD COLUMN benkyou_set_day TEXT",
-              "ALTER TABLE memos ADD COLUMN done INTEGER NOT NULL DEFAULT 0"):
+              "ALTER TABLE memos ADD COLUMN done INTEGER NOT NULL DEFAULT 0",
+              "ALTER TABLE users ADD COLUMN wake_remind INTEGER NOT NULL DEFAULT 0"):
         try:
             await db.execute(m)
             await db.commit()
@@ -654,6 +657,22 @@ class WakeView(discord.ui.View):
         state = "ON" if new else "OFF"
         extra = "（開始時にメンションで呼びます）" if new else ""
         await interaction.response.send_message(f"🏃 毎朝 {RADIO_TIME} のラジオ体操の呼び出し：**{state}**{extra}", ephemeral=True)
+
+    @discord.ui.button(label="⏰ 締切前リマインド ON/OFF", style=discord.ButtonStyle.secondary, custom_id="sk_wake_remind", row=1)
+    async def wake_remind(self, interaction, button):
+        user = interaction.user
+        await ensure_user(user)
+        u = await get_user(user.id)
+        cur = u["wake_remind"] if "wake_remind" in u.keys() else 0
+        new = 0 if cur else 1
+        await db.execute("UPDATE users SET wake_remind=? WHERE id=?", (new, str(user.id)))
+        await db.commit()
+        if new:
+            msg = (f"⏰ 起床リマインド **ON**：☀️の締切の{WAKE_REMIND_MIN}分前に未報告ならメンションで呼びます。"
+                   f"スマホの通知をONにしておけば実質アラームです（土日の後ろ倒し・夜勤・お休みは鳴りません）。")
+        else:
+            msg = "⏰ 起床リマインド **OFF** にしました。"
+        await interaction.response.send_message(msg + hitokoto_suffix(), ephemeral=True)
 
 # ------------------------------------------------------------
 #  食事
@@ -1634,6 +1653,47 @@ async def backup_db(keep=7):
     print(f"バックアップ完了: {dest}（{len(olds[-keep:])}世代）", flush=True)
     return dest
 
+# ---- ⏰ 起床リマインド（オプトイン）：締切のN分前に未報告ならメンション ----
+_wakeremind_cache = {"day": None, "done": set()}
+
+def wake_remind_target(u, now):
+    """この人に⏰を出す時刻（HH:MM）。締切なし・計算不能なら None。土日の後ろ倒しも反映"""
+    dl = effective_deadline(u, now)
+    if not dl:
+        return None
+    h, m = map(int, dl.split(":"))
+    t = h * 60 + m - WAKE_REMIND_MIN
+    return None if t < 0 else f"{t // 60:02d}:{t % 60:02d}"
+
+async def wake_remind_check(now):
+    day = day_str(now)
+    if _wakeremind_cache["day"] != day:
+        _wakeremind_cache.update(day=day, done=set())
+    async with db.execute("SELECT * FROM users WHERE wake_remind=1 AND wake_deadline IS NOT NULL") as c:
+        users = await c.fetchall()
+    if not users:
+        return
+    cur_min = now.hour * 60 + now.minute
+    for u in users:
+        uid = u["id"]
+        if uid in _wakeremind_cache["done"]:
+            continue
+        target = wake_remind_target(u, now)
+        dl = effective_deadline(u, now)
+        if not target or not dl:
+            continue
+        th, tm = map(int, target.split(":"))
+        dh, dm = map(int, dl.split(":"))
+        if not (th * 60 + tm <= cur_min < dh * 60 + dm):
+            continue   # リマインド時刻〜締切の窓の中でだけ・1回だけ
+        _wakeremind_cache["done"].add(uid)
+        if u["wake_set_day"] == day or await events_on(uid, day, "wake") or await is_night_shift(uid, day):
+            continue   # 設定初日・報告済み・夜勤明けは鳴らさない
+        async with db.execute("SELECT 1 FROM off_days WHERE day=? AND user_id=?", (day, uid)) as c:
+            if await c.fetchone():
+                continue
+        await post_log("wake", f"⏰ <@{uid}> ☀️の締切（{dl}）まであと{WAKE_REMIND_MIN}分！起きてたらポチッと")
+
 PREJUDGE_SKIP = ("☀️", "🌙", "🏃")   # 22時にはもう取り返せない項目（朝のこと）はリマインドしない
 
 def actionable_misses(misses):
@@ -1666,12 +1726,18 @@ async def prejudge_reminder(day):
     if not lines:
         return
     await ch.send(f"⏳ **判定まであと1時間！**（{JUDGE_HOUR}:00 に判定）いまからでも間に合う最低限：\n"
-                  + "\n".join(lines[:25]) + hitokoto_suffix())
+                  + "\n".join(lines[:25])
+                  + "\n-# 🌙 を押してから寝ると、朝☀️を忘れても最初の活動で自動記録されます"
+                  + hitokoto_suffix())
 
 @tasks.loop(minutes=1)
 async def judge_loop():
     now = now_jst()
     day = day_str(now)
+    try:
+        await wake_remind_check(now)   # ⏰起床リマインド（オプトインの人だけ）
+    except Exception as e:
+        print(f"起床リマインドエラー: {e!r}", flush=True)
     if JUDGE_HOUR >= 1 and now.hour == JUDGE_HOUR - 1 and await meta_get("last_prejudge_day") != day:
         await meta_set("last_prejudge_day", day)   # 先に記録して二重投稿を防ぐ
         try:

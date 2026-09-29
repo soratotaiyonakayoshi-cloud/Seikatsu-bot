@@ -632,6 +632,14 @@ async def main():
     await B.fridge_cleanup("2026-09-03")
     check("冷蔵庫: 期限3日過ぎは自動削除", sorted(r["name"] for r in await B.fridge_items_of("9")), ["もやし", "卵", "牛乳"])
 
+    # ⏰起床リマインド（オプトイン）
+    wed_ = datetime(2026, 8, 5, 6, 0, tzinfo=JST)
+    sat_ = datetime(2026, 8, 8, 6, 0, tzinfo=JST)
+    check("⏰: 締切の10分前", B.wake_remind_target({"wake_deadline": "07:00", "holiday_shift": 0}, wed_), "06:50")
+    check("⏰: 土日の後ろ倒しに追従", B.wake_remind_target({"wake_deadline": "07:00", "holiday_shift": 120}, sat_), "08:50")
+    check("⏰: 締切なしはNone", B.wake_remind_target({"wake_deadline": None, "holiday_shift": 0}, wed_), None)
+    check("起床パネルに⏰ボタン", any(i.custom_id == "sk_wake_remind" for i in B.WakeView().children), True)
+
     # ☀️押し忘れ救済（自動起床）
     _orig_now_aw = B.now_jst
     B.now_jst = lambda: datetime(2026, 8, 5, 7, 30, tzinfo=JST)
