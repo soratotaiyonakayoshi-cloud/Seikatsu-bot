@@ -1,6 +1,6 @@
 # 最低限生活リズムサークル Bot
 
-📖 **サーバーの使い方ガイド（メンバー・外部向け）**: <https://claude.ai/artifact/NFc6ez9bpadEArLsEP2Z7L>
+📖 **サーバーの使い方ガイド（メンバー・外部向け）**: <https://claude.ai/artifact/CRXZ4zhFcyep7orEWqYezv>
 
 起床・睡眠・家事・食事・入浴を **ボタン1タップ** で記録し、毎晩の判定で
 「自分で決めた最低限」を守れなかった人を `#叱責👹` に名指しで晒す Discord Bot。
