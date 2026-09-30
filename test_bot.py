@@ -671,6 +671,11 @@ async def main():
     check("科目検索: 教員名で絞れる（月1畠山が見つかる）", sorted(r["code"] for r in rs), ["EL1012g", "el0059"])
     rs2 = await B.search_courses("writing 月1")
     check("科目検索: 曜日時限で絞れる", len(rs2) == 10 and all("月1" in r["slots"] for r in rs2), True)
+    rs3 = await B.search_courses("discussion 金1")
+    check("手動追加: 農の金1 English Discussion（備考欄方式）が引ける",
+          sorted(r["code"] for r in rs3), ["EL1003a", "EL1003b", "EL1003c", "EL1003d", "EL1003e"])
+    rs4 = await B.search_courses("discussion 金2")
+    check("手動追加: 金2の5クラスも", len(rs4), 5)
     check("事前リマインド: 朝の項目（もう取り返せない）は出さない",
           B.actionable_misses(["☀️ 寝坊 06:30 まで → 09:00", "🌙 睡眠不足 4.5h（最低 6.0h）", "🏃 ラジオ体操 未参加",
                                "🛁 入浴 未報告", "🍚 食事 1/2 回"]),

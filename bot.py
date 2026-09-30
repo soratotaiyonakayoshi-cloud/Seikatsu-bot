@@ -53,6 +53,7 @@ WEATHER_LAT = float(os.getenv("WEATHER_LAT", "35.68"))   # 朝の天気（Open-M
 WEATHER_LON = float(os.getenv("WEATHER_LON", "139.48"))
 MEMBERS_INTENT = os.getenv("MEMBERS_INTENT", "0") == "1"   # 1にすると新規参加者を #はじめに📖 で歓迎（Developer PortalでSERVER MEMBERS INTENTをONにすること）
 COURSES_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "courses_2026_kouki.json")
+COURSES_EXTRA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "courses_extra.json")
 HITOKOTO_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "hitokoto.json")
 JST = timezone(timedelta(hours=9))
 
@@ -1896,22 +1897,28 @@ def norm_text(s):
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", s or "")).casefold()
 
 async def load_courses_master():
-    """JSONの科目マスタをDBへ取り込む（起動時・冪等）。自由入力の科目は残す。"""
+    """JSONの科目マスタをDBへ取り込む（起動時・冪等）。自由入力の科目は残す。
+    courses_extra.json＝PDFの枠外・備考方式などで機械抽出できない科目の手動追加ファイル（同じ形式）"""
     if not os.path.exists(COURSES_JSON):
         print(f"科目マスタが見つかりません: {COURSES_JSON}", flush=True)
         return 0
-    with open(COURSES_JSON, encoding="utf-8") as f:
-        rows = json.load(f)
-    for r in rows:
-        await db.execute(
-            "INSERT INTO courses(code,name,nname,teacher,room,faculty,dept,cls,year,slots,term,custom) VALUES(?,?,?,?,?,?,?,?,?,?,?,0) "
-            "ON CONFLICT(code) DO UPDATE SET name=excluded.name,nname=excluded.nname,teacher=excluded.teacher,room=excluded.room,"
-            "faculty=excluded.faculty,dept=excluded.dept,cls=excluded.cls,year=excluded.year,slots=excluded.slots,term=excluded.term",
-            (r["code"], r["name"], norm_text(r["name"]), r.get("teacher") or "", r.get("room") or "", r.get("faculty") or "",
-             r.get("dept") or "", r.get("cls") or "", r.get("year"), ",".join(r.get("slots") or []), r.get("term") or ""))
+    total = 0
+    for path in (COURSES_JSON, COURSES_EXTRA):
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8") as f:
+            rows = json.load(f)
+        for r in rows:
+            await db.execute(
+                "INSERT INTO courses(code,name,nname,teacher,room,faculty,dept,cls,year,slots,term,custom) VALUES(?,?,?,?,?,?,?,?,?,?,?,0) "
+                "ON CONFLICT(code) DO UPDATE SET name=excluded.name,nname=excluded.nname,teacher=excluded.teacher,room=excluded.room,"
+                "faculty=excluded.faculty,dept=excluded.dept,cls=excluded.cls,year=excluded.year,slots=excluded.slots,term=excluded.term",
+                (r["code"], r["name"], norm_text(r["name"]), r.get("teacher") or "", r.get("room") or "", r.get("faculty") or "",
+                 r.get("dept") or "", r.get("cls") or "", r.get("year"), ",".join(r.get("slots") or []), r.get("term") or ""))
+        total += len(rows)
     await db.commit()
-    print(f"科目マスタ {len(rows)} 件を読み込みました", flush=True)
-    return len(rows)
+    print(f"科目マスタ {total} 件を読み込みました", flush=True)
+    return total
 
 def course_label(c, with_code=False):
     """オートコンプリート／表示用の1行ラベル（100字以内）"""

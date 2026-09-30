@@ -1,0 +1,12 @@
+[
+  {"name": "English Discussion", "teacher": "（ヴァンベ）", "room": "1講─12", "code": "EL1003a", "faculty": "農", "dept": "", "cls": "", "year": 1, "term": "2026後期", "slots": ["金1"]},
+  {"name": "English Discussion", "teacher": "（ボールドウィン）", "room": "2講─11", "code": "EL1003b", "faculty": "農", "dept": "", "cls": "", "year": 1, "term": "2026後期", "slots": ["金1"]},
+  {"name": "English Discussion", "teacher": "ムーア", "room": "1講─21", "code": "EL1003c", "faculty": "農", "dept": "", "cls": "", "year": 1, "term": "2026後期", "slots": ["金1"]},
+  {"name": "English Discussion", "teacher": "アジマン", "room": "2講─12", "code": "EL1003d", "faculty": "農", "dept": "", "cls": "", "year": 1, "term": "2026後期", "slots": ["金1"]},
+  {"name": "English Discussion", "teacher": "（池辺）", "room": "2─22", "code": "EL1003e", "faculty": "農", "dept": "", "cls": "", "year": 1, "term": "2026後期", "slots": ["金1"]},
+  {"name": "English Discussion", "teacher": "（ヴァンベ）", "room": "1講─12", "code": "EL1003f", "faculty": "農", "dept": "", "cls": "", "year": 1, "term": "2026後期", "slots": ["金2"]},
+  {"name": "English Discussion", "teacher": "（ボールドウィン）", "room": "2講─11", "code": "EL1003g", "faculty": "農", "dept": "", "cls": "", "year": 1, "term": "2026後期", "slots": ["金2"]},
+  {"name": "English Discussion", "teacher": "ムーア", "room": "1講─21", "code": "EL1003h", "faculty": "農", "dept": "", "cls": "", "year": 1, "term": "2026後期", "slots": ["金2"]},
+  {"name": "English Discussion", "teacher": "アジマン", "room": "2講─12", "code": "EL1003i", "faculty": "農", "dept": "", "cls": "", "year": 1, "term": "2026後期", "slots": ["金2"]},
+  {"name": "English Discussion", "teacher": "（池辺）", "room": "2─22", "code": "EL1003j", "faculty": "農", "dept": "", "cls": "", "year": 1, "term": "2026後期", "slots": ["金2"]}
+]

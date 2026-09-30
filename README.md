@@ -52,6 +52,7 @@
 - 科目マスタ `data/courses_2026_kouki.json` を **時間割PDF（工学部・農学部 2026後期）から自動生成**（`data/build_courses.py`、609科目）。内部キーは時間割コード、ユーザーは科目名で検索するだけ
 - 「誰が何を履修しているか」を Bot が持ち、課題は同じ科目の履修者を個別メンション。Discordのロール上限（250）に縛られない
 - 学期が変わったら新しいPDFを `data/src/` に置いて `PYTHONUTF8=1 .venv/Scripts/python data/build_courses.py` を再実行（要 `pip install pdfplumber`）
+- PDFの**枠外・備考欄方式**などで機械抽出できない科目（例：農学部1年の English Discussion 金1/金2＝★備考参照）は `data/courses_extra.json` に同じ形式で追記 → 再起動で取り込まれる
 
 ### 判定ルール
 - ☀️ 起床：締切までに起床報告が無い／締切を過ぎていたら「寝坊」。ただし**操作猶予＋10分**（起きてからスマホを開いてボタンを押すまでのラグはノーカウント。`WAKE_GRACE_MIN` で変更可）
