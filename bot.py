@@ -523,6 +523,28 @@ async def bump_panel(key):
     msg = await ch.send(embed=panel_embed(key), view=VIEW_FACTORY[key]())
     await meta_set("panel_" + key, msg.id)
 
+async def refresh_panel(key):
+    """/setup用のパネル更新：すでに最下部にあれば**その場で編集**（＝新着通知を出さない）。
+    最下部でない・無い場合だけ置き直す。全チャンネルに新着が付く問題の対策"""
+    ch = await get_ch(key)
+    if not ch:
+        return
+    old = await meta_get("panel_" + key)
+    if old:
+        try:
+            m = await ch.fetch_message(int(old))
+            if ch.last_message_id == m.id:
+                await m.edit(embed=panel_embed(key), view=VIEW_FACTORY[key]())
+                return
+            await m.delete()
+        except Exception:
+            pass
+    try:
+        msg = await ch.send(embed=panel_embed(key), view=VIEW_FACTORY[key]())
+        await meta_set("panel_" + key, msg.id)
+    except discord.Forbidden:
+        SETUP_ERRORS.append(f"#{ch.name} にパネルを投稿できません（権限を確認）")
+
 async def post_log(key, text):
     ch = await get_ch(key)
     if ch:
@@ -4965,7 +4987,7 @@ async def setup_command(interaction):
     tips_ch = await ensure_tips_forum(guild, cat)
     await meta_set("guild_id", guild.id)
     for key in VIEW_FACTORY:
-        await bump_panel(key)
+        await refresh_panel(key)   # 最下部にあるパネルは編集だけ＝変更のないチャンネルに新着を出さない
     settei = await get_ch("settei")
     if settei:
         await upsert_message("guide_msg", settei, discord.Embed(
