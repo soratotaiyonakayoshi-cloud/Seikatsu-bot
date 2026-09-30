@@ -37,10 +37,10 @@ check("永続ビュー6種 登録OK", True, True)
 check("ごはんパネルに🧊 2ボタン", {"sk_fridge_add", "sk_fridge_list"} <= {i.custom_id for i in B.MealView().children}, True)
 check("🧊は2段目・ごはんは1段目", sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_fridge")}) == [1]
       and sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_meal")}) == [0], True)
-check("課題パネルは6ボタン", {i.custom_id for i in B.KadaiPanelView().children},
-      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy"})
+check("課題パネルは7ボタン", {i.custom_id for i in B.KadaiPanelView().children},
+      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki"})
 check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kigen", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "reizouko", "saitei", "setup", "suimin", "tips", "tsushinbo", "watashi"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kesseki", "kigen", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "reizouko", "saitei", "setup", "suimin", "tips", "tsushinbo", "watashi"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n
@@ -226,7 +226,7 @@ async def main():
     await B.db.execute("INSERT OR IGNORE INTO courses(code,name,nname,teacher,room,faculty,dept,cls,year,slots,term,custom) VALUES('t_test1','テスト科目','てすと','','L0011','工','','',1,'水3','',1)")
     await B.db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES('7','t_test1')"); await B.db.commit()
     dg = await B.today_digest(7, datetime(2026, 8, 5, 7, 0, tzinfo=JST))
-    check("ダイジェストに水曜3限", "3限(13:00) テスト科目 L0011" in dg, True)
+    check("ダイジェストに水曜3限", "3限 13:00　**テスト科目**（L0011）" in dg, True)
     check("月曜は出ない", "テスト科目" in await B.today_digest(7, datetime(2026, 8, 3, 7, 0, tzinfo=JST)), False)
     # 月間表彰（偽チャンネル）
     sent2 = []
@@ -677,6 +677,32 @@ async def main():
           sorted(r["code"] for r in rs3), ["EL1003a", "EL1003b", "EL1003c", "EL1003d", "EL1003e"])
     rs4 = await B.search_courses("discussion 金2")
     check("手動追加: 金2の5クラスも", len(rs4), 5)
+
+    # 実験・演習の連続コマ展開（結合セル対策の再ビルド確認）
+    check("実験: 月3〜5限に展開", (await B.get_course("bo1005b"))["slots"], "月3,月4,月5")
+    check("実験: 工学基礎実験も金1〜2", (await B.get_course("c0009"))["slots"], "金1,金2")
+
+    # 🚨 欠席カウンター
+    r = await B.kesseki_bump("121", "bo1005b")
+    check("欠席: +1・既定ライン4", (r["absent"], r["limit_n"]), (1, 4))
+    r = await B.kesseki_bump("121", "bo1005b", 2)
+    check("欠席: 累積3・あと1回文言", r["absent"] == 3 and "次で落単ライン" in B.kesseki_text("生物学実験", r), True)
+    r = await B.kesseki_bump("121", "bo1005b", -5)
+    check("欠席: マイナスは0で止まる", r["absent"], 0)
+    r = await B.kesseki_set_limit("121", "bo1005b", 2)
+    check("欠席: ライン変更（回数は維持）", (r["limit_n"], r["absent"]), (2, 0))
+    r = await B.kesseki_bump("121", "bo1005b", 2)
+    check("欠席: 到達文言", "到達" in B.kesseki_text("x", r), True)
+
+    # 📅 今日の時間割（1〜5限フル表示＋欠席警告）
+    await B.db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES('122','bo1005b')")
+    await B.db.commit()
+    dg = await B.today_digest(122, datetime(2026, 8, 3, 8, 0, tzinfo=JST))   # 月曜
+    check("時間割: 空きコマは─で5限まで", "1限 8:45　─" in dg and "5限 16:30" in dg, True)
+    check("時間割: 実験は3限に教室付き・4限以降は〃", "3限 13:00　**生物学実験**（1講─15）" in dg and "〃 生物学実験" in dg, True)
+    await B.kesseki_bump("122", "bo1005b", 3)   # 既定4→あと1回
+    dg2 = await B.today_digest(122, datetime(2026, 8, 3, 8, 0, tzinfo=JST))
+    check("時間割: 欠席残りわずか警告", "🚨 欠席はあと：**生物学実験** あと1回" in dg2, True)
 
     # 👥 時間割コピー
     cp_src = M(112, "先人"); await B.ensure_user(cp_src)

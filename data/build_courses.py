@@ -315,6 +315,12 @@ def extract_timetable(fac):
         tables = page.find_tables()
         table = max(tables, key=lambda t: len(t.rows) * max(len(r.cells) for r in t.rows))
         cols = header_map(page, table)
+        # 各時限列のx範囲（結合セル＝複数コマ連続の科目をすべての時限に展開するため）
+        colx = []
+        for i, (d, p) in cols.items():
+            b = table.rows[1].cells[i]
+            if b:
+                colx.append((d, p, b[0], b[2]))
         year, cls = None, None
         for row in table.rows[2:]:
             cells = row.cells
@@ -337,11 +343,16 @@ def extract_timetable(fac):
             for i, bbox in enumerate(cells):
                 if i not in cols or bbox is None:
                     continue
-                day, period = cols[i]
+                # セルのbboxが半分以上覆っている時限をすべて拾う（実験・演習の3〜5限結合セル対策）
+                x0, x1 = bbox[0], bbox[2]
+                spans = [(d, p) for d, p, a, b in colx if min(x1, b) - max(x0, a) > 0.5 * (b - a)]
+                if not spans:
+                    spans = [cols[i]]
                 for col_lines in cell_columns(page, bbox, fac):
                     for e in PARSER[fac](col_lines):
-                        recs.append({**e, "faculty": fac, "dept": dept, "cls": cls if year else "", "year": year,
-                                     "day": day, "period": period, "term": TERM})
+                        for day, period in spans:
+                            recs.append({**e, "faculty": fac, "dept": dept, "cls": cls if year else "", "year": year,
+                                         "day": day, "period": period, "term": TERM})
     return recs
 
 def extract_intensive_nogaku():

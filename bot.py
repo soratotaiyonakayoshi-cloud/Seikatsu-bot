@@ -191,6 +191,7 @@ CREATE TABLE IF NOT EXISTS memos(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id T
 CREATE TABLE IF NOT EXISTS memo_prompts(day TEXT NOT NULL, user_id TEXT NOT NULL, msg_id TEXT, PRIMARY KEY(day, user_id));
 CREATE TABLE IF NOT EXISTS work_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, start_ts INTEGER NOT NULL, end_ts INTEGER, day TEXT NOT NULL, note TEXT, msg_id TEXT);
 CREATE TABLE IF NOT EXISTS goods_items(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, name TEXT NOT NULL, cycle_days INTEGER NOT NULL, due_day TEXT NOT NULL, opened_day TEXT);
+CREATE TABLE IF NOT EXISTS attendance(user_id TEXT NOT NULL, code TEXT NOT NULL, absent INTEGER NOT NULL DEFAULT 0, limit_n INTEGER NOT NULL DEFAULT 4, PRIMARY KEY(user_id, code));
 CREATE INDEX IF NOT EXISTS idx_work_user_day ON work_sessions(user_id, day);
 """
 db = None
@@ -2406,6 +2407,106 @@ async def jikanwari_copy(interaction, hito: discord.Member):
     await ensure_user(interaction.user)
     await do_copy_timetable(interaction, str(hito.id))
 
+# ---- 🚨 欠席カウンター（落単ラインまであと何回かを数える。判定はしない） ----
+KESSEKI_DEFAULT = 4   # 落単ラインの既定値（/kesseki set で科目ごとに変更可）
+
+async def kesseki_row(uid, code):
+    async with db.execute("SELECT * FROM attendance WHERE user_id=? AND code=?", (str(uid), code)) as c:
+        return await c.fetchone()
+
+async def kesseki_map(uid):
+    async with db.execute("SELECT * FROM attendance WHERE user_id=?", (str(uid),)) as c:
+        return {r["code"]: r for r in await c.fetchall()}
+
+async def kesseki_bump(uid, code, delta=1):
+    await db.execute("INSERT INTO attendance(user_id,code,absent,limit_n) VALUES(?,?,?,?) "
+                     "ON CONFLICT(user_id,code) DO UPDATE SET absent=MAX(0, absent+?)",
+                     (str(uid), code, max(0, delta), KESSEKI_DEFAULT, delta))
+    await db.commit()
+    return await kesseki_row(uid, code)
+
+async def kesseki_set_limit(uid, code, n):
+    await db.execute("INSERT INTO attendance(user_id,code,absent,limit_n) VALUES(?,?,0,?) "
+                     "ON CONFLICT(user_id,code) DO UPDATE SET limit_n=?",
+                     (str(uid), code, n, n))
+    await db.commit()
+    return await kesseki_row(uid, code)
+
+def kesseki_text(name, r):
+    left = r["limit_n"] - r["absent"]
+    s = f"🚨 **{name}**　欠席 {r['absent']}/{r['limit_n']}　"
+    if left <= 0:
+        return s + "**落単ラインに到達…！先生に相談しよう🙏**"
+    if left == 1:
+        return s + "**次で落単ライン！あと1回まで！**"
+    return s + f"欠席はあと **{left}回** まで！"
+
+class KessekiSelect(discord.ui.Select):
+    def __init__(self, rows, counts):
+        opts = []
+        for r in rows[:25]:
+            k = counts.get(r["code"])
+            extra = f"　欠席{k['absent']}/{k['limit_n']}" if k else ""
+            opts.append(discord.SelectOption(label=(r["name"] + extra)[:100], value=r["code"]))
+        super().__init__(placeholder="🚨 欠席した科目を選ぶ（+1）", options=opts)
+
+    async def callback(self, interaction):
+        c = await get_course(self.values[0])
+        r = await kesseki_bump(interaction.user.id, self.values[0])
+        rows = await user_course_rows(interaction.user.id)
+        counts = await kesseki_map(interaction.user.id)
+        view = discord.ui.View(timeout=600)
+        if rows:
+            view.add_item(KessekiSelect(rows, counts))
+        await interaction.response.edit_message(
+            content=kesseki_text(c["name"] if c else self.values[0], r) + "\n-# 間違えたら `/kesseki add kaisu:-1` で戻せます",
+            view=view)
+
+kesseki_grp = app_commands.Group(name="kesseki", description="欠席カウンター（落単ラインまであと何回かを数える）")
+
+@kesseki_grp.command(name="add", description="欠席を記録（+1。間違えたら kaisu:-1 で戻す）")
+@app_commands.describe(kamoku="科目（自分の履修から）", kaisu="増減 例 1／-1（省略で+1）")
+@app_commands.autocomplete(kamoku=ac_my_courses)
+async def kesseki_add(interaction, kamoku: str, kaisu: int = 1):
+    await ensure_user(interaction.user)
+    c = await get_course(kamoku)
+    if not c:
+        await interaction.response.send_message("科目は候補から選んでください（先に履修登録）。", ephemeral=True)
+        return
+    r = await kesseki_bump(interaction.user.id, c["code"], max(-10, min(10, kaisu)))
+    await interaction.response.send_message(kesseki_text(c["name"], r) + hitokoto_suffix(), ephemeral=True)
+
+@kesseki_grp.command(name="set", description="落単ライン（何回欠席でアウトか）を科目ごとに設定（既定4回）")
+@app_commands.describe(kamoku="科目（自分の履修から）", kaisu="落単になる欠席回数 例 4")
+@app_commands.autocomplete(kamoku=ac_my_courses)
+async def kesseki_set(interaction, kamoku: str, kaisu: int):
+    await ensure_user(interaction.user)
+    c = await get_course(kamoku)
+    if not c:
+        await interaction.response.send_message("科目は候補から選んでください（先に履修登録）。", ephemeral=True)
+        return
+    r = await kesseki_set_limit(interaction.user.id, c["code"], max(1, min(30, kaisu)))
+    left = max(0, r["limit_n"] - r["absent"])
+    await interaction.response.send_message(
+        f"🚨 **{c['name']}** の落単ラインを **{r['limit_n']}回** に設定（現在 欠席{r['absent']}・あと{left}回）", ephemeral=True)
+
+@kesseki_grp.command(name="list", description="欠席カウンターの一覧（自分にだけ表示）")
+async def kesseki_list(interaction):
+    async with db.execute("SELECT a.*, c.name AS cname FROM attendance a JOIN courses c ON c.code=a.code "
+                          "WHERE a.user_id=? ORDER BY (a.limit_n - a.absent), c.name", (str(interaction.user.id),)) as c:
+        rows = await c.fetchall()
+    if not rows:
+        await interaction.response.send_message("まだ欠席の記録はありません。休んだら `/kesseki add` か #課題📚 の 🚨 ボタンで数えよう（記録ゼロがいちばんえらい）。", ephemeral=True)
+        return
+    lines = []
+    for r in rows:
+        left = r["limit_n"] - r["absent"]
+        mark = "🟥" if left <= 0 else ("🟧" if left == 1 else "🟩")
+        lines.append(f"{mark} **{r['cname']}**　{r['absent']}/{r['limit_n']}（あと{max(0, left)}回）")
+    await interaction.response.send_message("🚨 **欠席カウンター**\n" + "\n".join(lines)[:1800], ephemeral=True)
+
+bot.tree.add_command(kesseki_grp)
+
 bot.tree.add_command(jikanwari)
 
 # ---- /kadai ----
@@ -2619,6 +2720,22 @@ class KadaiPanelView(discord.ui.View):
         await ensure_user(interaction.user)
         await send_timetable(interaction)
 
+    @discord.ui.button(label="🚨 欠席カウンター", style=discord.ButtonStyle.secondary, custom_id="sk_kesseki", row=2)
+    async def kesseki_btn(self, interaction, button):
+        await ensure_user(interaction.user)
+        rows = await user_course_rows(interaction.user.id)
+        if not rows:
+            await interaction.response.send_message("先に 🎓 で履修科目を登録してください。", ephemeral=True)
+            return
+        counts = await kesseki_map(interaction.user.id)
+        view = discord.ui.View(timeout=600)
+        view.add_item(KessekiSelect(rows, counts))
+        tracked = [f"・**{(await get_course(code))['name']}**　{r['absent']}/{r['limit_n']}" for code, r in list(counts.items())[:10] if await get_course(code)]
+        await interaction.response.send_message(
+            "🚨 **欠席カウンター**（下のプルダウンで選ぶと+1）\n" + ("\n".join(tracked) + "\n" if tracked else "")
+            + "-# 落単ラインは既定4回。`/kesseki set` で科目ごとに変更、間違えたら `/kesseki add kaisu:-1`",
+            view=view, ephemeral=True)
+
     @discord.ui.button(label="👥 時間割をコピー", style=discord.ButtonStyle.secondary, custom_id="sk_jw_copy", row=0)
     async def jw_copy(self, interaction, button):
         await ensure_user(interaction.user)
@@ -2664,16 +2781,38 @@ async def fetch_weather():
 async def today_digest(uid, now):
     """起床報告の返事に添える「今日の授業」「未完了の課題」"""
     dc = DAY_CHARS[now.weekday()]
-    classes = []
+    per = {}
     for c in await user_course_rows(uid):
         for slot in (c["slots"] or "").split(","):
             slot = slot.strip()
             if len(slot) >= 2 and slot[0] == dc and slot[1:].isdigit():
-                classes.append((int(slot[1:]), c))
-    classes.sort(key=lambda x: x[0])
+                per.setdefault(int(slot[1:]), []).append(c)
     lines = []
-    if classes:
-        lines.append("📅 今日の授業：" + "／".join(f"{p}限({PERIOD_START.get(p, '')}) {c['name']}" + (f" {c['room']}" if c["room"] else "") for p, c in classes))
+    if per:
+        lines.append("📅 **今日の時間割**")
+        seen = set()
+        for p in range(1, max(5, max(per)) + 1):
+            names = []
+            for c in per.get(p, []):
+                if c["code"] in seen:   # 実験など連続コマの2コマ目以降
+                    names.append(f"〃 {c['name']}")
+                else:
+                    names.append(f"**{c['name']}**" + (f"（{c['room']}）" if c["room"] else ""))
+                    seen.add(c["code"])
+            lines.append(f"　{p}限 {PERIOD_START.get(p, '')}　" + ("／".join(names) if names else "─"))
+        try:   # 今日の科目で欠席が残りわずかなら警告
+            km = await kesseki_map(uid)
+            warn, done = [], set()
+            for p in sorted(per):
+                for c in per[p]:
+                    r = km.get(c["code"])
+                    if r and c["code"] not in done and r["limit_n"] - r["absent"] <= 2:
+                        warn.append(f"**{c['name']}** あと{max(0, r['limit_n'] - r['absent'])}回")
+                        done.add(c["code"])
+            if warn:
+                lines.append("🚨 欠席はあと：" + "／".join(warn))
+        except Exception:
+            pass
     async with db.execute(
         "SELECT a.title, a.due_ts, c.name AS cname FROM assignments a JOIN courses c ON c.code=a.code "
         "WHERE a.closed=0 AND a.code IN (SELECT code FROM user_courses WHERE user_id=?) "
