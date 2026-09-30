@@ -2319,6 +2319,93 @@ async def send_timetable(interaction):
 async def jikanwari_hyou(interaction):
     await send_timetable(interaction)
 
+# ---- 👥 時間割コピー（同じ学科の先人の履修を丸ごともらって過不足を調整） ----
+async def copy_courses(dst_uid, src_uid):
+    """srcの履修をdstへマージコピー（既存はそのまま）。(追加数, コピー元の科目数) を返す"""
+    rows = await user_course_rows(src_uid)
+    added = 0
+    for r in rows:
+        cur = await db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES(?,?)", (str(dst_uid), r["code"]))
+        added += 1 if cur.rowcount else 0
+    await db.commit()
+    return added, len(rows)
+
+async def timetable_owners(exclude_uid):
+    """履修登録している人の一覧（名前・科目数・主な学部学年タグ）。コピー元候補用"""
+    async with db.execute("SELECT user_id, COUNT(*) AS n FROM user_courses GROUP BY user_id ORDER BY n DESC LIMIT 30") as c:
+        rows = await c.fetchall()
+    out = []
+    for r in rows:
+        if r["user_id"] == str(exclude_uid):
+            continue
+        usr = await get_user(r["user_id"])
+        async with db.execute("SELECT c.faculty || IFNULL(c.year,'') AS fy, COUNT(*) AS m FROM user_courses u "
+                              "JOIN courses c ON c.code=u.code WHERE u.user_id=? AND c.faculty!='' "
+                              "GROUP BY fy ORDER BY m DESC LIMIT 1", (r["user_id"],)) as c2:
+            f = await c2.fetchone()
+        tag = f"{f['fy']}年・" if f and f["fy"] else ""
+        out.append((r["user_id"], (usr["name"] if usr else "？"), r["n"], tag))
+    return out[:25]
+
+class CopyTrimSelect(discord.ui.Select):
+    """コピー直後の「いらない科目を外す」プルダウン"""
+    def __init__(self, rows):
+        opts = [discord.SelectOption(label=course_label(r)[:100], value=r["code"]) for r in rows[:25]]
+        super().__init__(placeholder="🗑 いらない科目を外す（複数OK）", options=opts, min_values=1, max_values=len(opts))
+
+    async def callback(self, interaction):
+        uid = str(interaction.user.id)
+        removed = []
+        for code in self.values:
+            c = await get_course(code)
+            await db.execute("DELETE FROM user_courses WHERE user_id=? AND code=?", (uid, code))
+            removed.append(c["name"] if c else code)
+        await db.commit()
+        left = len(await user_course_rows(uid))
+        await interaction.response.edit_message(
+            content=f"🗑 {len(removed)}科目を外しました（{('、'.join(removed))[:150]}）。現在 {left} 科目。\n"
+                    f"仕上がりは 🗓 時間割画像で確認、さらに外すなら `/jikanwari remove` で。", view=None)
+
+async def do_copy_timetable(interaction, src_uid):
+    me = str(interaction.user.id)
+    if src_uid == me:
+        await interaction.response.send_message("自分の時間割は…もう持ってます🙃", ephemeral=True)
+        return
+    src = await get_user(src_uid)
+    src_name = (src["name"] if src else None) or "その人"
+    added, total = await copy_courses(me, src_uid)
+    if total == 0:
+        await interaction.response.send_message(f"**{src_name}** さんはまだ履修科目を登録していません。", ephemeral=True)
+        return
+    mine = await user_course_rows(me)
+    buf = await asyncio.to_thread(render_timetable, interaction.user.display_name, mine)
+    view = discord.ui.View(timeout=600)
+    view.add_item(CopyTrimSelect(mine))
+    txt = (f"👥 **{src_name}** さんの時間割をコピーしました：追加 **{added}** 科目"
+           + (f"（{total - added} 科目は登録済みでスキップ）" if total - added else "") + f"、現在 **{len(mine)}** 科目。\n"
+           "選択科目の違いなどは下のプルダウンで外して調整（追加は 🎓、あとからは `/jikanwari remove`）。")
+    kwargs = {"ephemeral": True, "view": view}
+    if buf:
+        kwargs["file"] = discord.File(buf, filename="jikanwari.png")
+    if interaction.response.is_done():
+        await interaction.followup.send(txt, **kwargs)
+    else:
+        await interaction.response.send_message(txt, **kwargs)
+
+class CopySrcSelect(discord.ui.Select):
+    def __init__(self, cands):
+        opts = [discord.SelectOption(label=f"{name}（{tag}{n}科目）"[:100], value=uid) for uid, name, n, tag in cands]
+        super().__init__(placeholder="👥 誰の時間割をコピーする？", options=opts)
+
+    async def callback(self, interaction):
+        await do_copy_timetable(interaction, self.values[0])
+
+@jikanwari.command(name="copy", description="他のメンバーの時間割をコピーして、あとから過不足を調整（同じ学科の先人におすすめ）")
+@app_commands.describe(hito="コピー元のメンバー")
+async def jikanwari_copy(interaction, hito: discord.Member):
+    await ensure_user(interaction.user)
+    await do_copy_timetable(interaction, str(hito.id))
+
 bot.tree.add_command(jikanwari)
 
 # ---- /kadai ----
@@ -2531,6 +2618,18 @@ class KadaiPanelView(discord.ui.View):
     async def jw_img(self, interaction, button):
         await ensure_user(interaction.user)
         await send_timetable(interaction)
+
+    @discord.ui.button(label="👥 時間割をコピー", style=discord.ButtonStyle.secondary, custom_id="sk_jw_copy", row=0)
+    async def jw_copy(self, interaction, button):
+        await ensure_user(interaction.user)
+        cands = await timetable_owners(interaction.user.id)
+        if not cands:
+            await interaction.response.send_message("まだ履修登録している人がいません。🎓 から1人目になろう！", ephemeral=True)
+            return
+        view = discord.ui.View(timeout=300)
+        view.add_item(CopySrcSelect(cands))
+        await interaction.response.send_message("👥 誰の時間割をコピーしますか？（同じ学科・学年の人がおすすめ。コピー後にいらない科目を外せます）",
+                                                view=view, ephemeral=True)
 
 VIEW_FACTORY["kadai"] = KadaiPanelView
 

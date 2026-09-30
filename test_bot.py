@@ -37,7 +37,8 @@ check("永続ビュー6種 登録OK", True, True)
 check("ごはんパネルに🧊 2ボタン", {"sk_fridge_add", "sk_fridge_list"} <= {i.custom_id for i in B.MealView().children}, True)
 check("🧊は2段目・ごはんは1段目", sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_fridge")}) == [1]
       and sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_meal")}) == [0], True)
-check("課題パネルは5ボタン", {i.custom_id for i in B.KadaiPanelView().children}, {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img"})
+check("課題パネルは6ボタン", {i.custom_id for i in B.KadaiPanelView().children},
+      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy"})
 check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
 check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kigen", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "reizouko", "saitei", "setup", "suimin", "tips", "tsushinbo", "watashi"])
 
@@ -676,6 +677,18 @@ async def main():
           sorted(r["code"] for r in rs3), ["EL1003a", "EL1003b", "EL1003c", "EL1003d", "EL1003e"])
     rs4 = await B.search_courses("discussion 金2")
     check("手動追加: 金2の5クラスも", len(rs4), 5)
+
+    # 👥 時間割コピー
+    cp_src = M(112, "先人"); await B.ensure_user(cp_src)
+    await B.db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES('112','el0046'),('112','el0047')")
+    await B.db.commit()
+    check("コピー: 2科目もらえる", await B.copy_courses("111", "112"), (2, 2))
+    check("コピー: 再コピーは重複スキップ", await B.copy_courses("111", "112"), (0, 2))
+    check("コピー: マージ先に入っている", sorted(r["code"] for r in await B.user_course_rows("111")), ["el0046", "el0047"])
+    owners = await B.timetable_owners("999")
+    own112 = next((o for o in owners if o[0] == "112"), None)
+    check("コピー: 候補一覧に名前・科目数・学部タグ", own112 is not None and own112[1] == "先人" and own112[2] == 2 and own112[3] == "工1年・", True)
+    check("コピー: 自分は候補から除外", any(o[0] == "112" for o in await B.timetable_owners("112")), False)
     check("事前リマインド: 朝の項目（もう取り返せない）は出さない",
           B.actionable_misses(["☀️ 寝坊 06:30 まで → 09:00", "🌙 睡眠不足 4.5h（最低 6.0h）", "🏃 ラジオ体操 未参加",
                                "🛁 入浴 未報告", "🍚 食事 1/2 回"]),
