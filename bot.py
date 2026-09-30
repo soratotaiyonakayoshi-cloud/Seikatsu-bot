@@ -493,7 +493,7 @@ def hitokoto_suffix():
     pool = [s for s in HITOKOTO if s not in _hitokoto_recent] or HITOKOTO
     s = random.choice(pool)
     _hitokoto_recent.append(s)
-    keep = min(30, len(HITOKOTO) // 2)
+    keep = min(40, len(HITOKOTO) // 2)
     while len(_hitokoto_recent) > keep:
         _hitokoto_recent.pop(0)
     return f"\n-# 💡 {s}"
