@@ -29,6 +29,11 @@ check("食事推定 8:00", B.infer_meal_sub(datetime(2026,8,5,8,0,tzinfo=JST)), 
 check("食事推定 12:30", B.infer_meal_sub(datetime(2026,8,5,12,30,tzinfo=JST)), "昼")
 check("食事推定 16:00", B.infer_meal_sub(datetime(2026,8,5,16,0,tzinfo=JST)), "間食")
 check("食事推定 19:00", B.infer_meal_sub(datetime(2026,8,5,19,0,tzinfo=JST)), "夜")
+check("定例: 曜日抽出 金1,金2→金", B.course_day_chars("金1,金2"), ["金"])
+check("定例: 曜日抽出 月3,木2→月木", B.course_day_chars("月3,木2"), ["月", "木"])
+check("定例: 曜日抽出 空→なし", B.course_day_chars(""), [])
+check("定例: 最初の時限 金1,金2→1", B.course_first_period("金1,金2", "金"), 1)
+check("定例: 最初の時限 無い曜日→None", B.course_first_period("金1,金2", "月"), None)
 
 # ---- 永続ビュー（custom_id 必須制約）とコマンド登録 ----
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView, B.KadaiPanelView, B.GoodsPanelView):
@@ -37,8 +42,8 @@ check("永続ビュー6種 登録OK", True, True)
 check("ごはんパネルに🧊 2ボタン", {"sk_fridge_add", "sk_fridge_list"} <= {i.custom_id for i in B.MealView().children}, True)
 check("🧊は2段目・ごはんは1段目", sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_fridge")}) == [1]
       and sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_meal")}) == [0], True)
-check("課題パネルは7ボタン", {i.custom_id for i in B.KadaiPanelView().children},
-      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki"})
+check("課題パネルは8ボタン", {i.custom_id for i in B.KadaiPanelView().children},
+      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki"})
 check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
 check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kesseki", "kigen", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "reizouko", "saitei", "setup", "suimin", "tips", "tsushinbo", "watashi"])
 
@@ -581,6 +586,43 @@ async def main():
     ttb = B.render_timetable("しぐま", tt_rows)
     check("時間割カード: PNG生成", ttb is not None and len(ttb.getvalue()) > 10000, True)
     check("時間割カード: 時限なしのみは None", B.render_timetable("しぐま", [{"name": "x", "slots": "", "room": None, "term": None}]), None)
+
+    # ---- 🔁 毎週課題（定例課題の自動生成） ----
+    await B.db.execute("INSERT OR IGNORE INTO courses(code,name,nname,teacher,room,faculty,dept,cls,year,slots,term,custom) "
+                       "VALUES('tst001','テスト英語ED','てすとえいごed','ボールドウィン','L1','工','化物','','1','金2','2026後期',0)")
+    await B.db.execute("INSERT INTO recurring_kadai(code,title,due_time,created_by,created_at) VALUES('tst001','プリント提出',NULL,'1',0)")
+    await B.db.commit()
+    wed = datetime(2026, 8, 5, 8, 0, tzinfo=JST)       # 水曜 → 金曜まで2日
+    check("定例: 水曜朝に金曜ぶんを生成", await B.spawn_recurring(wed), 1)
+    arow = await (await B.db.execute("SELECT * FROM assignments WHERE code='tst001'")).fetchone()
+    adue = datetime.fromtimestamp(arow["due_ts"], JST)
+    check("定例: 期限は金曜の授業開始(金2=10:30)", (adue.month, adue.day, adue.hour, adue.minute), (8, 7, 10, 30))
+    check("定例: 同日再実行は増えない", await B.spawn_recurring(wed), 0)
+    await B.db.execute("UPDATE assignments SET closed=1 WHERE id=?", (arow["id"],))   # 「今週はなし」＝取り下げ
+    await B.db.commit()
+    check("定例: 取り下げ後も再生成しない", await B.spawn_recurring(datetime(2026, 8, 6, 8, 0, tzinfo=JST)), 0)
+    check("定例: 3日以上先はまだ生成しない", await B.spawn_recurring(datetime(2026, 8, 11, 8, 0, tzinfo=JST)), 0)   # 火曜→金曜は3日先
+    check("定例: 翌週2日前になったら生成する", await B.spawn_recurring(datetime(2026, 8, 12, 8, 0, tzinfo=JST)), 1)
+    # 締切時刻を指定したルール＋授業がもう始まっている日はスキップ
+    await B.db.execute("INSERT OR IGNORE INTO courses(code,name,nname,teacher,room,faculty,dept,cls,year,slots,term,custom) "
+                       "VALUES('tst002','テスト分子生物学','てすとぶんしせいぶつがく','','L2','農','','','2','月1','2026後期',0)")
+    await B.db.execute("INSERT INTO recurring_kadai(code,title,due_time,created_by,created_at) VALUES('tst002','出席フォーム','23:59','1',0)")
+    await B.db.commit()
+    check("定例: 指定時刻は23:59で生成", await B.spawn_recurring(datetime(2026, 8, 10, 12, 0, tzinfo=JST)), 1)   # 月曜昼でも23:59締切なら当日生成
+    brow = await (await B.db.execute("SELECT * FROM assignments WHERE code='tst002'")).fetchone()
+    bdue = datetime.fromtimestamp(brow["due_ts"], JST)
+    check("定例: 指定時刻が反映", (bdue.hour, bdue.minute), (23, 59))
+    await B.db.execute("UPDATE recurring_kadai SET due_time=NULL WHERE code='tst002'")
+    await B.db.execute("DELETE FROM recurring_spawned WHERE rule_id=(SELECT id FROM recurring_kadai WHERE code='tst002')")
+    await B.db.execute("DELETE FROM assignments WHERE code='tst002'")
+    await B.db.commit()
+    check("定例: 授業開始(月1 8:45)を過ぎた当日はスキップ", await B.spawn_recurring(datetime(2026, 8, 10, 12, 0, tzinfo=JST)), 0)
+    check("定例: スキップは記録され翌週に持ち越さない", (await (await B.db.execute(
+        "SELECT COUNT(*) AS n FROM recurring_spawned WHERE due_day='2026-08-10'")).fetchone())["n"], 1)
+    await B.db.execute("UPDATE recurring_kadai SET active=0")
+    await B.db.commit()
+    check("定例: ルール解除(active=0)で生成停止", await B.spawn_recurring(datetime(2026, 8, 19, 8, 0, tzinfo=JST)), 0)
+    check("定例: 解除済ルールは一覧に出ない", len(await B.teiki_rules_for("1")), 0)
 
     # 📝チェックリストの導線（各パネルのショートカット＋☀️返事の行差し替え）
     check("📝ショートカットが4パネル全部に", all(any(str(getattr(i, "custom_id", "")).startswith("sk_mycheck_") for i in V().children)
