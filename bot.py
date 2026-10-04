@@ -2650,7 +2650,7 @@ async def kadai_delete(interaction, kadai_id: str):
 bot.tree.add_command(kadai)
 
 # ---- 🔁 毎週課題（定例課題：プリント・出席フォームなど。1回登録→授業日の2日前に自動で課題化） ----
-TEIKI_SPAWN_AHEAD = 6   # 次の授業日ぶんを常に生成（授業の翌日に翌週ぶんが生える＝いつでも✅できる）。3日前リマインドは定例課題だけ鳴らさない
+TEIKI_SPAWN_AHEAD = 6   # 次の授業日ぶんを常に生成し、授業当日の朝には来週ぶんも生やす（＝課題が出た授業の直後に✅できる）。3日前リマインドは定例課題だけ鳴らさない
 
 def course_day_chars(slots):
     """slots文字列（例「金1,金2」「月3,木2」）から授業のある曜日文字を週順・重複なしで"""
@@ -2690,21 +2690,24 @@ async def spawn_recurring(now=None):
             off = (DAY_CHARS.index(dc) - now.weekday()) % 7
             if off > TEIKI_SPAWN_AHEAD:
                 continue
-            d = (now + timedelta(days=off)).date()
-            dd = d.isoformat()
-            async with db.execute("SELECT 1 FROM recurring_spawned WHERE rule_id=? AND due_day=?", (r["id"], dd)) as c2:
-                if await c2.fetchone():
+            dates = [(now + timedelta(days=off)).date()]
+            if off == 0:   # 授業当日は来週ぶんも生やす＝授業終わり（課題が出た直後）にすぐ✅できる
+                dates.append(dates[0] + timedelta(days=7))
+            for d in dates:
+                dd = d.isoformat()
+                async with db.execute("SELECT 1 FROM recurring_spawned WHERE rule_id=? AND due_day=?", (r["id"], dd)) as c2:
+                    if await c2.fetchone():
+                        continue
+                due = teiki_due_dt(course, r, d)
+                if due < now:   # 登録したその日の、もう始まっている授業には出さない
+                    await db.execute("INSERT OR IGNORE INTO recurring_spawned(rule_id,due_day) VALUES(?,?)", (r["id"], dd))
+                    await db.commit()
                     continue
-            due = teiki_due_dt(course, r, d)
-            if due < now:   # 登録したその日の、もう始まっている授業には出さない
-                await db.execute("INSERT OR IGNORE INTO recurring_spawned(rule_id,due_day) VALUES(?,?)", (r["id"], dd))
+                cur = await db.execute("INSERT INTO assignments(code,title,note,due_ts,created_by,created_at) VALUES(?,?,?,?,?,?)",
+                                       (r["code"], r["title"], "🔁 毎週の定例課題（自動登録）", int(due.timestamp()), r["created_by"], int(now.timestamp())))
+                await db.execute("INSERT OR IGNORE INTO recurring_spawned(rule_id,due_day,assignment_id) VALUES(?,?,?)", (r["id"], dd, cur.lastrowid))
                 await db.commit()
-                continue
-            cur = await db.execute("INSERT INTO assignments(code,title,note,due_ts,created_by,created_at) VALUES(?,?,?,?,?,?)",
-                                   (r["code"], r["title"], "🔁 毎週の定例課題（自動登録）", int(due.timestamp()), r["created_by"], int(now.timestamp())))
-            await db.execute("INSERT OR IGNORE INTO recurring_spawned(rule_id,due_day,assignment_id) VALUES(?,?,?)", (r["id"], dd, cur.lastrowid))
-            await db.commit()
-            made += 1
+                made += 1
     return made
 
 async def teiki_rules_for(uid):
@@ -2920,7 +2923,7 @@ class KadaiPanelView(discord.ui.View):
         if rules:
             view.add_item(TeikiRemoveSelect(rules))
         txt = ("🔁 **毎週課題**（プリント・出席フォームなど毎週出る課題は、1回登録すれば毎週自動で課題になります。"
-               "授業が終わった翌日に次の回のぶんが登場するので、早めに終わらせて✅もできます）\n"
+               "授業当日の朝には次の回のぶんも登場しているので、課題をもらった授業の直後に✅もできます）\n"
                + ("\n".join("・" + teiki_label(r) for r in rules[:15]) if rules else "-# まだ登録がありません")
                + "\n-# 「今週はなし」のときは、その週の課題だけを `/kadai delete` で取り下げればOK（ルールは残って来週また出ます）")
         await interaction.response.send_message(txt, view=view, ephemeral=True)

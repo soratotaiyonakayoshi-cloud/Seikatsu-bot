@@ -601,24 +601,24 @@ async def main():
     await B.db.execute("UPDATE assignments SET closed=1 WHERE id=?", (arow["id"],))   # 「今週はなし」＝取り下げ
     await B.db.commit()
     check("定例: 取り下げ後も再生成しない", await B.spawn_recurring(datetime(2026, 8, 6, 8, 0, tzinfo=JST)), 0)
-    check("定例: 授業翌日に翌週ぶんが生える", await B.spawn_recurring(datetime(2026, 8, 8, 8, 0, tzinfo=JST)), 1)   # 土曜→8/14(金)ぶん
-    check("定例: 翌日の再実行は増えない", await B.spawn_recurring(datetime(2026, 8, 9, 8, 0, tzinfo=JST)), 0)
+    check("定例: 授業当日の朝に来週ぶんが生える", await B.spawn_recurring(datetime(2026, 8, 7, 8, 0, tzinfo=JST)), 1)   # 金曜朝→8/14(金)ぶん
+    check("定例: 翌日の再実行は増えない", await B.spawn_recurring(datetime(2026, 8, 8, 8, 0, tzinfo=JST)), 0)
     # 締切時刻を指定したルール＋授業がもう始まっている日はスキップ
     await B.db.execute("INSERT OR IGNORE INTO courses(code,name,nname,teacher,room,faculty,dept,cls,year,slots,term,custom) "
                        "VALUES('tst002','テスト分子生物学','てすとぶんしせいぶつがく','','L2','農','','','2','月1','2026後期',0)")
     await B.db.execute("INSERT INTO recurring_kadai(code,title,due_time,created_by,created_at) VALUES('tst002','出席フォーム','23:59','1',0)")
     await B.db.commit()
-    check("定例: 指定時刻は23:59で生成", await B.spawn_recurring(datetime(2026, 8, 10, 12, 0, tzinfo=JST)), 1)   # 月曜昼でも23:59締切なら当日生成
-    brow = await (await B.db.execute("SELECT * FROM assignments WHERE code='tst002'")).fetchone()
+    check("定例: 指定時刻23:59なら当日+来週の2件", await B.spawn_recurring(datetime(2026, 8, 10, 12, 0, tzinfo=JST)), 2)   # 月曜昼→8/10と8/17
+    brow = await (await B.db.execute("SELECT * FROM assignments WHERE code='tst002' ORDER BY due_ts")).fetchone()
     bdue = datetime.fromtimestamp(brow["due_ts"], JST)
-    check("定例: 指定時刻が反映", (bdue.hour, bdue.minute), (23, 59))
+    check("定例: 指定時刻が反映", (bdue.month, bdue.day, bdue.hour, bdue.minute), (8, 10, 23, 59))
     await B.db.execute("UPDATE recurring_kadai SET due_time=NULL WHERE code='tst002'")
     await B.db.execute("DELETE FROM recurring_spawned WHERE rule_id=(SELECT id FROM recurring_kadai WHERE code='tst002')")
     await B.db.execute("DELETE FROM assignments WHERE code='tst002'")
     await B.db.commit()
-    check("定例: 授業開始(月1 8:45)を過ぎた当日はスキップ", await B.spawn_recurring(datetime(2026, 8, 10, 12, 0, tzinfo=JST)), 0)
-    check("定例: スキップは記録され翌週に持ち越さない", (await (await B.db.execute(
-        "SELECT COUNT(*) AS n FROM recurring_spawned WHERE due_day='2026-08-10'")).fetchone())["n"], 1)
+    check("定例: 授業開始(月1 8:45)過ぎの当日はスキップ・来週ぶんだけ生成", await B.spawn_recurring(datetime(2026, 8, 10, 12, 0, tzinfo=JST)), 1)
+    check("定例: 当日スキップは課題なしで記録される", (await (await B.db.execute(
+        "SELECT COUNT(*) AS n FROM recurring_spawned WHERE due_day='2026-08-10' AND assignment_id IS NULL")).fetchone())["n"], 1)
     # 定例課題は3日前リマインドを鳴らさない（前日・当日だけ）。通常課題は従来どおり鳴る
     teiki_aid = (await (await B.db.execute("SELECT assignment_id FROM recurring_spawned WHERE due_day='2026-08-14'")).fetchone())["assignment_id"]
     await B.db.execute("INSERT INTO assignments(code,title,due_ts,created_by,created_at) VALUES('tst001','単発レポート',?,'1',0)",
