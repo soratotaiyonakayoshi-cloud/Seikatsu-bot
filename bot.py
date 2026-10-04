@@ -2948,7 +2948,7 @@ class KadaiPanelView(discord.ui.View):
             + "-# 落単ラインは既定4回。`/kesseki set` で科目ごとに変更、間違えたら `/kesseki add kaisu:-1`",
             view=view, ephemeral=True)
 
-    @discord.ui.button(label="🔁 毎週課題", style=discord.ButtonStyle.secondary, custom_id="sk_kd_teiki", row=2)
+    @discord.ui.button(label="🔁 毎週課題", style=discord.ButtonStyle.success, custom_id="sk_kd_teiki", row=0)
     async def kd_teiki(self, interaction, button):
         await ensure_user(interaction.user)
         rows = await user_course_rows(interaction.user.id)
