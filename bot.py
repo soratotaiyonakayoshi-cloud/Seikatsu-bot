@@ -2594,13 +2594,14 @@ async def kadai_register(interaction, code, kigen, naiyou, memo):
     n = len(await takers_of(c["code"]))
     await interaction.response.send_message(f"✅ 登録しました：**{c['name']}**「{naiyou}」 期限 {fmt_due(due)}（履修者 {n} 人に通知。3日前・前日・当日朝にもリマインドします）", ephemeral=True)
 
-@kadai.command(name="list", description="自分の履修科目の課題一覧（期限順）")
+@kadai.command(name="list", description="自分の履修科目の課題一覧（期限順・プルダウンで✅）")
 async def kadai_list(interaction):
     emb = await kadai_list_embed(str(interaction.user.id))
     if not emb:
         await interaction.response.send_message("いま登録されている課題はありません 🎉", ephemeral=True)
         return
-    await interaction.response.send_message(embed=emb, ephemeral=True)
+    view = await kadai_list_view(str(interaction.user.id))
+    await interaction.response.send_message(embed=emb, view=view or discord.ui.View(), ephemeral=True)
 
 async def kadai_list_embed(uid):
     """自分の履修科目の課題一覧embed（パネルと /kadai list の共通処理）。無ければ None"""
@@ -2618,6 +2619,42 @@ async def kadai_list_embed(uid):
         left = days_left(due)
         lines.append(f"{'✅' if done else '⬜'} **{a['cname']}**：{a['title']}　{fmt_due(due)}" + ("" if done else f"（{'今日！' if left == 0 else f'あと{left}日'}）"))
     return discord.Embed(title="📚 課題一覧", description="\n".join(lines)[:4000], color=discord.Color.gold())
+
+async def kadai_undone_rows(uid):
+    """自分の未完了の課題（チェック用プルダウンの中身）"""
+    async with db.execute(
+        "SELECT a.*, c.name AS cname FROM assignments a JOIN courses c ON c.code=a.code "
+        "WHERE a.closed=0 AND (a.created_by=? OR a.code IN (SELECT code FROM user_courses WHERE user_id=?)) "
+        "AND a.id NOT IN (SELECT assignment_id FROM assignment_done WHERE user_id=?) ORDER BY a.due_ts",
+        (uid, uid, uid)) as c:
+        return await c.fetchall()
+
+class KadaiDoneSelect(discord.ui.Select):
+    def __init__(self, rows):
+        opts = []
+        for r in rows[:25]:
+            due = datetime.fromtimestamp(r["due_ts"], JST)
+            opts.append(discord.SelectOption(label=f"{r['cname']}：{r['title']}"[:80] + f"（{due.month}/{due.day}）", value=str(r["id"])))
+        super().__init__(placeholder="✅ 終わった課題にチェック（複数OK）", options=opts, min_values=1, max_values=len(opts))
+
+    async def callback(self, interaction):
+        uid = str(interaction.user.id)
+        for v in self.values:
+            await db.execute("INSERT OR IGNORE INTO assignment_done(assignment_id,user_id) VALUES(?,?)", (int(v), uid))
+        await db.commit()
+        emb = await kadai_list_embed(uid)
+        view = await kadai_list_view(uid)
+        await interaction.response.edit_message(content=f"✅ {len(self.values)} 件を完了にしました{'。ぜんぶ片付いた🎉' if view is None else '！'}",
+                                                embed=emb, view=view or discord.ui.View())
+
+async def kadai_list_view(uid):
+    """課題一覧に添えるチェック用プルダウン。未完了が無ければ None"""
+    rows = await kadai_undone_rows(uid)
+    if not rows:
+        return None
+    v = discord.ui.View(timeout=600)
+    v.add_item(KadaiDoneSelect(rows))
+    return v
 
 @kadai.command(name="done", description="課題を完了にする（投稿の✅ボタンでもOK）")
 @app_commands.describe(kadai_id="課題")
@@ -2887,7 +2924,8 @@ class KadaiPanelView(discord.ui.View):
         if not emb:
             await interaction.response.send_message("いま登録されている課題はありません 🎉", ephemeral=True)
             return
-        await interaction.response.send_message(embed=emb, ephemeral=True)
+        view = await kadai_list_view(str(interaction.user.id))
+        await interaction.response.send_message(embed=emb, view=view or discord.ui.View(), ephemeral=True)
 
     @discord.ui.button(label="🗓 時間割画像", style=discord.ButtonStyle.secondary, custom_id="sk_jw_img", row=1)
     async def jw_img(self, interaction, button):

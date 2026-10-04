@@ -639,6 +639,19 @@ async def main():
     check("定例: ルール解除(active=0)で生成停止", await B.spawn_recurring(datetime(2026, 8, 19, 8, 0, tzinfo=JST)), 0)
     check("定例: 解除済ルールは一覧に出ない", len(await B.teiki_rules_for("1")), 0)
 
+    # 課題一覧のチェック用プルダウン（✅を一覧から入れられる）
+    und = await B.kadai_undone_rows("1")
+    n0 = len(und)
+    check("課題チェック: 未完了一覧に候補がある", n0 >= 2, True)
+    check("課題チェック: プルダウン項目数が一致", len(B.KadaiDoneSelect(und).options), min(n0, 25))
+    await B.db.execute("INSERT OR IGNORE INTO assignment_done(assignment_id,user_id) VALUES(?, '1')", (und[0]["id"],))
+    await B.db.commit()
+    check("課題チェック: 完了済みは候補から消える", len(await B.kadai_undone_rows("1")), n0 - 1)
+    for r in await B.kadai_undone_rows("1"):
+        await B.db.execute("INSERT OR IGNORE INTO assignment_done(assignment_id,user_id) VALUES(?, '1')", (r["id"],))
+    await B.db.commit()
+    check("課題チェック: 未完了ゼロならプルダウンなし", await B.kadai_list_view("1"), None)
+
     # 📝チェックリストの導線（各パネルのショートカット＋☀️返事の行差し替え）
     check("📝ショートカットが4パネル全部に", all(any(str(getattr(i, "custom_id", "")).startswith("sk_mycheck_") for i in V().children)
                                              for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView)), True)
