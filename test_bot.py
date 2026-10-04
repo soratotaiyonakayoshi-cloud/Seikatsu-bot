@@ -601,8 +601,8 @@ async def main():
     await B.db.execute("UPDATE assignments SET closed=1 WHERE id=?", (arow["id"],))   # 「今週はなし」＝取り下げ
     await B.db.commit()
     check("定例: 取り下げ後も再生成しない", await B.spawn_recurring(datetime(2026, 8, 6, 8, 0, tzinfo=JST)), 0)
-    check("定例: 3日以上先はまだ生成しない", await B.spawn_recurring(datetime(2026, 8, 11, 8, 0, tzinfo=JST)), 0)   # 火曜→金曜は3日先
-    check("定例: 翌週2日前になったら生成する", await B.spawn_recurring(datetime(2026, 8, 12, 8, 0, tzinfo=JST)), 1)
+    check("定例: 授業翌日に翌週ぶんが生える", await B.spawn_recurring(datetime(2026, 8, 8, 8, 0, tzinfo=JST)), 1)   # 土曜→8/14(金)ぶん
+    check("定例: 翌日の再実行は増えない", await B.spawn_recurring(datetime(2026, 8, 9, 8, 0, tzinfo=JST)), 0)
     # 締切時刻を指定したルール＋授業がもう始まっている日はスキップ
     await B.db.execute("INSERT OR IGNORE INTO courses(code,name,nname,teacher,room,faculty,dept,cls,year,slots,term,custom) "
                        "VALUES('tst002','テスト分子生物学','てすとぶんしせいぶつがく','','L2','農','','','2','月1','2026後期',0)")
@@ -619,6 +619,21 @@ async def main():
     check("定例: 授業開始(月1 8:45)を過ぎた当日はスキップ", await B.spawn_recurring(datetime(2026, 8, 10, 12, 0, tzinfo=JST)), 0)
     check("定例: スキップは記録され翌週に持ち越さない", (await (await B.db.execute(
         "SELECT COUNT(*) AS n FROM recurring_spawned WHERE due_day='2026-08-10'")).fetchone())["n"], 1)
+    # 定例課題は3日前リマインドを鳴らさない（前日・当日だけ）。通常課題は従来どおり鳴る
+    teiki_aid = (await (await B.db.execute("SELECT assignment_id FROM recurring_spawned WHERE due_day='2026-08-14'")).fetchone())["assignment_id"]
+    await B.db.execute("INSERT INTO assignments(code,title,due_ts,created_by,created_at) VALUES('tst001','単発レポート',?,'1',0)",
+                       (int(datetime(2026, 8, 14, 23, 59, tzinfo=JST).timestamp()),))
+    norm_aid = (await (await B.db.execute("SELECT id FROM assignments WHERE title='単発レポート'")).fetchone())["id"]
+    _now_orig = B.now_jst
+    B.now_jst = lambda: datetime(2026, 8, 11, 8, 0, tzinfo=JST)   # 期限の3日前
+    try:
+        await B.remind_assignments()
+    finally:
+        B.now_jst = _now_orig
+    check("定例: 3日前リマインドは鳴らない", await (await B.db.execute(
+        "SELECT 1 FROM assignment_reminded WHERE assignment_id=? AND stage='d3'", (teiki_aid,))).fetchone(), None)
+    check("通常課題: 3日前リマインドは鳴る", (await (await B.db.execute(
+        "SELECT 1 FROM assignment_reminded WHERE assignment_id=? AND stage='d3'", (norm_aid,))).fetchone()) is not None, True)
     await B.db.execute("UPDATE recurring_kadai SET active=0")
     await B.db.commit()
     check("定例: ルール解除(active=0)で生成停止", await B.spawn_recurring(datetime(2026, 8, 19, 8, 0, tzinfo=JST)), 0)

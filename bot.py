@@ -2117,6 +2117,10 @@ async def remind_assignments():
         stage = {3: "d3", 1: "d1", 0: "d0"}.get(left)
         if not stage:
             continue
+        if stage == "d3":   # 毎週ある定例課題の3日前通知は騒がしいだけなので鳴らさない
+            async with db.execute("SELECT 1 FROM recurring_spawned WHERE assignment_id=?", (a["id"],)) as c2:
+                if await c2.fetchone():
+                    continue
         async with db.execute("SELECT 1 FROM assignment_reminded WHERE assignment_id=? AND stage=?", (a["id"], stage)) as c2:
             if await c2.fetchone():
                 continue
@@ -2646,7 +2650,7 @@ async def kadai_delete(interaction, kadai_id: str):
 bot.tree.add_command(kadai)
 
 # ---- 🔁 毎週課題（定例課題：プリント・出席フォームなど。1回登録→授業日の2日前に自動で課題化） ----
-TEIKI_SPAWN_AHEAD = 2   # 授業日の何日前に課題を生成するか（2日前なら3日前リマインドは鳴らず、前日・当日だけになる）
+TEIKI_SPAWN_AHEAD = 6   # 次の授業日ぶんを常に生成（授業の翌日に翌週ぶんが生える＝いつでも✅できる）。3日前リマインドは定例課題だけ鳴らさない
 
 def course_day_chars(slots):
     """slots文字列（例「金1,金2」「月3,木2」）から授業のある曜日文字を週順・重複なしで"""
@@ -2816,7 +2820,7 @@ class TeikiAddModal(discord.ui.Modal):
         ch = await get_ch("kadai")
         if ch:
             await ch.send(f"🔁 **{user.display_name}** が **{c['name']}** の毎週課題「{self.naiyou.value.strip()}」を登録しました"
-                          f"（毎週{days}曜・締切 {hm or '授業開始'}。以後は授業日の{TEIKI_SPAWN_AHEAD}日前に自動で課題になります）")
+                          f"（毎週{days}曜・締切 {hm or '授業開始'}。次の回のぶんから毎週自動で課題になります）")
             await bump_panel("kadai")
         await interaction.response.send_message(
             f"✅ 毎週課題を登録しました：**{c['name']}**「{self.naiyou.value.strip()}」（毎週{days}曜）"
@@ -2915,7 +2919,8 @@ class KadaiPanelView(discord.ui.View):
         view.add_item(TeikiCourseSelect(rows))
         if rules:
             view.add_item(TeikiRemoveSelect(rules))
-        txt = ("🔁 **毎週課題**（プリント・出席フォームなど毎週出る課題は、1回登録すれば授業日の2日前に自動で課題になります）\n"
+        txt = ("🔁 **毎週課題**（プリント・出席フォームなど毎週出る課題は、1回登録すれば毎週自動で課題になります。"
+               "授業が終わった翌日に次の回のぶんが登場するので、早めに終わらせて✅もできます）\n"
                + ("\n".join("・" + teiki_label(r) for r in rules[:15]) if rules else "-# まだ登録がありません")
                + "\n-# 「今週はなし」のときは、その週の課題だけを `/kadai delete` で取り下げればOK（ルールは残って来週また出ます）")
         await interaction.response.send_message(txt, view=view, ephemeral=True)
