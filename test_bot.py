@@ -652,6 +652,19 @@ async def main():
     await B.db.commit()
     check("課題チェック: 未完了ゼロならプルダウンなし", await B.kadai_list_view("1"), None)
 
+    # ラベル丸写し事故（「English Discussion（（池辺）・金2） 農1年」事件）の解決
+    tst = await B.get_course("tst001")
+    label = B.course_label(tst)
+    r = await B.ensure_custom_course(label)
+    check("ラベル丸写し: ensure_custom_courseが本物に解決", r["code"], "tst001")
+    await B.db.execute("INSERT INTO courses(code,name,nname,teacher,room,faculty,dept,cls,slots,term,custom) "
+                       "VALUES('xdeadbeef',?,?,'','','','','','','',1)", (label, B.norm_text(label)))
+    await B.db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES('42','xdeadbeef')")
+    await B.db.commit()
+    check("ラベル丸写し: 起動時掃除が1件解決", await B.cleanup_label_customs(), 1)
+    check("ラベル丸写し: 科目行は削除される", await B.get_course("xdeadbeef"), None)
+    check("ラベル丸写し: 履修は本物へ付け替え", "tst001" in [r2["code"] for r2 in await B.user_course_rows(42)], True)
+
     # 📝チェックリストの導線（各パネルのショートカット＋☀️返事の行差し替え）
     check("📝ショートカットが4パネル全部に", all(any(str(getattr(i, "custom_id", "")).startswith("sk_mycheck_") for i in V().children)
                                              for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView)), True)

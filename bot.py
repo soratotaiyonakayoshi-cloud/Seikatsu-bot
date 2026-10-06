@@ -1946,7 +1946,37 @@ async def load_courses_master():
         total += len(rows)
     await db.commit()
     print(f"科目マスタ {total} 件を読み込みました", flush=True)
+    try:
+        await cleanup_label_customs()
+    except Exception as e:
+        print(f"ラベル丸写し科目の掃除エラー: {e!r}", flush=True)
     return total
+
+async def cleanup_label_customs():
+    """候補ラベル丸写しで作られた自由入力科目（例「English Discussion（（池辺）・金2） 農1年」）を
+    本物の科目へ解決して削除。履修・課題・欠席・定例課題の参照も本物へ付け替える"""
+    async with db.execute("SELECT * FROM courses WHERE custom=1") as c:
+        customs = await c.fetchall()
+    if not customs:
+        return 0
+    async with db.execute("SELECT * FROM courses WHERE custom=0") as c:
+        labels = {norm_text(course_label(r)): r["code"] for r in await c.fetchall()}
+    fixed = 0
+    for cu in customs:
+        real = labels.get(cu["nname"])
+        if not real:
+            continue
+        await db.execute("UPDATE OR IGNORE user_courses SET code=? WHERE code=?", (real, cu["code"]))
+        await db.execute("UPDATE OR IGNORE attendance SET code=? WHERE code=?", (real, cu["code"]))
+        await db.execute("UPDATE assignments SET code=? WHERE code=?", (real, cu["code"]))
+        await db.execute("UPDATE recurring_kadai SET code=? WHERE code=?", (real, cu["code"]))
+        await db.execute("DELETE FROM user_courses WHERE code=?", (cu["code"],))   # 付け替えで重複した残り
+        await db.execute("DELETE FROM attendance WHERE code=?", (cu["code"],))
+        await db.execute("DELETE FROM courses WHERE code=?", (cu["code"],))
+        print(f"ラベル丸写し科目を {cu['code']}「{cu['name']}」→ {real} に解決して削除", flush=True)
+        fixed += 1
+    await db.commit()
+    return fixed
 
 def course_label(c, with_code=False):
     """オートコンプリート／表示用の1行ラベル（100字以内）"""
@@ -1993,12 +2023,18 @@ async def takers_of(code):
         return [r["user_id"] for r in await c.fetchall()]
 
 async def ensure_custom_course(name):
-    """自由入力の科目を登録（同名があればそれを返す）"""
+    """自由入力の科目を登録（同名があればそれを返す。検索候補のラベル丸写しなら元の科目に解決）"""
     nn = norm_text(name)
     async with db.execute("SELECT * FROM courses WHERE nname=? ORDER BY custom LIMIT 1", (nn,)) as c:
         r = await c.fetchone()
     if r:
         return r
+    # 「English Discussion（（池辺）・金2） 農1年」のように候補ラベルごと貼られたケース
+    # → 時限なしの自由入力科目を作らず、ラベルが一致する既存科目に解決する
+    async with db.execute("SELECT * FROM courses WHERE custom=0") as c:
+        for r in await c.fetchall():
+            if norm_text(course_label(r)) == nn:
+                return r
     code = "x%08x" % (zlib.crc32(nn.encode("utf-8")) & 0xffffffff)
     await db.execute("INSERT OR IGNORE INTO courses(code,name,nname,teacher,room,faculty,dept,cls,year,slots,term,custom) VALUES(?,?,?,'','','','','',NULL,'','',1)",
                      (code, name.strip()[:60], nn))
