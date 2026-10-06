@@ -582,6 +582,8 @@ async def record_wake(interaction, wake_dt, bed_dt, already_responded=False):
     if dl and hhmm(wake_dt) > grace_deadline(dl):
         late = f" ⚠️ 締切 {dl} を過ぎてます"
     msg = f"✅ {hhmm(wake_dt)} 起床（{sleep_txt}）{late}"
+    if bed_dt and (wake_dt - bed_dt).total_seconds() / 3600 >= 15:
+        msg += "\n⚠️ 睡眠が長すぎるかも？ 🌙の時刻ミスなら `/suimin jikan:7 uwagaki:True` で上書き修正できます（昨日以前は `hi:昨日` など）"
     digest = await today_digest(user.id, wake_dt)
     if digest:
         msg += "\n" + digest
@@ -838,7 +840,8 @@ async def auto_wake(user, hint=""):
     await add_event(uid, "sleep", note=f"{hrs:.2f}", ts_dt=now)
     dl = effective_deadline(u, now)
     late = f" ⚠️ 締切 {dl} 超過" if dl and hhmm(now) > grace_deadline(dl) else ""
-    await post_log("wake", f"☀️ **{u['name'] or user.display_name}** {hhmm(now)} 起床（睡眠 {fmt_hours(hrs)}・{hint}から自動記録）{late}")
+    warn = "　⚠️ 睡眠が長すぎるかも？ `/suimin uwagaki:True` で修正できます" if hrs >= 15 else ""
+    await post_log("wake", f"☀️ **{u['name'] or user.display_name}** {hhmm(now)} 起床（睡眠 {fmt_hours(hrs)}・{hint}から自動記録）{late}{warn}")
 
 @bot.event
 async def on_interaction(interaction):
@@ -3135,25 +3138,56 @@ def parse_day_spec(spec, now):
         return None
     return [(a + timedelta(days=i)).isoformat() for i in range((b - a).days + 1)]
 
-@bot.tree.command(name="suimin", description="睡眠時間を手動で記録（寝落ち・おやすみ押し忘れの救済。追加または上書き）")
-@app_commands.describe(jikan="睡眠時間(h) 例 3 や 6.5", memo="メモ 例 寝落ち（任意）", uwagaki="True にすると今日の睡眠記録をこれ1本に置き換え（誤入力の修正用）")
-async def suimin_command(interaction, jikan: float, memo: str = None, uwagaki: bool = False):
+def parse_past_day(spec, now):
+    """睡眠修正用の日付（過去向き）。''/今日/昨日/おととい/10/5/2026年10/5 → 'YYYY-MM-DD'。未来や不正は None"""
+    t = unicodedata.normalize("NFKC", spec or "").strip()
+    if not t or t in ("今日", "きょう"):
+        return day_str(now)
+    if t in ("昨日", "きのう"):
+        return day_str(now - timedelta(days=1))
+    if t in ("一昨日", "おととい"):
+        return day_str(now - timedelta(days=2))
+    m = re.fullmatch(r"(?:(\d{4})[/年])?\s*(\d{1,2})[/月]\s*(\d{1,2})日?", t)
+    if not m:
+        return None
+    y = int(m.group(1)) if m.group(1) else now.year
+    try:
+        d = date(y, int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+    if not m.group(1) and d > now.date():
+        d = d.replace(year=y - 1)   # 年省略の未来日は昨年扱い（修正は過去向き）
+    if d > now.date():
+        return None
+    return d.isoformat()
+
+@bot.tree.command(name="suimin", description="睡眠時間を手動で記録・修正（寝落ち救済／誤入力の上書き。日付指定で過去も直せる）")
+@app_commands.describe(jikan="睡眠時間(h) 例 3 や 6.5", memo="メモ 例 寝落ち（任意）",
+                       uwagaki="True にするとその日の睡眠記録をこれ1本に置き換え（誤入力の修正用）",
+                       hi="日付 例 昨日／10/5（省略=今日。過去の誤記録を直すとき用）")
+async def suimin_command(interaction, jikan: float, memo: str = None, uwagaki: bool = False, hi: str = None):
     user = interaction.user
     await ensure_user(user)
     now = now_jst()
-    day = day_str(now)
+    day = parse_past_day(hi, now) if hi else day_str(now)
+    if not day:
+        await interaction.response.send_message("⚠️ 日付が読めませんでした（例 `昨日` `10/5`。未来の日は指定できません）", ephemeral=True)
+        return
     if not (0 < jikan <= 24):
         await interaction.response.send_message("⚠️ 時間は 0〜24 の範囲で指定してください（例 3 や 6.5）", ephemeral=True)
         return
     if uwagaki:
         await db.execute("DELETE FROM events WHERE user_id=? AND day=? AND kind='sleep'", (str(user.id), day))
-    await add_event(user.id, "sleep", note=f"{jikan:.2f}")
+    today = day_str(now)
+    ts = now if day == today else datetime.fromisoformat(day).replace(hour=12, tzinfo=JST)
+    await add_event(user.id, "sleep", note=f"{jikan:.2f}", ts_dt=ts)
     rows = await events_on(user.id, day, "sleep")
     total = sum(float(x["note"] or 0) for x in rows)
     tag = f"（{memo.strip()}）" if memo and memo.strip() else ""
     verb = "で上書き" if uwagaki else "を追加"
-    await interaction.response.send_message(f"😪 睡眠 {fmt_hours(jikan)} {verb}しました{tag}。今日の合計 {fmt_hours(total)}。", ephemeral=True)
-    await post_log("wake", f"😪 **{user.display_name}** 睡眠 {'=' if uwagaki else '+'}{fmt_hours(jikan)}{tag}　→ 今日 計 {fmt_hours(total)}")
+    label = "今日" if day == today else day[5:].replace("-", "/")
+    await interaction.response.send_message(f"😪 {label} の睡眠 {fmt_hours(jikan)} {verb}しました{tag}。{label}の合計 {fmt_hours(total)}。", ephemeral=True)
+    await post_log("wake", f"😪 **{user.display_name}** {label} の睡眠 {'=' if uwagaki else '+'}{fmt_hours(jikan)}{tag}　→ {label} 計 {fmt_hours(total)}")
 
 @bot.tree.command(name="oyasumi", description="お休み申告（その日は判定されず、連続達成も途切れない）")
 @app_commands.describe(riyuu="理由 例: 帰省／体調不良（「なし」で取り消し）", hi="日付 例: 明日／10/15／10/15-10/17（省略=今日）")

@@ -665,6 +665,25 @@ async def main():
     check("ラベル丸写し: 科目行は削除される", await B.get_course("xdeadbeef"), None)
     check("ラベル丸写し: 履修は本物へ付け替え", "tst001" in [r2["code"] for r2 in await B.user_course_rows(42)], True)
 
+    # /suimin の日付指定（過去の誤記録の修正）
+    pnow = datetime(2026, 10, 6, 9, 0, tzinfo=JST)
+    check("過去日付: 省略・今日", B.parse_past_day("", pnow), "2026-10-06")
+    check("過去日付: 昨日", B.parse_past_day("昨日", pnow), "2026-10-05")
+    check("過去日付: おととい", B.parse_past_day("おととい", pnow), "2026-10-04")
+    check("過去日付: 10/5", B.parse_past_day("10/5", pnow), "2026-10-05")
+    check("過去日付: 年省略の未来日は昨年", B.parse_past_day("12/25", pnow), "2025-12-25")
+    check("過去日付: 年指定の未来日は無効", B.parse_past_day("2027/1/1", pnow), None)
+    check("過去日付: 不正は None", B.parse_past_day("あさって", pnow), None)
+    # 過去日の睡眠を上書き：誤記録23.7h→7hに修正できる
+    s9 = M(90, "寝すぎ太郎")
+    await B.ensure_user(s9)
+    bad_day = "2026-08-04"
+    await B.add_event(90, "sleep", note="23.70", ts_dt=t(7, 0, 4))
+    await B.db.execute("DELETE FROM events WHERE user_id='90' AND day=? AND kind='sleep'", (bad_day,))
+    await B.add_event(90, "sleep", note="7.00", ts_dt=datetime(2026, 8, 4, 12, 0, tzinfo=JST))
+    rows9 = await B.events_on(90, bad_day, "sleep")
+    check("過去日の睡眠上書き: 1本に置き換わる", (len(rows9), float(rows9[0]["note"])), (1, 7.0))
+
     # 📝チェックリストの導線（各パネルのショートカット＋☀️返事の行差し替え）
     check("📝ショートカットが4パネル全部に", all(any(str(getattr(i, "custom_id", "")).startswith("sk_mycheck_") for i in V().children)
                                              for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView)), True)
