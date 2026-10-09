@@ -990,25 +990,32 @@ def render_meal_album(photos, title, sub="", month=None):
     art_title = _gohan_art("title") if month else None
     art_logo, art_bowl, art_spark = _gohan_art("logo"), _gohan_art("bowl"), _gohan_art("sparkle")
     cell, cap_h, pad = 360, 34, 14
-    head = 112 if art_title else 86
-    foot = 150 if (art_logo and art_bowl) else 0
+    head = 132 if (art_title or art_logo) else 86
     W = pad + cols * (cell + pad)
-    H = head + rows * (cell + cap_h + pad) + foot
+    H = head + rows * (cell + cap_h + pad)
     img = PImage.new("RGB", (W, H), (247, 242, 232))
     d = ImageDraw.Draw(img)
+    logo_w = round(art_logo.width * 104 / art_logo.height) if art_logo else 0
     if art_title:
         x = pad + 8
         for ch in str(month):   # 手描き数字＋「月のベスト飯アルバム」レタリング
             dg = _gohan_art(f"d{ch}")
             if dg:
-                x += _paste_art(img, dg, x, 16, 80) + 6
-        _paste_art(img, art_title, x + 6, 36, 56)
-        if art_spark:
-            _paste_art(img, art_spark, min(x + 6 + round(art_title.width * 56 / art_title.height) + 18, W - 70), 20, 52)
+                x += _paste_art(img, dg, x, 22, 80) + 6
+        x += 6 + _paste_art(img, art_title, x + 6, 46, 56) + 16
+        if art_bowl:   # タイトルの横にごはん茶碗
+            x += _paste_art(img, art_bowl, x, 18, 100) + 4
+        if art_spark and x + 48 < W - pad - logo_w:
+            _paste_art(img, art_spark, x, 16, 44)
     else:
-        d.text((pad + 2, 24), title, font=ImageFont.truetype(fb, 34), fill=(27, 24, 21))
-        if sub:
-            d.text((W - pad, 36), sub, font=ImageFont.truetype(f, 16), fill=(217, 112, 26), anchor="ra")
+        d.text((pad + 2, 42), title, font=ImageFont.truetype(fb, 34), fill=(27, 24, 21))
+        tw = d.textlength(title, font=ImageFont.truetype(fb, 34))
+        if art_bowl:
+            _paste_art(img, art_bowl, int(pad + 2 + tw) + 18, 18, 100)
+        elif sub:
+            d.text((W - pad - logo_w - 14, 54), sub, font=ImageFont.truetype(f, 16), fill=(217, 112, 26), anchor="ra")
+    if art_logo:   # 右上にサークルロゴ
+        _paste_art(img, art_logo, W - pad - logo_w - 4, 14, 104)
     fc = ImageFont.truetype(f, 17)
     fe = None
     try:
@@ -1039,11 +1046,6 @@ def render_meal_album(photos, title, sub="", month=None):
         img.paste(ph, (x, y))
         d.rectangle([x, y, x + cell - 1, y + cell - 1], outline=(226, 218, 203), width=2)
         draw_cap(x + 4, y + cell + 6, cap[:26])
-    if foot:   # フッター：左にごはん茶碗、右にサークルロゴ（どちらも部員の手描き）
-        fy = H - foot + 10
-        _paste_art(img, art_bowl, pad + 10, fy, 126)
-        lw = round(art_logo.width * 128 / art_logo.height)
-        _paste_art(img, art_logo, W - pad - lw - 6, fy, 128)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)

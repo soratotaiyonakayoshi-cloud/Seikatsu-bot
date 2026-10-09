@@ -967,7 +967,7 @@ async def main():
     from PIL import Image as _PI2
     a_plain = _PI2.open(B.render_meal_album([(_dummy((100, 100, 100)), "x")], "テスト"))
     a_hand = _PI2.open(B.render_meal_album([(_dummy((100, 100, 100)), "x")], "テスト", month=10))
-    check("アルバム: month指定で手描きヘッダーに切替", a_hand.height - a_plain.height, 112 - 86)   # フッター(茶碗＋ロゴ)は両方に付く
+    check("アルバム: 手描きヘッダー高さ132（茶碗＋右上ロゴ入り）", (a_plain.height, a_hand.height), (540, 540))   # 132 + (360+34+14)
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
