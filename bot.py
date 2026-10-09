@@ -1040,6 +1040,8 @@ def render_meal_album(photos, title, sub="", month=None, crown=False):
             d.text((cx, y), chs, font=fnt, fill=(27, 24, 21))
             cx += d.textlength(chs, font=fnt)
 
+    rng = random.Random(zlib.crc32(f"{title}:{month}:{len(photos)}".encode("utf-8")))   # 同じアルバムは同じ柄
+    prev_tape = None
     for i, (b, cap) in enumerate(photos[:9]):
         x = pad + (i % cols) * (cell + pad)
         y = head + (i // cols) * (cell + cap_h + pad)
@@ -1051,10 +1053,13 @@ def render_meal_album(photos, title, sub="", month=None, crown=False):
             ph = PImage.new("RGB", (cell, cell), (237, 228, 211))
         img.paste(ph, (x, y))
         d.rectangle([x, y, x + cell - 1, y + cell - 1], outline=(226, 218, 203), width=2)
-        tape = _gohan_art(("tape_red", "tape_teal", "tape_yellow")[i % 3])
-        if tape:   # 各写真の上辺にマスキングテープ（色違い・微回転）
+        tname = rng.choice([t for t in ("tape_red", "tape_teal", "tape_yellow") if t != prev_tape])
+        prev_tape = tname
+        tape = _gohan_art(tname)
+        if tape:   # 各写真の上辺にマスキングテープ（色・角度・位置をランダムにしてアナログっぽく。直前と同色だけは避ける）
             tw = round(tape.width * 44 / tape.height)
-            _paste_art(img, tape, x + cell // 2 - tw // 2, y - 16, 44, angle=(-5, 4, -3)[i % 3], alpha=0.88)
+            _paste_art(img, tape, x + cell // 2 - tw // 2 + rng.randint(-40, 40), y - 16, 44,
+                       angle=rng.choice((-1, 1)) * rng.uniform(2.5, 7.5), alpha=0.88)
         if crown and i == 0:   # 👏1位の写真に王冠とハート
             cr, ht = _gohan_art("crown"), _gohan_art("hearts")
             if cr:
