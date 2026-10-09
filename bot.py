@@ -669,6 +669,27 @@ class WakeView(discord.ui.View):
         await interaction.response.send_message(f"😴 {hhmm(now)}　本日 {deg} 度寝を記録しました。おかえりなさい。" + hitokoto_suffix(), ephemeral=True)
         await post_log("wake", f"😴 **{user.display_name}** {hhmm(now)} 二度寝から生還（本日 {deg} 度寝）")
 
+    @discord.ui.button(label="📅 今日の予定", style=discord.ButtonStyle.secondary, custom_id="sk_today", row=0)
+    async def today_btn(self, interaction, button):
+        """☀️の返事と同じ内容（天気＋時間割＋課題・試験・残タスク）をいつでも呼び出せる（うっかり消した用）"""
+        await ensure_user(interaction.user)
+        await interaction.response.defer(ephemeral=True, thinking=True)   # 天気の取得に少しかかる
+        now = now_jst()
+        parts = []
+        try:
+            w = await fetch_weather()
+            if w:
+                parts.append(w)
+        except Exception:
+            pass
+        digest = await today_digest(interaction.user.id, now)
+        if digest:
+            parts.append(digest)
+        else:
+            parts.append("今日の授業・課題・試験はありません。のんびりいこう")
+        await interaction.followup.send(f"📅 **{now.month}/{now.day}({DAY_CHARS[now.weekday()]}) の予定**\n" + "\n".join(parts),
+                                        ephemeral=True)
+
     @discord.ui.button(label="🏭 今夜は夜勤", style=discord.ButtonStyle.secondary, custom_id="sk_yakin", row=1)
     async def yakin(self, interaction, button):
         user = interaction.user
