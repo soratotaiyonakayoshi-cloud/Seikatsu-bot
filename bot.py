@@ -197,6 +197,11 @@ CREATE TABLE IF NOT EXISTS recurring_kadai(
   due_time TEXT, created_by TEXT, created_at INTEGER, active INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS recurring_spawned(rule_id INTEGER NOT NULL, due_day TEXT NOT NULL, assignment_id INTEGER, PRIMARY KEY(rule_id, due_day));
+CREATE TABLE IF NOT EXISTS exams(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL, title TEXT NOT NULL DEFAULT '試験',
+  exam_day TEXT NOT NULL, created_by TEXT, created_at INTEGER, closed INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS exam_reminded(exam_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(exam_id, stage));
 CREATE INDEX IF NOT EXISTS idx_work_user_day ON work_sessions(user_id, day);
 """
 db = None
@@ -644,7 +649,14 @@ class WakeView(discord.ui.View):
         now = now_jst()
         await ensure_user(user)
         await add_event(user.id, "bed", ts_dt=now)
-        await interaction.response.send_message(f"🌙 {hhmm(now)} おやすみ。起きたら ☀️ を押してね。" + hitokoto_suffix(), ephemeral=True)
+        exam_note = ""
+        try:   # 明日が試験なら就寝時にそっと（チャンネルには鳴らさない）
+            tomorrow = [e for e in await exam_rows_for(str(user.id)) if exam_days_left(e["exam_day"], now) == 1]
+            if tomorrow:
+                exam_note = "\n📝 明日は " + "・".join(f"**{e['cname']}**「{e['title']}」" for e in tomorrow[:3]) + "！ちゃんと寝るのがいちばんの試験対策"
+        except Exception:
+            pass
+        await interaction.response.send_message(f"🌙 {hhmm(now)} おやすみ。起きたら ☀️ を押してね。{exam_note}" + hitokoto_suffix(), ephemeral=True)
         await post_log("wake", f"🌙 **{user.display_name}** {hhmm(now)} おやすみ")
 
     @discord.ui.button(label="😴 二度寝した", style=discord.ButtonStyle.secondary, custom_id="sk_nizone")
@@ -2500,6 +2512,10 @@ async def remind_loop():
     except Exception as e:
         print(f"remind error: {e!r}", flush=True)
     try:
+        await remind_exams()   # 試験のグラデーション通知（30日前/1週間前/3日前/前日/当日）
+    except Exception as e:
+        print(f"exam remind error: {e!r}", flush=True)
+    try:
         await fridge_remind()
     except Exception as e:
         print(f"fridge remind error: {e!r}", flush=True)
@@ -3151,6 +3167,67 @@ async def kadai_awards(d1, d2):
         out.append({"emoji": "📝", "title": "課題係賞", "names": names, "value": f"{best}件 登録"})
     return out
 
+# ---- 📝 試験日カウントダウン ----
+# チャンネルに鳴るのは 30日前→1週間前→3日前 だけ（しつこさ防止）。
+# 前日は🌙就寝時の返事に、当日は☀️起床ダイジェストに、本人へそっと添える。
+EXAM_STAGES = {30: "m30", 7: "w7", 3: "d3"}
+
+def exam_days_left(exam_day, now=None):
+    now = now or now_jst()
+    return (date.fromisoformat(exam_day) - now.date()).days
+
+def exam_date_str(exam_day):
+    d = date.fromisoformat(exam_day)
+    return f"{d.month}/{d.day}({DAY_CHARS[d.weekday()]})"
+
+def exam_stage_text(stage, cname, title, exam_day):
+    ds = exam_date_str(exam_day)
+    return {
+        "m30": f"🗓 **{cname}**「{title}」まで **あと1ヶ月**（{ds}）。そろそろ視界に入れておこう",
+        "w7": f"📝 **{cname}**「{title}」まで **あと1週間**（{ds}）！",
+        "d3": f"📝 **{cname}**「{title}」まで **あと3日**（{ds}）。追い込みどき",
+    }[stage]
+
+async def exam_rows_for(uid=None):
+    """開催前の試験（uid指定で自分の履修科目のみ）。日付順"""
+    q = "SELECT e.*, c.name AS cname FROM exams e JOIN courses c ON c.code=e.code WHERE e.closed=0"
+    args = []
+    if uid is not None:
+        q += " AND e.code IN (SELECT code FROM user_courses WHERE user_id=?)"
+        args.append(str(uid))
+    q += " ORDER BY e.exam_day"
+    async with db.execute(q, args) as c:
+        return await c.fetchall()
+
+async def remind_exams(now=None):
+    """試験のグラデーション通知（毎朝）。過ぎた試験は自動クローズ"""
+    now = now or now_jst()
+    async with db.execute("SELECT e.*, c.name AS cname FROM exams e JOIN courses c ON c.code=e.code WHERE e.closed=0") as c:
+        rows = await c.fetchall()
+    sent = 0
+    for e in rows:
+        left = exam_days_left(e["exam_day"], now)
+        if left < 0:
+            await db.execute("UPDATE exams SET closed=1 WHERE id=?", (e["id"],))
+            await db.commit()
+            continue
+        stage = EXAM_STAGES.get(left)
+        if not stage:
+            continue
+        async with db.execute("SELECT 1 FROM exam_reminded WHERE exam_id=? AND stage=?", (e["id"], stage)) as c2:
+            if await c2.fetchone():
+                continue
+        await db.execute("INSERT OR IGNORE INTO exam_reminded(exam_id,stage) VALUES(?,?)", (e["id"], stage))
+        await db.commit()
+        sent += 1
+        takers = await takers_of(e["code"])
+        ch = await get_ch("kadai")
+        if ch and takers:
+            mention = " ".join(f"<@{t}>" for t in takers)
+            await ch.send(exam_stage_text(stage, e["cname"], e["title"], e["exam_day"]) + f"\n{mention}")
+            await bump_panel("kadai")
+    return sent
+
 async def maybe_celebrate(aid):
     """課題の履修者全員が✅になった瞬間に一度だけ祝う（2人以上の科目のみ）"""
     a = await assignment_row(aid)
@@ -3406,6 +3483,70 @@ class TeikiRemoveSelect(discord.ui.Select):
             await bump_panel("kadai")
         await interaction.response.edit_message(content=f"🗑 解除しました：{teiki_label(r)}", view=None)
 
+class ExamCourseSelect(discord.ui.Select):
+    def __init__(self, rows):
+        opts = [discord.SelectOption(label=course_label(r)[:100], value=r["code"]) for r in rows[:25]]
+        super().__init__(placeholder="➕ 試験日を登録する科目を選ぶ", options=opts)
+
+    async def callback(self, interaction):
+        c = await get_course(self.values[0])
+        if not c:
+            await interaction.response.send_message("科目が見つかりませんでした。", ephemeral=True)
+            return
+        await interaction.response.send_modal(ExamAddModal(c))
+
+class ExamAddModal(discord.ui.Modal):
+    def __init__(self, course):
+        super().__init__(title=f"📝 {course['name']}"[:45])
+        self.code = course["code"]
+        self.hi = discord.ui.TextInput(label="試験日（例 1/27）", max_length=20)
+        self.namae = discord.ui.TextInput(label="名前（例 中間試験・小テスト。空欄なら「試験」）", required=False, max_length=30)
+        for i in (self.hi, self.namae):
+            self.add_item(i)
+
+    async def on_submit(self, interaction):
+        user = interaction.user
+        await ensure_user(user)
+        due = parse_due(self.hi.value)
+        if not due:
+            await interaction.response.send_message("⚠️ 日付が読めませんでした。例: `1/27` `2027/1/27`", ephemeral=True)
+            return
+        c = await get_course(self.code)
+        title = (self.namae.value or "").strip() or "試験"
+        exam_day = due.date().isoformat()
+        await db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES(?,?)", (str(user.id), c["code"]))
+        await db.execute("INSERT INTO exams(code,title,exam_day,created_by,created_at) VALUES(?,?,?,?,?)",
+                         (c["code"], title, exam_day, str(user.id), int(now_jst().timestamp())))
+        await db.commit()
+        left = exam_days_left(exam_day)
+        ch = await get_ch("kadai")
+        if ch:
+            await ch.send(f"📝 **{user.display_name}** が **{c['name']}** の試験日を登録しました：「{title}」{exam_date_str(exam_day)}（**あと{left}日**）\n"
+                          f"-# 30日前・1週間前・3日前にここでお知らせ。前日の🌙と当日の☀️には本人にだけそっと出ます")
+            await bump_panel("kadai")
+        await interaction.response.send_message(f"✅ 登録しました：**{c['name']}**「{title}」{exam_date_str(exam_day)}（あと{left}日）", ephemeral=True)
+
+class ExamRemoveSelect(discord.ui.Select):
+    def __init__(self, rows):
+        opts = [discord.SelectOption(label=f"🗑 取り下げ：{r['cname']}「{r['title']}」{exam_date_str(r['exam_day'])}"[:100], value=str(r["id"]))
+                for r in rows[:25]]
+        super().__init__(placeholder="🗑 試験日を取り下げる（間違い・中止）", options=opts)
+
+    async def callback(self, interaction):
+        async with db.execute("SELECT e.*, c.name AS cname FROM exams e JOIN courses c ON c.code=e.code WHERE e.id=?",
+                              (int(self.values[0]),)) as c:
+            e = await c.fetchone()
+        if not e:
+            await interaction.response.send_message("見つかりませんでした。", ephemeral=True)
+            return
+        await db.execute("UPDATE exams SET closed=1 WHERE id=?", (e["id"],))
+        await db.commit()
+        ch = await get_ch("kadai")
+        if ch:
+            await ch.send(f"📝🗑 **{e['cname']}**「{e['title']}」（{exam_date_str(e['exam_day'])}）は **{interaction.user.display_name}** が取り下げました。")
+            await bump_panel("kadai")
+        await interaction.response.edit_message(content=f"🗑 取り下げました：{e['cname']}「{e['title']}」", view=None)
+
 class KadaiPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -3467,6 +3608,26 @@ class KadaiPanelView(discord.ui.View):
             "🚨 **欠席カウンター**（下のプルダウンで選ぶと+1）\n" + ("\n".join(tracked) + "\n" if tracked else "")
             + "-# 落単ラインは既定4回。`/kesseki set` で科目ごとに変更、間違えたら `/kesseki add kaisu:-1`",
             view=view, ephemeral=True)
+
+    @discord.ui.button(label="📝 試験日", style=discord.ButtonStyle.secondary, custom_id="sk_exam", row=2)
+    async def exam_btn(self, interaction, button):
+        await ensure_user(interaction.user)
+        rows = await user_course_rows(interaction.user.id)
+        if not rows:
+            await interaction.response.send_message("先に 🎓 で履修科目を登録してください。", ephemeral=True)
+            return
+        exs = await exam_rows_for(str(interaction.user.id))
+        view = discord.ui.View(timeout=600)
+        view.add_item(ExamCourseSelect(rows))
+        if exs:
+            view.add_item(ExamRemoveSelect(exs))
+        lines = []
+        for e in exs[:15]:
+            left = exam_days_left(e["exam_day"])
+            lines.append(f"・**{e['cname']}**「{e['title']}」{exam_date_str(e['exam_day'])}　" + ("**今日！🔥**" if left == 0 else f"**あと{left}日**"))
+        txt = ("📝 **試験日カウントダウン**（30日前・1週間前・3日前にみんなへ、前日の🌙・当日の☀️はあなたにだけお知らせ）\n"
+               + ("\n".join(lines) if lines else "-# 登録されている試験はまだありません"))
+        await interaction.response.send_message(txt, view=view, ephemeral=True)
 
     @discord.ui.button(label="🔁 毎週課題", style=discord.ButtonStyle.success, custom_id="sk_kd_teiki", row=0)
     async def kd_teiki(self, interaction, button):
@@ -3563,6 +3724,16 @@ async def today_digest(uid, now):
                 lines.append("🚨 欠席はあと：" + "／".join(warn))
         except Exception:
             pass
+    try:   # 試験1週間前からは朝のダイジェストでそっとカウントダウン（本人にだけ見える）
+        exs = [e for e in await exam_rows_for(uid) if 0 <= exam_days_left(e["exam_day"], now) <= 7]
+        if exs:
+            parts = []
+            for e in exs[:4]:
+                left = exam_days_left(e["exam_day"], now)
+                parts.append(f"**{e['cname']}** " + ("**今日！🔥**" if left == 0 else f"あと{left}日") + f"（{exam_date_str(e['exam_day'])}）")
+            lines.append("📝 試験：" + "／".join(parts))
+    except Exception:
+        pass
     async with db.execute(
         "SELECT a.title, a.due_ts, c.name AS cname FROM assignments a JOIN courses c ON c.code=a.code "
         "WHERE a.closed=0 AND a.code IN (SELECT code FROM user_courses WHERE user_id=?) "

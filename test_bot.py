@@ -42,8 +42,8 @@ check("永続ビュー6種 登録OK", True, True)
 check("ごはんパネルに🧊 2ボタン", {"sk_fridge_add", "sk_fridge_list"} <= {i.custom_id for i in B.MealView().children}, True)
 check("🧊は2段目・ごはんは1段目", sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_fridge")}) == [1]
       and sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_meal")}) == [0], True)
-check("課題パネルは8ボタン", {i.custom_id for i in B.KadaiPanelView().children},
-      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki"})
+check("課題パネルは9ボタン", {i.custom_id for i in B.KadaiPanelView().children},
+      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki", "sk_exam"})
 check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
 check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["album", "erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kesseki", "kigen", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "reizouko", "saitei", "setup", "suimin", "tips", "tsushinbo", "watashi"])
 
@@ -937,6 +937,28 @@ async def main():
     draws = [B.hitokoto_suffix() for _ in range(40)]
     check("ひとこと: サブテキスト形式", all(d.startswith("\n-# 💡 ") for d in draws), True)
     check("ひとこと: 直近の繰り返しを避ける", len(set(draws)) >= min(30, len(B.HITOKOTO) // 2), True)
+
+    # 📝 試験日カウントダウン
+    exnow = datetime(2026, 8, 5, 8, 0, tzinfo=JST)
+    await B.db.execute("INSERT INTO exams(code,title,exam_day,created_by,created_at) VALUES('tst001','期末試験','2026-09-04','42',0)")
+    await B.db.commit()
+    check("試験: 残り日数", B.exam_days_left("2026-09-04", exnow), 30)
+    check("試験: 30日前に通知（記録）", await B.remind_exams(exnow), 1)
+    check("試験: 同日の再実行は鳴らない", await B.remind_exams(exnow), 0)
+    check("試験: 29〜8日前は静か", await B.remind_exams(datetime(2026, 8, 15, 8, 0, tzinfo=JST)), 0)
+    check("試験: 1週間前に通知", await B.remind_exams(datetime(2026, 8, 28, 8, 0, tzinfo=JST)), 1)
+    check("試験: 3日前に通知", await B.remind_exams(datetime(2026, 9, 1, 8, 0, tzinfo=JST)), 1)
+    check("試験: 前日・当日はチャンネルに鳴らない", (await B.remind_exams(datetime(2026, 9, 3, 8, 0, tzinfo=JST)))
+          + (await B.remind_exams(datetime(2026, 9, 4, 8, 0, tzinfo=JST))), 0)
+    check("試験: ステージはm30/w7/d3のみ", sorted(B.EXAM_STAGES.values()), ["d3", "m30", "w7"])
+    # ☀️ダイジェストに7日前からカウントダウン（user42はtst001履修）
+    dig = await B.today_digest("42", datetime(2026, 9, 1, 7, 0, tzinfo=JST))
+    check("試験: ☀️ダイジェストに「あと3日」", dig is not None and "試験" in dig and "あと3日" in dig, True)
+    dig0 = await B.today_digest("42", datetime(2026, 9, 4, 7, 0, tzinfo=JST))
+    check("試験: 当日の☀️は「今日！」", dig0 is not None and "今日！🔥" in dig0, True)
+    check("試験: 過ぎたら自動クローズ", await B.remind_exams(datetime(2026, 9, 5, 8, 0, tzinfo=JST)) or
+          (await (await B.db.execute("SELECT closed FROM exams WHERE exam_day='2026-09-04'")).fetchone())["closed"], 1)
+    check("試験: クローズ後は一覧に出ない", len(await B.exam_rows_for("42")), 0)
 
     # 📖 ごはんアルバム
     check("ごはんパネルに📖アルバムボタン", any(i.custom_id == "sk_gohan_album" for i in B.MealView().children), True)
