@@ -967,16 +967,22 @@ def _gohan_art(name):
     _GOHAN_ART[name] = img
     return img
 
-def _paste_art(img, art, x, y, h):
-    """高さhに合わせて素材を貼る。貼った幅を返す"""
+def _paste_art(img, art, x, y, h, angle=0, alpha=1.0):
+    """高さhに合わせて素材を貼る（angleで回転・alphaで透かし）。貼った幅を返す"""
     w = round(art.width * h / art.height)
     a = art.resize((w, h))
+    if angle:
+        from PIL import Image as PImage
+        a = a.rotate(angle, expand=True, resample=PImage.BICUBIC)
+    if alpha < 1.0:
+        a = a.copy()
+        a.putalpha(a.getchannel("A").point(lambda v: int(v * alpha)))
     img.paste(a, (x, y), a)
-    return w
+    return a.width
 
-def render_meal_album(photos, title, sub="", month=None):
+def render_meal_album(photos, title, sub="", month=None, crown=False):
     """photos: [(画像bytes, キャプション), ...] 最大9枚 → コラージュPNG。描けなければ None
-    month指定時は手描きレタリングの見出し「{month}月のベスト飯アルバム」を使う"""
+    month指定時は手描きレタリングの見出し。crown=Trueで1枚目（👏1位）に王冠とハート"""
     try:
         from PIL import Image as PImage, ImageDraw, ImageFont, ImageOps
     except Exception:
@@ -1045,6 +1051,16 @@ def render_meal_album(photos, title, sub="", month=None):
             ph = PImage.new("RGB", (cell, cell), (237, 228, 211))
         img.paste(ph, (x, y))
         d.rectangle([x, y, x + cell - 1, y + cell - 1], outline=(226, 218, 203), width=2)
+        tape = _gohan_art(("tape_red", "tape_teal", "tape_yellow")[i % 3])
+        if tape:   # 各写真の上辺にマスキングテープ（色違い・微回転）
+            tw = round(tape.width * 44 / tape.height)
+            _paste_art(img, tape, x + cell // 2 - tw // 2, y - 16, 44, angle=(-5, 4, -3)[i % 3], alpha=0.88)
+        if crown and i == 0:   # 👏1位の写真に王冠とハート
+            cr, ht = _gohan_art("crown"), _gohan_art("hearts")
+            if cr:
+                _paste_art(img, cr, x - 26, y - 44, 120, angle=12)
+            if ht:
+                _paste_art(img, ht, x + cell - 100, y + cell - 104, 92)
         draw_cap(x + 4, y + cell + 6, cap[:26])
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -1102,7 +1118,8 @@ async def build_meal_album(d1, d2, uid=None, title="", sub="", month=None):
             break
     if not photos:
         return None
-    return await asyncio.to_thread(render_meal_album, photos, title, sub, month)
+    crown = uid is None and rows and (rows[0]["pr"] or 0) > 0   # 👏1位がいる月間アルバムだけ王冠
+    return await asyncio.to_thread(render_meal_album, photos, title, sub, month, crown)
 
 async def backfill_meal_msg_ids(days=62):
     """アルバム機能より前の写真つき食事記録にmsg_idを後付けする（#ごはん🍚の履歴と時刻で突き合わせ・初回のみ）"""

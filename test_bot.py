@@ -963,7 +963,9 @@ async def main():
     check("アルバム: コラージュPNG生成", alb is not None and len(alb.getvalue()) > 5000, True)
     check("アルバム: 壊れた画像でも落ちない", B.render_meal_album([(b"notimage", "x")], "t") is not None, True)
     check("アルバム: 手描き素材が全部ある", all(B._gohan_art(n) is not None for n in
-          ["logo", "title", "sparkle", "bowl"] + [f"d{i}" for i in range(10)]), True)
+          ["logo", "title", "sparkle", "bowl", "crown", "hearts", "tape_red", "tape_teal", "tape_yellow"]
+          + [f"d{i}" for i in range(10)]), True)
+    check("アルバム: crown付きでも生成できる", B.render_meal_album([(_dummy((90, 90, 90)), "x")], "t", month=10, crown=True) is not None, True)
     from PIL import Image as _PI2
     a_plain = _PI2.open(B.render_meal_album([(_dummy((100, 100, 100)), "x")], "テスト"))
     a_hand = _PI2.open(B.render_meal_album([(_dummy((100, 100, 100)), "x")], "テスト", month=10))
