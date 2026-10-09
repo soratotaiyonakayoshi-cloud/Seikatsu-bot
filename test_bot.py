@@ -665,6 +665,21 @@ async def main():
     check("ラベル丸写し: 科目行は削除される", await B.get_course("xdeadbeef"), None)
     check("ラベル丸写し: 履修は本物へ付け替え", "tst001" in [r2["code"] for r2 in await B.user_course_rows(42)], True)
 
+    # 課題一覧: 完了済み＆期限切れは消える・未完了の期限切れは「期限切れ！」表示
+    rn = B.now_jst()
+    mk = lambda title, dd: B.db.execute("INSERT INTO assignments(code,title,due_ts,created_by,created_at) VALUES('tst001',?,?,'91',0)",
+                                        (title, int((rn + B.timedelta(days=dd)).timestamp())))
+    await mk("過去×完了", -2); await mk("過去×未完了", -1); await mk("未来×完了", 2)
+    await B.db.commit()
+    for title in ("過去×完了", "未来×完了"):
+        aid9 = (await (await B.db.execute("SELECT id FROM assignments WHERE title=?", (title,))).fetchone())["id"]
+        await B.db.execute("INSERT OR IGNORE INTO assignment_done(assignment_id,user_id) VALUES(?, '91')", (aid9,))
+    await B.db.commit()
+    emb9 = await B.kadai_list_embed("91")
+    check("課題一覧: 完了×期限切れは消える", "過去×完了" in emb9.description, False)
+    check("課題一覧: 未完了×期限切れは残って警告", "過去×未完了" in emb9.description and "期限切れ！" in emb9.description, True)
+    check("課題一覧: 完了×期限前は✅で残る", "✅ **テスト英語ED**：未来×完了" in emb9.description, True)
+
     # /suimin の日付指定（過去の誤記録の修正）
     pnow = datetime(2026, 10, 6, 9, 0, tzinfo=JST)
     check("過去日付: 省略・今日", B.parse_past_day("", pnow), "2026-10-06")

@@ -2656,7 +2656,11 @@ async def kadai_list_embed(uid):
         done = uid in await done_set(a["id"])
         due = datetime.fromtimestamp(a["due_ts"], JST)
         left = days_left(due)
-        lines.append(f"{'✅' if done else '⬜'} **{a['cname']}**：{a['title']}　{fmt_due(due)}" + ("" if done else f"（{'今日！' if left == 0 else f'あと{left}日'}）"))
+        if done and left < 0:
+            continue   # 完了済みで期限も過ぎた課題は見せない（自動クローズを待たず一覧から消す）
+        lines.append(f"{'✅' if done else '⬜'} **{a['cname']}**：{a['title']}　{fmt_due(due)}" + ("" if done else f"（{'今日！' if left == 0 else ('期限切れ！' if left < 0 else f'あと{left}日')}）"))
+    if not lines:
+        return None
     return discord.Embed(title="📚 課題一覧", description="\n".join(lines)[:4000], color=discord.Color.gold())
 
 async def kadai_undone_rows(uid):
