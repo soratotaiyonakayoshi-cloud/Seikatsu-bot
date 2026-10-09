@@ -1104,6 +1104,60 @@ async def build_meal_album(d1, d2, uid=None, title="", sub="", month=None):
         return None
     return await asyncio.to_thread(render_meal_album, photos, title, sub, month)
 
+async def backfill_meal_msg_ids(days=62):
+    """アルバム機能より前の写真つき食事記録にmsg_idを後付けする（#ごはん🍚の履歴と時刻で突き合わせ・初回のみ）"""
+    if await meta_get("meal_msgid_backfill"):
+        return 0
+    ch = await _meal_channel()
+    if not ch:
+        return 0
+    await meta_set("meal_msgid_backfill", "1")
+    linked = 0
+    after = now_jst() - timedelta(days=days)
+    async for m in ch.history(limit=None, after=after, oldest_first=True):
+        if m.author.bot or not any((a.content_type or "").startswith("image/") for a in m.attachments):
+            continue
+        ts = int(m.created_at.timestamp())
+        async with db.execute(
+            "SELECT id FROM events WHERE user_id=? AND kind='meal' AND msg_id IS NULL AND ABS(ts-?)<=300 "
+            "ORDER BY ABS(ts-?) LIMIT 1", (str(m.author.id), ts, ts)) as c:
+            r = await c.fetchone()
+        if r:
+            await db.execute("UPDATE events SET msg_id=? WHERE id=?", (str(m.id), r["id"]))
+            linked += 1
+    await db.commit()
+    print(f"ごはん写真のmsg_id後付け: {linked}件", flush=True)
+    return linked
+
+@bot.tree.command(name="album", description="ベスト飯アルバムを作って #ごはん🍚 に投稿（月を指定・省略で先月）")
+@app_commands.describe(tsuki="月（1〜12。省略すると先月）")
+async def album_command(interaction, tsuki: int = None):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    now = now_jst()
+    if tsuki is None:
+        base = now.replace(day=1) - timedelta(days=1)   # 先月
+        y, m = base.year, base.month
+    elif 1 <= tsuki <= 12:
+        y, m = (now.year if tsuki <= now.month else now.year - 1), tsuki
+    else:
+        await interaction.followup.send("月は 1〜12 で指定してください。", ephemeral=True)
+        return
+    d1 = f"{y:04d}-{m:02d}-01"
+    last = (datetime(y, m, 1, tzinfo=JST) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    d2 = min(day_str(last), day_str(now))
+    buf = await build_meal_album(d1, d2, title=f"{m}月のベスト飯アルバム", month=m)
+    if not buf:
+        await interaction.followup.send(f"{y}年{m}月は写真つきのごはん記録が見つかりませんでした。", ephemeral=True)
+        return
+    ch = await _meal_channel()
+    if not ch:
+        await interaction.followup.send(file=discord.File(buf, filename="meal_album.png"), ephemeral=True)
+        return
+    await ch.send(f"📖 **{m}月のベスト飯アルバム**（{interaction.user.display_name} のリクエストでお届け）",
+                  file=discord.File(buf, filename="meal_album.png"))
+    await bump_panel("meal")
+    await interaction.followup.send(f"✅ {m}月のアルバムを #ごはん🍚 に投稿しました。", ephemeral=True)
+
 async def post_monthly_meal_album(now=None):
     """月末、月間表彰の後に #ごはん🍚 へ今月のベスト飯アルバムを投稿"""
     now = now or now_jst()
@@ -2099,6 +2153,10 @@ async def on_ready():
         await reconcile_work_sessions()   # 再起動中に入退室があっても作業セッションを立て直す
     except Exception as e:
         print(f"作業部屋の再同期エラー: {e!r}", flush=True)
+    try:
+        await backfill_meal_msg_ids()   # アルバム機能より前の写真記録にmsg_idを後付け（初回だけ）
+    except Exception as e:
+        print(f"ごはん写真の後付けエラー: {e!r}", flush=True)
     if not judge_loop.is_running():
         judge_loop.start()
     if not radio_loop.is_running():

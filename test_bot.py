@@ -45,7 +45,7 @@ check("🧊は2段目・ごはんは1段目", sorted({i.row for i in B.MealView(
 check("課題パネルは8ボタン", {i.custom_id for i in B.KadaiPanelView().children},
       {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki"})
 check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kesseki", "kigen", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "reizouko", "saitei", "setup", "suimin", "tips", "tsushinbo", "watashi"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["album", "erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kesseki", "kigen", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "reizouko", "saitei", "setup", "suimin", "tips", "tsushinbo", "watashi"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n
