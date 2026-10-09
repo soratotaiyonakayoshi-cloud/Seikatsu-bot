@@ -726,8 +726,15 @@ async def main():
         aid9 = (await (await B.db.execute("SELECT id FROM assignments WHERE title=?", (title,))).fetchone())["id"]
         await B.db.execute("INSERT OR IGNORE INTO assignment_done(assignment_id,user_id) VALUES(?, '91')", (aid9,))
     await B.db.commit()
+    await mk("今朝×完了", 0)   # 期限=今この瞬間より少し前（同日内）
+    await B.db.execute("UPDATE assignments SET due_ts=? WHERE title='今朝×完了'", (int(rn.timestamp()) - 3600,))
+    await B.db.commit()
+    aidm = (await (await B.db.execute("SELECT id FROM assignments WHERE title='今朝×完了'")).fetchone())["id"]
+    await B.db.execute("INSERT OR IGNORE INTO assignment_done(assignment_id,user_id) VALUES(?, '91')", (aidm,))
+    await B.db.commit()
     emb9 = await B.kadai_list_embed("91")
     check("課題一覧: 完了×期限切れは消える", "過去×完了" in emb9.description, False)
+    check("課題一覧: 完了×今日の午前期限も時刻で消える", "今朝×完了" in emb9.description, False)
     check("課題一覧: 未完了×期限切れは残って警告", "過去×未完了" in emb9.description and "期限切れ！" in emb9.description, True)
     check("課題一覧: 完了×期限前は✅で残る", "✅ **テスト英語ED**：未来×完了" in emb9.description, True)
 
