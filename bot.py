@@ -1457,6 +1457,10 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
             award_items.append(wa)
     except Exception as e:
         print(f"もくもく賞集計エラー: {e!r}", flush=True)
+    try:
+        award_items.extend(await kadai_awards(d1, d2))
+    except Exception as e:
+        print(f"課題賞集計エラー: {e!r}", flush=True)
     if kind == "week":
         iw = await iyashi_winner(d1, d2)
         if iw:
@@ -1786,6 +1790,10 @@ async def judge_loop():
             await judge(g)
             if now.weekday() == 6:
                 await weekly_summary(g)
+                try:
+                    await kadai_forecast(now)   # 来週の課題予報を #課題📚 へ
+                except Exception as e:
+                    print(f"課題予報エラー: {e!r}", flush=True)
             if (now + timedelta(days=1)).month != now.month:
                 await monthly_summary(g)
         except Exception as e:
@@ -2105,6 +2113,10 @@ class DoneButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_kadai_
             msg = f"✅ 「{a['title']}」を完了にしました。おつかれさま！"
         await db.commit()
         await interaction.response.send_message(msg, ephemeral=True)
+        try:
+            await maybe_celebrate(self.aid)
+        except Exception as e:
+            print(f"全員提出祝福エラー: {e!r}", flush=True)
         try:
             takers = await takers_of(a["code"])
             done = await done_set(self.aid)
@@ -2685,19 +2697,60 @@ class KadaiDoneSelect(discord.ui.Select):
         for v in self.values:
             await db.execute("INSERT OR IGNORE INTO assignment_done(assignment_id,user_id) VALUES(?,?)", (int(v), uid))
         await db.commit()
+        for v in self.values:
+            try:
+                await maybe_celebrate(int(v))
+            except Exception as e:
+                print(f"全員提出祝福エラー: {e!r}", flush=True)
         emb = await kadai_list_embed(uid)
         view = await kadai_list_view(uid)
         await interaction.response.edit_message(content=f"✅ {len(self.values)} 件を完了にしました{'。ぜんぶ片付いた🎉' if view is None else '！'}",
                                                 embed=emb, view=view or discord.ui.View())
 
+class KadaiDeferSelect(discord.ui.Select):
+    def __init__(self, rows):
+        opts = []
+        for r in rows[:25]:
+            due = datetime.fromtimestamp(r["due_ts"], JST)
+            opts.append(discord.SelectOption(label=f"{r['cname']}：{r['title']}"[:80] + f"（{due.month}/{due.day}）", value=str(r["id"])))
+        super().__init__(placeholder="🕑 期限を変更する（提出延期など）", options=opts)
+
+    async def callback(self, interaction):
+        a = await assignment_row(int(self.values[0]))
+        if not a:
+            await interaction.response.send_message("課題が見つかりませんでした。", ephemeral=True)
+            return
+        await interaction.response.send_modal(KigenHenkoModal(a))
+
+class KigenHenkoModal(discord.ui.Modal):
+    def __init__(self, a):
+        super().__init__(title=f"🕑 {a['title']}"[:45])
+        self.aid = a["id"]
+        self.kigen = discord.ui.TextInput(label="新しい期限（例 10/15 ／ 10/15 17:00）", max_length=20)
+        self.add_item(self.kigen)
+
+    async def on_submit(self, interaction):
+        due = parse_due(self.kigen.value)
+        if not due:
+            await interaction.response.send_message("⚠️ 期限の形式が読めませんでした。例: `10/15` `10/15 17:00`", ephemeral=True)
+            return
+        a = await kadai_set_due(self.aid, due, interaction.user.display_name)
+        await interaction.response.send_message(f"🕑 「{a['title']}」の期限を {fmt_due(due)} に変更しました。", ephemeral=True)
+
 async def kadai_list_view(uid):
-    """課題一覧に添えるチェック用プルダウン。未完了が無ければ None"""
-    rows = await kadai_undone_rows(uid)
-    if not rows:
-        return None
+    """課題一覧に添える操作プルダウン（✅チェック＋🕑期限変更）。対象が無ければ None"""
     v = discord.ui.View(timeout=600)
-    v.add_item(KadaiDoneSelect(rows))
-    return v
+    rows = await kadai_undone_rows(uid)
+    if rows:
+        v.add_item(KadaiDoneSelect(rows))
+    async with db.execute(
+        "SELECT a.*, c.name AS cname FROM assignments a JOIN courses c ON c.code=a.code "
+        "WHERE a.closed=0 AND (a.created_by=? OR a.code IN (SELECT code FROM user_courses WHERE user_id=?)) ORDER BY a.due_ts",
+        (uid, uid)) as c:
+        allrows = await c.fetchall()
+    if allrows:
+        v.add_item(KadaiDeferSelect(allrows))
+    return v if v.children else None
 
 @kadai.command(name="done", description="課題を完了にする（投稿の✅ボタンでもOK）")
 @app_commands.describe(kadai_id="課題")
@@ -2710,6 +2763,133 @@ async def kadai_done(interaction, kadai_id: str):
     await db.execute("INSERT OR IGNORE INTO assignment_done(assignment_id,user_id) VALUES(?,?)", (a["id"], str(interaction.user.id)))
     await db.commit()
     await interaction.response.send_message(f"✅ 「{a['title']}」を完了にしました。", ephemeral=True)
+    try:
+        await maybe_celebrate(a["id"])
+    except Exception as e:
+        print(f"全員提出祝福エラー: {e!r}", flush=True)
+
+async def kadai_set_due(aid, due_dt, by_name):
+    """課題の期限を変更（提出延期など）。リマインド済み記録を消して新しい期限で前日・当日に再通知"""
+    await db.execute("UPDATE assignments SET due_ts=?, closed=0 WHERE id=?", (int(due_dt.timestamp()), aid))
+    await db.execute("DELETE FROM assignment_reminded WHERE assignment_id=? AND stage IN ('d3','d1','d0')", (aid,))
+    await db.commit()
+    a = await assignment_row(aid)
+    ch = await get_ch("kadai")
+    if ch and a:
+        await ch.send(f"🕑 **{a['cname']}**「{a['title']}」の期限を **{fmt_due(due_dt)}** に変更しました（by {by_name}）")
+        await bump_panel("kadai")
+    return a
+
+async def build_kadai_forecast(now):
+    """来週（明日〜7日後）締切の課題を日別にまとめたテキスト。無ければ None"""
+    t1 = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    t2 = t1 + timedelta(days=7)
+    async with db.execute(
+        "SELECT a.*, c.name AS cname FROM assignments a JOIN courses c ON c.code=a.code "
+        "WHERE a.closed=0 AND a.due_ts >= ? AND a.due_ts < ? ORDER BY a.due_ts",
+        (int(t1.timestamp()), int(t2.timestamp()))) as c:
+        rows = await c.fetchall()
+    if not rows:
+        return None
+    by_day = {}
+    for a in rows:
+        due = datetime.fromtimestamp(a["due_ts"], JST)
+        by_day.setdefault(due.date().isoformat(), []).append(a)
+    lines = [f"📚 **来週の課題予報**（{t1.month}/{t1.day}〜）"]
+    for d in sorted(by_day):
+        dd = date.fromisoformat(d)
+        items = "／".join(f"**{a['cname']}**「{a['title']}」" for a in by_day[d])
+        lines.append(f"・{dd.month}/{dd.day}({DAY_CHARS[dd.weekday()]})　{items}")
+    lines.append("-# まだ登録されていない課題に気づいたら ➕ で登録してね")
+    return "\n".join(lines)
+
+async def kadai_forecast(now=None):
+    """毎週日曜の通信簿の後に #課題📚 へ来週の見通しを流す"""
+    now = now or now_jst()
+    txt = await build_kadai_forecast(now)
+    if not txt:
+        return None
+    ch = await get_ch("kadai")
+    if ch:
+        await ch.send(txt)
+        await bump_panel("kadai")
+    return txt
+
+async def kadai_awards(d1, d2):
+    """通信簿の課題系の賞：✅きっちり賞（期間内締切の課題消化率）＋📝課題係賞（手動登録数。定例の自動生成分は除く）"""
+    t1 = int(datetime.fromisoformat(d1).replace(tzinfo=JST).timestamp())
+    t2 = int((datetime.fromisoformat(d2).replace(tzinfo=JST) + timedelta(days=1)).timestamp())
+    out = []
+    async with db.execute("SELECT id, code FROM assignments WHERE due_ts >= ? AND due_ts < ?", (t1, t2)) as c:
+        week_as = await c.fetchall()
+    per = {}
+    for a in week_as:
+        done = await done_set(a["id"])
+        for uid in await takers_of(a["code"]):
+            n, dn = per.get(uid, (0, 0))
+            per[uid] = (n + 1, dn + (1 if uid in done else 0))
+    cands = {uid: (n, dn) for uid, (n, dn) in per.items() if n >= 2}
+    if cands:
+        best = max(dn / n for n, dn in cands.values())
+        if best > 0:
+            names = []
+            for uid, (n, dn) in cands.items():
+                if dn / n == best:
+                    gu = await get_user(uid)
+                    names.append((gu["name"] if gu and gu["name"] else uid))
+            out.append({"emoji": "✅", "title": "きっちり賞", "names": names, "value": f"課題消化 {round(best * 100)}%"})
+    async with db.execute(
+        "SELECT created_by, COUNT(*) AS n FROM assignments WHERE created_at >= ? AND created_at < ? "
+        "AND created_by IS NOT NULL "
+        "AND id NOT IN (SELECT assignment_id FROM recurring_spawned WHERE assignment_id IS NOT NULL) "
+        "GROUP BY created_by", (t1, t2)) as c:
+        regs = await c.fetchall()
+    if regs:
+        best = max(r["n"] for r in regs)
+        names = []
+        for r in regs:
+            if r["n"] == best:
+                gu = await get_user(r["created_by"])
+                names.append((gu["name"] if gu and gu["name"] else r["created_by"]))
+        out.append({"emoji": "📝", "title": "課題係賞", "names": names, "value": f"{best}件 登録"})
+    return out
+
+async def maybe_celebrate(aid):
+    """課題の履修者全員が✅になった瞬間に一度だけ祝う（2人以上の科目のみ）"""
+    a = await assignment_row(aid)
+    if not a or a["closed"]:
+        return False
+    takers = await takers_of(a["code"])
+    if len(takers) < 2:
+        return False
+    done = await done_set(aid)
+    if not set(takers) <= done:
+        return False
+    async with db.execute("SELECT 1 FROM assignment_reminded WHERE assignment_id=? AND stage='all'", (aid,)) as c:
+        if await c.fetchone():
+            return False
+    await db.execute("INSERT OR IGNORE INTO assignment_reminded(assignment_id,stage) VALUES(?, 'all')", (aid,))
+    await db.commit()
+    ch = await get_ch("kadai")
+    if ch:
+        await ch.send(f"🎉 **{a['cname']}**「{a['title']}」、履修者 {len(takers)} 人ぜんいん提出！ちょーえらい！{erai_emoji(ch.guild)}")
+        await bump_panel("kadai")
+    return True
+
+@kadai.command(name="kigen", description="課題の期限を変更する（提出延期されたときなど）")
+@app_commands.describe(kadai_id="課題", kigen="新しい期限 例: 10/15 ／ 10/15 17:00（時刻省略は23:59）")
+@app_commands.autocomplete(kadai_id=ac_open_assignments)
+async def kadai_kigen(interaction, kadai_id: str, kigen: str):
+    a = await assignment_row(int(kadai_id))
+    if not a:
+        await interaction.response.send_message("課題が見つかりません。", ephemeral=True)
+        return
+    due = parse_due(kigen)
+    if not due:
+        await interaction.response.send_message("⚠️ 期限の形式が読めませんでした。例: `10/15` `10/15 17:00`", ephemeral=True)
+        return
+    await kadai_set_due(a["id"], due, interaction.user.display_name)
+    await interaction.response.send_message(f"🕑 「{a['title']}」の期限を {fmt_due(due)} に変更しました。", ephemeral=True)
 
 @kadai.command(name="delete", description="課題を取り下げる（登録者または同じ科目の履修者）")
 @app_commands.describe(kadai_id="課題")

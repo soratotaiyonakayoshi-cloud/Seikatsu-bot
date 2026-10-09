@@ -650,7 +650,58 @@ async def main():
     for r in await B.kadai_undone_rows("1"):
         await B.db.execute("INSERT OR IGNORE INTO assignment_done(assignment_id,user_id) VALUES(?, '1')", (r["id"],))
     await B.db.commit()
-    check("課題チェック: 未完了ゼロならプルダウンなし", await B.kadai_list_view("1"), None)
+    v1 = await B.kadai_list_view("1")
+    check("課題チェック: 未完了ゼロでも🕑期限変更だけは出る", v1 is not None and len(v1.children) == 1, True)
+
+    # ① 期限変更：due更新＋リマインド済み記録のリセット（再通知される）
+    newdue = datetime(2026, 8, 20, 17, 0, tzinfo=JST)
+    await B.kadai_set_due(norm_aid, newdue, "テスト")
+    ak = await B.assignment_row(norm_aid)
+    check("期限変更: due_tsが更新される", ak["due_ts"], int(newdue.timestamp()))
+    check("期限変更: d3/d1/d0のリマインド記録が消える", (await (await B.db.execute(
+        "SELECT COUNT(*) AS n FROM assignment_reminded WHERE assignment_id=? AND stage IN ('d3','d1','d0')", (norm_aid,))).fetchone())["n"], 0)
+
+    # ② 来週の課題予報
+    fct = await B.build_kadai_forecast(datetime(2026, 8, 9, 21, 0, tzinfo=JST))   # 日曜夜
+    check("課題予報: 来週締切の定例課題が載る", fct is not None and "プリント提出" in fct and "8/14(金)" in fct, True)
+    check("課題予報: 該当なしの週は None", await B.build_kadai_forecast(datetime(2026, 12, 1, 21, 0, tzinfo=JST)), None)
+
+    # ③ 全員提出の祝福（2人以上・一度だけ）
+    await B.db.execute("INSERT OR IGNORE INTO courses(code,name,nname,teacher,room,faculty,dept,cls,slots,term,custom) "
+                       "VALUES('tst003','テスト祝福','てすとしゅくふく','','','','','','月1','2026後期',0)")
+    g95, g96 = M(95, "ゴリラ"), M(96, "ペリカン")
+    await B.ensure_user(g95); await B.ensure_user(g96)
+    for u in ("95", "96"):
+        await B.db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES(?, 'tst003')", (u,))
+    rnow = B.now_jst()
+    cur = await B.db.execute("INSERT INTO assignments(code,title,due_ts,created_by,created_at) VALUES('tst003','祝テスト',?, '95', ?)",
+                             (int(rnow.timestamp()) + 86400, int(rnow.timestamp())))
+    cid = cur.lastrowid
+    await B.db.execute("INSERT INTO assignment_done(assignment_id,user_id) VALUES(?, '95')", (cid,))
+    await B.db.commit()
+    check("祝福: まだ全員ではない", await B.maybe_celebrate(cid), False)
+    await B.db.execute("INSERT INTO assignment_done(assignment_id,user_id) VALUES(?, '96')", (cid,))
+    await B.db.commit()
+    check("祝福: 全員✅で祝う", await B.maybe_celebrate(cid), True)
+    check("祝福: 二度目は鳴らない", await B.maybe_celebrate(cid), False)
+
+    # ④ 通信簿の課題系の賞
+    for i, dd in ((1, 11), (2, 12)):
+        await B.db.execute("INSERT INTO assignments(code,title,due_ts,created_by,created_at) VALUES('tst003',?,?,'96',?)",
+                           (f"週課題{i}", int(datetime(2026, 8, dd, 23, 59, tzinfo=JST).timestamp()),
+                            int(datetime(2026, 8, 10, 9, 0, tzinfo=JST).timestamp())))
+    await B.db.commit()
+    for title in ("週課題1", "週課題2"):
+        aidw = (await (await B.db.execute("SELECT id FROM assignments WHERE title=?", (title,))).fetchone())["id"]
+        await B.db.execute("INSERT INTO assignment_done(assignment_id,user_id) VALUES(?, '95')", (aidw,))
+    aidw1 = (await (await B.db.execute("SELECT id FROM assignments WHERE title='週課題1'")).fetchone())["id"]
+    await B.db.execute("INSERT INTO assignment_done(assignment_id,user_id) VALUES(?, '96')", (aidw1,))
+    await B.db.commit()
+    aw = await B.kadai_awards("2026-08-10", "2026-08-16")
+    kic = next((a for a in aw if a["title"] == "きっちり賞"), None)
+    kak = next((a for a in aw if a["title"] == "課題係賞"), None)
+    check("きっちり賞: 全消化のゴリラだけ", kic is not None and kic["names"] == ["ゴリラ"] and "100%" in kic["value"], True)
+    check("課題係賞: 2件登録のペリカン", kak is not None and kak["names"] == ["ペリカン"] and kak["value"] == "2件 登録", True)
 
     # ラベル丸写し事故（「English Discussion（（池辺）・金2） 農1年」事件）の解決
     tst = await B.get_course("tst001")
