@@ -229,7 +229,8 @@ async def db_init():
               "ALTER TABLE users ADD COLUMN benkyou_min INTEGER NOT NULL DEFAULT 0",
               "ALTER TABLE users ADD COLUMN benkyou_set_day TEXT",
               "ALTER TABLE memos ADD COLUMN done INTEGER NOT NULL DEFAULT 0",
-              "ALTER TABLE users ADD COLUMN wake_remind INTEGER NOT NULL DEFAULT 0"):
+              "ALTER TABLE users ADD COLUMN wake_remind INTEGER NOT NULL DEFAULT 0",
+              "ALTER TABLE events ADD COLUMN msg_id TEXT"):
         try:
             await db.execute(m)
             await db.commit()
@@ -746,6 +747,19 @@ class MealView(discord.ui.View):
     async def fridge_list(self, interaction, button):
         await fridge_show(interaction)
 
+    @discord.ui.button(label="📖 じぶんの食卓", style=discord.ButtonStyle.secondary, custom_id="sk_gohan_album", row=1)
+    async def meal_album_btn(self, interaction, button):
+        await ensure_user(interaction.user)
+        await interaction.response.defer(ephemeral=True, thinking=True)   # 写真の取り直しに数秒かかる
+        now = now_jst()
+        buf = await build_meal_album(day_str(now - timedelta(days=30)), day_str(now), uid=interaction.user.id,
+                                     title=f"{_plain_name(interaction.user.display_name, 12)} の食卓", sub="この30日")
+        if not buf:
+            await interaction.followup.send("この30日に写真つきのごはん記録がまだありません。#ごはん🍚 に写真を投げると、ここに並んでいきます 📸", ephemeral=True)
+            return
+        await interaction.followup.send("📖 この30日のあなたの食卓です。ちゃんと食べててえらい！",
+                                        file=discord.File(buf, filename="my_meals.png"), ephemeral=True)
+
 # ------------------------------------------------------------
 #  家事
 # ------------------------------------------------------------
@@ -883,6 +897,8 @@ async def on_message(message):
     sub = infer_meal_sub(now)
     await ensure_user(message.author)
     eid = await add_event(message.author.id, "meal", sub, note=(message.content.strip() or "写真")[:100])
+    await db.execute("UPDATE events SET msg_id=? WHERE id=?", (str(message.id), eid))   # アルバム用に元投稿を覚えておく
+    await db.commit()
     try:
         await message.add_reaction("✅")
     except Exception:
@@ -932,6 +948,128 @@ class MealPraiseButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_
             view.add_item(MealFixButton(self.eid, author_id, s2, e2, current=ev["sub"]))
         view.add_item(MealPraiseButton(self.eid, n))
         await interaction.response.edit_message(view=view)
+
+# ---- 📖 ごはんアルバム（写真つき記録をブランド配色のコラージュ1枚に） ----
+def render_meal_album(photos, title, sub=""):
+    """photos: [(画像bytes, キャプション), ...] 最大9枚 → コラージュPNG。描けなければ None"""
+    try:
+        from PIL import Image as PImage, ImageDraw, ImageFont, ImageOps
+    except Exception:
+        return None
+    f = _find_cjk_font()
+    if not f or not photos:
+        return None
+    fb = _find_cjk_font_bold() or f
+    cols = min(3, len(photos))
+    rows = -(-min(len(photos), 9) // cols)
+    cell, cap_h, pad, head = 360, 34, 14, 86
+    W = pad + cols * (cell + pad)
+    H = head + rows * (cell + cap_h + pad)
+    img = PImage.new("RGB", (W, H), (247, 242, 232))
+    d = ImageDraw.Draw(img)
+    d.text((pad + 2, 24), title, font=ImageFont.truetype(fb, 34), fill=(27, 24, 21))
+    if sub:
+        d.text((W - pad, 36), sub, font=ImageFont.truetype(f, 16), fill=(217, 112, 26), anchor="ra")
+    fc = ImageFont.truetype(f, 17)
+    fe = None
+    try:
+        ef = _find_emoji_font()
+        fe = ImageFont.truetype(ef, 17) if ef else None
+    except Exception:
+        pass
+
+    def draw_cap(x, y, s):
+        """キャプションを1文字ずつ、絵文字（👏など）だけ同梱NotoEmojiで描く（豆腐防止）"""
+        cx = x
+        for chs in s:
+            use_e = fe is not None and ord(chs) >= 0x2600 and not (0x3000 <= ord(chs) <= 0x9FFF) \
+                and not (0xF900 <= ord(chs) <= 0xFAFF) and not (0xFF00 <= ord(chs) <= 0xFFEF)
+            fnt = fe if use_e else fc
+            d.text((cx, y), chs, font=fnt, fill=(27, 24, 21))
+            cx += d.textlength(chs, font=fnt)
+
+    for i, (b, cap) in enumerate(photos[:9]):
+        x = pad + (i % cols) * (cell + pad)
+        y = head + (i // cols) * (cell + cap_h + pad)
+        try:
+            ph = PImage.open(io.BytesIO(b)).convert("RGB")
+            ph = ImageOps.exif_transpose(ph)
+            ph = ImageOps.fit(ph, (cell, cell))
+        except Exception:
+            ph = PImage.new("RGB", (cell, cell), (237, 228, 211))
+        img.paste(ph, (x, y))
+        d.rectangle([x, y, x + cell - 1, y + cell - 1], outline=(226, 218, 203), width=2)
+        draw_cap(x + 4, y + cell + 6, cap[:26])
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+async def meal_photo_rows(d1, d2, uid=None, limit=9):
+    """期間中の写真つき食事記録。uid指定=本人の新しい順／無指定=👏の多い順（ベスト飯）"""
+    q = ("SELECT e.*, u.name AS uname, (SELECT COUNT(*) FROM meal_praise mp WHERE mp.event_id=e.id) AS pr "
+         "FROM events e LEFT JOIN users u ON u.id=e.user_id "
+         "WHERE e.kind='meal' AND e.msg_id IS NOT NULL AND e.day BETWEEN ? AND ?")
+    args = [d1, d2]
+    if uid is not None:
+        q += " AND e.user_id=? ORDER BY e.ts DESC"
+        args.append(str(uid))
+    else:
+        q += " ORDER BY pr DESC, e.ts DESC"
+    q += " LIMIT ?"
+    args.append(limit)
+    async with db.execute(q, args) as c:
+        return await c.fetchall()
+
+async def _meal_channel():
+    cid = await meta_get("ch_meal")
+    if not cid:
+        return None
+    try:
+        return bot.get_channel(int(cid)) or await bot.fetch_channel(int(cid))
+    except Exception:
+        return None
+
+async def build_meal_album(d1, d2, uid=None, title="", sub=""):
+    """元投稿から写真を取り直してコラージュを生成（消された投稿は飛ばす）。無ければ None"""
+    rows = await meal_photo_rows(d1, d2, uid=uid)
+    ch = await _meal_channel()
+    if not rows or not ch:
+        return None
+    photos = []
+    for r in rows:
+        try:
+            m = await ch.fetch_message(int(r["msg_id"]))
+            att = next((a for a in m.attachments if (a.content_type or "").startswith("image/")), None)
+            if not att:
+                continue
+            b = await att.read()
+        except Exception:
+            continue
+        if uid is None:
+            cap = _plain_name(r["uname"] or "？", 12) + (f"　👏{r['pr']}" if r["pr"] else "")
+        else:
+            dd = date.fromisoformat(r["day"])
+            cap = f"{dd.month}/{dd.day}　{r['sub'] or ''}ごはん" + (f"　👏{r['pr']}" if r["pr"] else "")
+        photos.append((b, cap))
+        if len(photos) >= 9:
+            break
+    if not photos:
+        return None
+    return await asyncio.to_thread(render_meal_album, photos, title, sub)
+
+async def post_monthly_meal_album(now=None):
+    """月末、月間表彰の後に #ごはん🍚 へ今月のベスト飯アルバムを投稿"""
+    now = now or now_jst()
+    d1, d2 = day_str(now.replace(day=1)), day_str(now)
+    buf = await build_meal_album(d1, d2, title=f"{now.month}月のベスト飯アルバム", sub="#最低限生活リズムサークル")
+    ch = await _meal_channel()
+    if not buf or not ch:
+        return False
+    await ch.send(f"📖 **{now.month}月のベスト飯アルバム**（👏を集めた飯テロたち。来月もうまそうなやつ待ってます）",
+                  file=discord.File(buf, filename="meal_album.png"))
+    await bump_panel("meal")
+    return True
 
 async def meshitero_winners(d1, d2):
     """期間中に一番👏を集めた写真の投稿者（同数は全員）と👏数"""
@@ -1796,6 +1934,10 @@ async def judge_loop():
                     print(f"課題予報エラー: {e!r}", flush=True)
             if (now + timedelta(days=1)).month != now.month:
                 await monthly_summary(g)
+                try:
+                    await post_monthly_meal_album(now)   # 今月のベスト飯アルバムを #ごはん🍚 へ
+                except Exception as e:
+                    print(f"ごはんアルバムエラー: {e!r}", flush=True)
         except Exception as e:
             print(f"judge error: {e!r}", flush=True)
     try:

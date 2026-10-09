@@ -938,6 +938,31 @@ async def main():
     check("ひとこと: サブテキスト形式", all(d.startswith("\n-# 💡 ") for d in draws), True)
     check("ひとこと: 直近の繰り返しを避ける", len(set(draws)) >= min(30, len(B.HITOKOTO) // 2), True)
 
+    # 📖 ごはんアルバム
+    check("ごはんパネルに📖アルバムボタン", any(i.custom_id == "sk_gohan_album" for i in B.MealView().children), True)
+    e1 = await B.add_event(97, "meal", "夜", note="カレー", ts_dt=t(19, 0, 3))
+    e2 = await B.add_event(97, "meal", "朝", note="トースト", ts_dt=t(8, 0, 4))
+    e3 = await B.add_event(98, "meal", "昼", note="ラーメン", ts_dt=t(12, 0, 4))
+    for eid_, mid in ((e1, "111"), (e2, "222"), (e3, "333")):
+        await B.db.execute("UPDATE events SET msg_id=? WHERE id=?", (mid, eid_))
+    for u in ("50", "51"):
+        await B.db.execute("INSERT OR IGNORE INTO meal_praise(event_id,user_id,day) VALUES(?,?,'2026-08-04')", (e3, u))
+    await B.db.commit()
+    rows_m = await B.meal_photo_rows("2026-08-03", "2026-08-05")
+    check("アルバム: 👏の多い順→新しい順", [r["id"] for r in rows_m[:3]], [e3, e2, e1])
+    check("アルバム: 本人指定は新しい順", [r["id"] for r in await B.meal_photo_rows("2026-08-03", "2026-08-05", uid=97)], [e2, e1])
+    check("アルバム: 写真なし(msg_idなし)は入らない", all(r["msg_id"] for r in rows_m), True)
+    from PIL import Image as _PI
+    import io as _io
+    def _dummy(color):
+        b = _io.BytesIO()
+        _PI.new("RGB", (500, 400), color).save(b, format="PNG")
+        return b.getvalue()
+    alb = B.render_meal_album([(_dummy((200, 80, 60)), "テスト　👏2"), (_dummy((80, 160, 90)), "8/4　朝ごはん"), (_dummy((90, 90, 200)), "x")],
+                              "8月のベスト飯アルバム", "テスト")
+    check("アルバム: コラージュPNG生成", alb is not None and len(alb.getvalue()) > 5000, True)
+    check("アルバム: 壊れた画像でも落ちない", B.render_meal_album([(b"notimage", "x")], "t") is not None, True)
+
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
     check("meta 上書き", await B.meta_get("last_judge_day"), "2026-08-06")
