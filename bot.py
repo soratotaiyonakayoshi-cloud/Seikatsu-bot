@@ -1011,7 +1011,7 @@ def render_meal_album(photos, title, sub="", month=None):
         d.text((pad + 2, 42), title, font=ImageFont.truetype(fb, 34), fill=(27, 24, 21))
         tw = d.textlength(title, font=ImageFont.truetype(fb, 34))
         if art_bowl:
-            _paste_art(img, art_bowl, int(pad + 2 + tw) + 18, 18, 100)
+            _paste_art(img, art_bowl, int(pad + 2 + tw) + 16, 34, 64)
         elif sub:
             d.text((W - pad - logo_w - 14, 54), sub, font=ImageFont.truetype(f, 16), fill=(217, 112, 26), anchor="ra")
     if art_logo:   # 右上にサークルロゴ
