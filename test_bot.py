@@ -962,6 +962,12 @@ async def main():
                               "8月のベスト飯アルバム", "テスト")
     check("アルバム: コラージュPNG生成", alb is not None and len(alb.getvalue()) > 5000, True)
     check("アルバム: 壊れた画像でも落ちない", B.render_meal_album([(b"notimage", "x")], "t") is not None, True)
+    check("アルバム: 手描き素材が全部ある", all(B._gohan_art(n) is not None for n in
+          ["logo", "title", "sparkle", "bowl"] + [f"d{i}" for i in range(10)]), True)
+    from PIL import Image as _PI2
+    a_plain = _PI2.open(B.render_meal_album([(_dummy((100, 100, 100)), "x")], "テスト"))
+    a_hand = _PI2.open(B.render_meal_album([(_dummy((100, 100, 100)), "x")], "テスト", month=10))
+    check("アルバム: month指定で手描きヘッダーに切替", a_hand.height - a_plain.height, 112 - 86)   # フッター(茶碗＋ロゴ)は両方に付く
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")

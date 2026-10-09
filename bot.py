@@ -950,8 +950,33 @@ class MealPraiseButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_
         await interaction.response.edit_message(view=view)
 
 # ---- 📖 ごはんアルバム（写真つき記録をブランド配色のコラージュ1枚に） ----
-def render_meal_album(photos, title, sub=""):
-    """photos: [(画像bytes, キャプション), ...] 最大9枚 → コラージュPNG。描けなければ None"""
+_GOHAN_ART = {}
+
+def _gohan_art(name):
+    """art/gohan の手描き素材（部員作・bboxトリム済み透過PNG）。無ければ None"""
+    if name in _GOHAN_ART:
+        return _GOHAN_ART[name]
+    img = None
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "art", "gohan", f"{name}.png")
+    try:
+        if os.path.exists(p):
+            from PIL import Image as PImage
+            img = PImage.open(p).convert("RGBA")
+    except Exception:
+        img = None
+    _GOHAN_ART[name] = img
+    return img
+
+def _paste_art(img, art, x, y, h):
+    """高さhに合わせて素材を貼る。貼った幅を返す"""
+    w = round(art.width * h / art.height)
+    a = art.resize((w, h))
+    img.paste(a, (x, y), a)
+    return w
+
+def render_meal_album(photos, title, sub="", month=None):
+    """photos: [(画像bytes, キャプション), ...] 最大9枚 → コラージュPNG。描けなければ None
+    month指定時は手描きレタリングの見出し「{month}月のベスト飯アルバム」を使う"""
     try:
         from PIL import Image as PImage, ImageDraw, ImageFont, ImageOps
     except Exception:
@@ -962,14 +987,28 @@ def render_meal_album(photos, title, sub=""):
     fb = _find_cjk_font_bold() or f
     cols = min(3, len(photos))
     rows = -(-min(len(photos), 9) // cols)
-    cell, cap_h, pad, head = 360, 34, 14, 86
+    art_title = _gohan_art("title") if month else None
+    art_logo, art_bowl, art_spark = _gohan_art("logo"), _gohan_art("bowl"), _gohan_art("sparkle")
+    cell, cap_h, pad = 360, 34, 14
+    head = 112 if art_title else 86
+    foot = 150 if (art_logo and art_bowl) else 0
     W = pad + cols * (cell + pad)
-    H = head + rows * (cell + cap_h + pad)
+    H = head + rows * (cell + cap_h + pad) + foot
     img = PImage.new("RGB", (W, H), (247, 242, 232))
     d = ImageDraw.Draw(img)
-    d.text((pad + 2, 24), title, font=ImageFont.truetype(fb, 34), fill=(27, 24, 21))
-    if sub:
-        d.text((W - pad, 36), sub, font=ImageFont.truetype(f, 16), fill=(217, 112, 26), anchor="ra")
+    if art_title:
+        x = pad + 8
+        for ch in str(month):   # 手描き数字＋「月のベスト飯アルバム」レタリング
+            dg = _gohan_art(f"d{ch}")
+            if dg:
+                x += _paste_art(img, dg, x, 16, 80) + 6
+        _paste_art(img, art_title, x + 6, 36, 56)
+        if art_spark:
+            _paste_art(img, art_spark, min(x + 6 + round(art_title.width * 56 / art_title.height) + 18, W - 70), 20, 52)
+    else:
+        d.text((pad + 2, 24), title, font=ImageFont.truetype(fb, 34), fill=(27, 24, 21))
+        if sub:
+            d.text((W - pad, 36), sub, font=ImageFont.truetype(f, 16), fill=(217, 112, 26), anchor="ra")
     fc = ImageFont.truetype(f, 17)
     fe = None
     try:
@@ -1000,6 +1039,11 @@ def render_meal_album(photos, title, sub=""):
         img.paste(ph, (x, y))
         d.rectangle([x, y, x + cell - 1, y + cell - 1], outline=(226, 218, 203), width=2)
         draw_cap(x + 4, y + cell + 6, cap[:26])
+    if foot:   # フッター：左にごはん茶碗、右にサークルロゴ（どちらも部員の手描き）
+        fy = H - foot + 10
+        _paste_art(img, art_bowl, pad + 10, fy, 126)
+        lw = round(art_logo.width * 128 / art_logo.height)
+        _paste_art(img, art_logo, W - pad - lw - 6, fy, 128)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
@@ -1030,7 +1074,7 @@ async def _meal_channel():
     except Exception:
         return None
 
-async def build_meal_album(d1, d2, uid=None, title="", sub=""):
+async def build_meal_album(d1, d2, uid=None, title="", sub="", month=None):
     """元投稿から写真を取り直してコラージュを生成（消された投稿は飛ばす）。無ければ None"""
     rows = await meal_photo_rows(d1, d2, uid=uid)
     ch = await _meal_channel()
@@ -1056,13 +1100,13 @@ async def build_meal_album(d1, d2, uid=None, title="", sub=""):
             break
     if not photos:
         return None
-    return await asyncio.to_thread(render_meal_album, photos, title, sub)
+    return await asyncio.to_thread(render_meal_album, photos, title, sub, month)
 
 async def post_monthly_meal_album(now=None):
     """月末、月間表彰の後に #ごはん🍚 へ今月のベスト飯アルバムを投稿"""
     now = now or now_jst()
     d1, d2 = day_str(now.replace(day=1)), day_str(now)
-    buf = await build_meal_album(d1, d2, title=f"{now.month}月のベスト飯アルバム", sub="#最低限生活リズムサークル")
+    buf = await build_meal_album(d1, d2, title=f"{now.month}月のベスト飯アルバム", sub="#最低限生活リズムサークル", month=now.month)
     ch = await _meal_channel()
     if not buf or not ch:
         return False
