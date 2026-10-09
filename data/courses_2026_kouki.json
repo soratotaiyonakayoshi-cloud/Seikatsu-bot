@@ -1625,9 +1625,9 @@
 },
 {
 "name": "生涯スポーツ実技",
-"teacher": "若月・福本・下田・(大島)",
+"teacher": "若月",
 "room": "",
-"code": "sp0297",
+"code": "sp0297a",
 "faculty": "工",
 "dept": "生命工学科",
 "cls": "L1",
@@ -1639,9 +1639,51 @@
 },
 {
 "name": "生涯スポーツ実技",
-"teacher": "横山 ・(小谷)・(奥村)・(大島)",
+"teacher": "福本",
 "room": "",
-"code": "sp0298",
+"code": "sp0297b",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "下田",
+"room": "",
+"code": "sp0297c",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "(大島)",
+"room": "",
+"code": "sp0297d",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金2"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "横山",
+"room": "",
+"code": "sp0298a",
 "faculty": "工",
 "dept": "生命工学科",
 "cls": "L1",
@@ -1653,9 +1695,93 @@
 },
 {
 "name": "生涯スポーツ実技",
-"teacher": "横山・田中秀・(小谷)・(奥村)",
+"teacher": "(小谷)",
 "room": "",
-"code": "sp0299",
+"code": "sp0298b",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "(奥村)",
+"room": "",
+"code": "sp0298c",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "(大島)",
+"room": "",
+"code": "sp0298d",
+"faculty": "工",
+"dept": "生命工学科",
+"cls": "L1",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金3"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "横山",
+"room": "",
+"code": "sp0299a",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "田中秀",
+"room": "",
+"code": "sp0299b",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "(小谷)",
+"room": "",
+"code": "sp0299c",
+"faculty": "工",
+"dept": "生体医用システム工学科",
+"cls": "B",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"金4"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "(奥村)",
+"room": "",
+"code": "sp0299d",
 "faculty": "工",
 "dept": "生体医用システム工学科",
 "cls": "B",
@@ -5046,9 +5172,9 @@
 },
 {
 "name": "生涯スポーツ実技",
-"teacher": "下田・横山・若月・(山田美)",
+"teacher": "下田",
 "room": "体育館ほか",
-"code": "SP1003a",
+"code": "SP1003aa",
 "faculty": "農",
 "dept": "生物生産学科",
 "cls": "An",
@@ -5060,9 +5186,79 @@
 },
 {
 "name": "生涯スポーツ実技",
-"teacher": "横山・若月・(山田美)",
+"teacher": "横山",
 "room": "体育館ほか",
-"code": "SP1003b",
+"code": "SP1003ab",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "若月",
+"room": "体育館ほか",
+"code": "SP1003ac",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "(山田美)",
+"room": "体育館ほか",
+"code": "SP1003ad",
+"faculty": "農",
+"dept": "生物生産学科",
+"cls": "An",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火2"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "横山",
+"room": "体育館ほか",
+"code": "SP1003ba",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "若月",
+"room": "体育館ほか",
+"code": "SP1003bb",
+"faculty": "農",
+"dept": "環境資源科学科",
+"cls": "En",
+"year": 1,
+"term": "2026後期",
+"slots": [
+"火3"
+]
+},
+{
+"name": "生涯スポーツ実技",
+"teacher": "(山田美)",
+"room": "体育館ほか",
+"code": "SP1003bc",
 "faculty": "農",
 "dept": "環境資源科学科",
 "cls": "En",

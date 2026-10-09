@@ -941,6 +941,26 @@ async def main():
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
     check("meta 上書き", await B.meta_get("last_judge_day"), "2026-08-06")
+
+    # 科目ラベルから学科・クラス記号を除く
+    lab = B.course_label({"name": "生涯スポーツ実技", "teacher": "若月", "slots": "金2", "faculty": "工", "year": 1, "cls": "L1", "code": "x"})
+    check("ラベル: 学科記号(L1)は出ない", "L1" not in lab and lab.endswith("工1年"), True)
+    # 体育はマスタJSONで教員ごとに分割済み
+    import json as _json
+    _mm = _json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "courses_2026_kouki.json"), encoding="utf-8"))
+    _pe = [c for c in _mm if c["name"] in ("生涯スポーツ実技", "スポーツ健康科学実技")]
+    check("体育: 教員ごとに分割済み（連名なし）", len(_pe) >= 10 and all("・" not in (c["teacher"] or "") for c in _pe), True)
+    # マスタから消えたコードの掃除（参照がある科目は残す）
+    await B.db.execute("INSERT OR IGNORE INTO courses(code,name,nname,teacher,room,faculty,dept,cls,slots,term,custom) "
+                       "VALUES('zz999','旧科目','きゅうかもく','','','','','','月1','2026後期',0)")
+    await B.db.execute("INSERT OR IGNORE INTO courses(code,name,nname,teacher,room,faculty,dept,cls,slots,term,custom) "
+                       "VALUES('zz998','旧科目2','きゅうかもく2','','','','','','月2','2026後期',0)")
+    await B.db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES('42','zz998')")
+    await B.db.commit()
+    await B.load_courses_master()
+    check("旧コード掃除: 参照なしは消える", await B.get_course("zz999"), None)
+    check("旧コード掃除: 履修者がいる科目は残る", (await B.get_course("zz998")) is not None, True)
+    check("旧コード掃除: テスト用参照つき科目も残る", (await B.get_course("tst001")) is not None, True)
     await B.db.close()
 
 try:

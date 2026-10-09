@@ -1942,12 +1942,14 @@ async def load_courses_master():
         print(f"科目マスタが見つかりません: {COURSES_JSON}", flush=True)
         return 0
     total = 0
+    loaded_codes = set()
     for path in (COURSES_JSON, COURSES_EXTRA):
         if not os.path.exists(path):
             continue
         with open(path, encoding="utf-8") as f:
             rows = json.load(f)
         for r in rows:
+            loaded_codes.add(r["code"])
             await db.execute(
                 "INSERT INTO courses(code,name,nname,teacher,room,faculty,dept,cls,year,slots,term,custom) VALUES(?,?,?,?,?,?,?,?,?,?,?,0) "
                 "ON CONFLICT(code) DO UPDATE SET name=excluded.name,nname=excluded.nname,teacher=excluded.teacher,room=excluded.room,"
@@ -1957,11 +1959,38 @@ async def load_courses_master():
         total += len(rows)
     await db.commit()
     print(f"科目マスタ {total} 件を読み込みました", flush=True)
+    if len(loaded_codes) >= 100:   # マスタ読み込み失敗時に全消ししないためのガード
+        try:
+            await prune_removed_courses(loaded_codes)
+        except Exception as e:
+            print(f"旧コード掃除エラー: {e!r}", flush=True)
     try:
         await cleanup_label_customs()
     except Exception as e:
         print(f"ラベル丸写し科目の掃除エラー: {e!r}", flush=True)
     return total
+
+async def prune_removed_courses(loaded_codes):
+    """改番・分割でマスタJSONから消えたコードの科目行を削除（誰かが参照しているものは安全のため残す）"""
+    async with db.execute("SELECT code, name FROM courses WHERE custom=0") as c:
+        rows = await c.fetchall()
+    removed = 0
+    for r in rows:
+        if r["code"] in loaded_codes:
+            continue
+        referenced = False
+        for t in ("user_courses", "assignments", "attendance", "recurring_kadai"):
+            async with db.execute(f"SELECT 1 FROM {t} WHERE code=? LIMIT 1", (r["code"],)) as c2:
+                if await c2.fetchone():
+                    referenced = True
+                    break
+        if referenced:
+            continue
+        await db.execute("DELETE FROM courses WHERE code=?", (r["code"],))
+        print(f"マスタから消えた科目を削除: {r['code']}「{r['name']}」", flush=True)
+        removed += 1
+    await db.commit()
+    return removed
 
 async def cleanup_label_customs():
     """候補ラベル丸写しで作られた自由入力科目（例「English Discussion（（池辺）・金2） 農1年」）を
@@ -1998,7 +2027,7 @@ def course_label(c, with_code=False):
         bits.append(c["slots"])
     tag = ""
     if c["faculty"]:
-        tag = c["faculty"] + (f"{c['year']}年" if c["year"] else "") + (f" {c['cls']}" if c["cls"] else "")
+        tag = c["faculty"] + (f"{c['year']}年" if c["year"] else "")   # 学科・クラス記号は出さない（他学科でも履修できる科目が紛らわしいため）
     s = c["name"] + (f"（{'・'.join(bits)}）" if bits else "") + (f" {tag}" if tag else "") + (f" [{c['code']}]" if with_code else "")
     return s[:100]
 

@@ -399,9 +399,24 @@ def merge(recs):
 def fmt(m):
     return f"  {m['faculty']} {m['year'] or '-'} {m['cls']:3} {m['code']:9} {m['name'][:24]:24} | {m['teacher'][:16]:16} | {m['room']:10} | {','.join(m['slots'])}"
 
+# 体育は連名1枠＝実際は教員ごとの別クラスなので、教員ごとに1科目へ分割する
+# （実験・演習などの本当の共同担当科目は分割しない）
+SPLIT_BY_TEACHER = ("生涯スポーツ実技", "スポーツ健康科学実技")
+
+def split_pe(merged):
+    out = []
+    for m in merged:
+        ts = [t.strip() for t in re.split(r"[・･]", m["teacher"] or "") if t.strip()]
+        if m["name"] in SPLIT_BY_TEACHER and len(ts) >= 2:
+            for i, t in enumerate(ts):
+                out.append({**m, "teacher": t, "code": f"{m['code']}{chr(97 + i)}"})
+        else:
+            out.append(m)
+    return out
+
 if __name__ == "__main__":
     recs = extract_timetable("工") + extract_timetable("農") + extract_intensive_nogaku()
-    merged = merge(recs)
+    merged = split_pe(merge(recs))
     noname = [m for m in merged if not m["name"]]
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(merged, f, ensure_ascii=False, indent=0)
