@@ -1010,6 +1010,19 @@ async def main():
     check("勉強会: 枠外の人は入らない", all(u != "63" for u, _, _ in bk), True)
     check("勉強会: 時間帯の既定は22-23", (B.BENKYOKAI_START, B.BENKYOKAI_END), (22, 23))
 
+    # 勉強会ストリークと自動えらい報告
+    for dd2 in ("2026-08-18", "2026-08-19"):   # 前々日・前日も参加していたことにする
+        await B.db.execute("INSERT INTO events(user_id,kind,ts,day,note) VALUES('61','benkyokai',0,?, '10')", (dd2,))
+    await B.db.commit()
+    n_rec = await B.benkyokai_recap(bk_day, datetime(2026, 8, 20, 23, 0, tzinfo=JST))
+    check("勉強会: リキャップは参加者2人", n_rec, 2)
+    check("勉強会: ストリーク3日（61）", await B.benkyokai_streak("61", bk_day), 3)
+    check("勉強会: 初参加はストリーク1（62）", await B.benkyokai_streak("62", bk_day), 1)
+    ef61 = await (await B.db.execute("SELECT text FROM efforts WHERE user_id='61' AND day=?", (bk_day,))).fetchone()
+    check("勉強会: 自動えらい報告（🔥つき）", ef61["text"], "ミニ勉強会に参加した（30分・🔥3日連続）")
+    ef62 = await (await B.db.execute("SELECT text FROM efforts WHERE user_id='62' AND day=?", (bk_day,))).fetchone()
+    check("勉強会: 初参加の報告は🔥なし", ef62["text"], "ミニ勉強会に参加した（10分）")
+
     # 🔊 作業部屋のVCステータス（サブタイトル）
     check("VCステータス: 勉強会中が最優先", await B.work_vc_status_text(datetime(2026, 8, 21, 22, 30, tzinfo=JST)),
           "📖 ミニ勉強会ちゅう（〜23:00）")

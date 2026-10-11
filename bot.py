@@ -2078,12 +2078,7 @@ async def judge_loop():
                     await ch.send(f"📖 **ミニ勉強会の時間**（{BENKYOKAI_START}:00〜{BENKYOKAI_END}:00）！🔊作業部屋に入るだけで参加となります。")
             if now.hour >= BENKYOKAI_END and await meta_get("benkyokai_recap_day") != day:
                 await meta_set("benkyokai_recap_day", day)
-                parts = await benkyokai_participants(day, now)
-                if parts:
-                    ch = await get_ch("worklog")
-                    if ch:
-                        body = "／".join(f"**{name}** {m}分" for _, name, m in parts)
-                        await ch.send(f"📖 **今夜のミニ勉強会、おつかれさま！**　{body}　ちょーえらい！")
+                await benkyokai_recap(day, now)
     except Exception as e:
         print(f"勉強会エラー: {e!r}", flush=True)
     try:
@@ -5041,6 +5036,51 @@ async def benkyokai_participants(day, now=None):
             u = await get_user(uid)
             out.append((uid, (u["name"] if u and u["name"] else uid), mins))
     return out
+
+async def benkyokai_streak(uid, day):
+    """dayを含めて遡った勉強会の連続参加日数（events kind='benkyokai' で数える。途切れても叱られない、表示が消えるだけ）"""
+    since = (date.fromisoformat(day) - timedelta(days=200)).isoformat()
+    async with db.execute("SELECT DISTINCT day FROM events WHERE user_id=? AND kind='benkyokai' AND day BETWEEN ? AND ?",
+                          (str(uid), since, day)) as c:
+        days = {r["day"] for r in await c.fetchall()}
+    n, d = 0, date.fromisoformat(day)
+    while d.isoformat() in days:
+        n += 1
+        d -= timedelta(days=1)
+    return n
+
+async def benkyokai_recap(day, now):
+    """23:00すぎ：参加記録＋🔥ストリーク計算＋#えらいへ自動報告＋#作業ログへおつかれ発表。参加者数を返す"""
+    parts = await benkyokai_participants(day, now)
+    if not parts:
+        return 0
+    erai_ch = await get_ch("erai")
+    bits = []
+    for uid, name, m in parts:
+        await add_event(uid, "benkyokai", note=str(m), ts_dt=now)
+        stk = await benkyokai_streak(uid, day)
+        fire = f" 🔥{stk}日連続" if stk >= 2 else ""
+        bits.append(f"**{name}** {m}分{fire}")
+        text = f"ミニ勉強会に参加した（{m}分" + (f"・🔥{stk}日連続" if stk >= 2 else "") + "）"
+        cur = await db.execute("INSERT INTO efforts(user_id,text,day,ts) VALUES(?,?,?,?)",
+                               (str(uid), text, day, int(now.timestamp())))
+        eid = cur.lastrowid
+        await db.commit()
+        if erai_ch:   # 参加しただけで🌟えらい報告→👏とがんばり屋賞に乗る（罰はなく報酬だけ）
+            try:
+                view = discord.ui.View(timeout=None)
+                view.add_item(PraiseButton(eid, 0))
+                msg = await erai_ch.send(_effort_content(name, text, [], []), view=view)
+                await db.execute("UPDATE efforts SET msg_id=? WHERE id=?", (str(msg.id), eid))
+                await db.commit()
+            except Exception as e:
+                print(f"勉強会えらい報告エラー: {e!r}", flush=True)
+    if erai_ch:
+        await bump_panel("erai")
+    ch = await get_ch("worklog")
+    if ch:
+        await ch.send("📖 **今夜のミニ勉強会、おつかれさま！**　" + "／".join(bits) + "　ちょーえらい！")
+    return len(parts)
 
 # ---- 🔊作業部屋のVCステータス（チャンネル名の下のサブタイトル） ----
 _vc_status_cache = {"v": None}
