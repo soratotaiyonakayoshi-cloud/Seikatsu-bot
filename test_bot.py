@@ -1023,6 +1023,10 @@ async def main():
     ef62 = await (await B.db.execute("SELECT text FROM efforts WHERE user_id='62' AND day=?", (bk_day,))).fetchone()
     check("勉強会: 初参加の報告は🔥なし", ef62["text"], "ミニ勉強会に参加した（10分）")
 
+    # サーバーイベント（作業VC未設定ならmetaも汚さず何もしない）
+    check("勉強会イベント: VC未設定なら作らない", await B.ensure_benkyokai_event(datetime(2026, 8, 21, 9, 0, tzinfo=JST)), False)
+    check("勉強会イベント: VC未設定時はmeta未記録", await B.meta_get("benkyokai_event_day"), None)
+
     # 🔊 作業部屋のVCステータス（サブタイトル）
     check("VCステータス: 勉強会中が最優先", await B.work_vc_status_text(datetime(2026, 8, 21, 22, 30, tzinfo=JST)),
           "📖 ミニ勉強会ちゅう（〜23:00）")
