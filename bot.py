@@ -2087,6 +2087,10 @@ async def judge_loop():
                         await ch.send(f"📖 **今夜のミニ勉強会、おつかれさま！**　{body}　ちょーえらい！")
     except Exception as e:
         print(f"勉強会エラー: {e!r}", flush=True)
+    try:
+        await update_work_vc_status(now)   # VCサブタイトル（勉強会の開始/終了の切替もここで拾う）
+    except Exception as e:
+        print(f"VCステータスエラー: {e!r}", flush=True)
     if JUDGE_HOUR >= 1 and now.hour == JUDGE_HOUR - 1 and await meta_get("last_prejudge_day") != day:
         await meta_set("last_prejudge_day", day)   # 先に記録して二重投稿を防ぐ
         try:
@@ -4926,6 +4930,10 @@ class WorkNoteModal(discord.ui.Modal, title="✍ 何をやる？"):
         note = self.txt.value.strip()[:80]
         await db.execute("UPDATE work_sessions SET note=? WHERE id=?", (note, self.session_id))
         await db.commit()
+        try:
+            await update_work_vc_status()   # 宣言をVCのサブタイトルにも反映
+        except Exception:
+            pass
         now = now_jst()
         memos_txt = "／".join(r["text"] for r in await open_memos(str(interaction.user.id), day_str(now)))
         content = (f"🖥 **{interaction.user.display_name}** さんが作業中：**{note}**"
@@ -4963,6 +4971,10 @@ async def work_start(member):
     cur = await db.execute("INSERT INTO work_sessions(user_id,start_ts,day) VALUES(?,?,?)", (uid, int(now.timestamp()), day_str(now)))
     sid = cur.lastrowid
     await db.commit()
+    try:
+        await update_work_vc_status(now)
+    except Exception:
+        pass
     ch = await get_ch("worklog")
     if not ch:
         return
@@ -5004,6 +5016,10 @@ async def work_close(uid, name, end_ts=None):
             pass
     if total >= 60 and GAKUSHU_SECRET and WORK_TO_GAKUSHU:
         await gakushu_vc_report(uid, total)
+    try:
+        await update_work_vc_status()
+    except Exception:
+        pass
 
 async def benkyokai_participants(day, now=None):
     """📖ミニ勉強会：その日の22〜23時枠と作業セッションの重なりを人ごとに分で集計（出入り自由・進行中は枠の終わりまで）"""
@@ -5026,6 +5042,44 @@ async def benkyokai_participants(day, now=None):
             u = await get_user(uid)
             out.append((uid, (u["name"] if u and u["name"] else uid), mins))
     return out
+
+# ---- 🔊作業部屋のVCステータス（チャンネル名の下のサブタイトル） ----
+_vc_status_cache = {"v": None}
+
+async def work_vc_status_text(now=None):
+    """作業部屋VCに出すステータス文。勉強会中 ＞ 入室中の先頭の人の宣言（✍note、無ければやること📌）＞ 空"""
+    now = now or now_jst()
+    if BENKYOKAI_START >= 0 and BENKYOKAI_START <= now.hour < BENKYOKAI_END:
+        return f"📖 ミニ勉強会ちゅう（〜{BENKYOKAI_END}:00）"
+    day = day_str(now)
+    async with db.execute("SELECT user_id, note FROM work_sessions WHERE end_ts IS NULL ORDER BY start_ts") as c:
+        rows = await c.fetchall()
+    for r in rows:
+        t = r["note"]
+        if not t:
+            async with db.execute("SELECT text FROM memos WHERE user_id=? AND day=? AND done=0 ORDER BY id LIMIT 1",
+                                  (r["user_id"], day)) as c2:
+                m = await c2.fetchone()
+            t = m["text"] if m else None
+        if t:
+            return ("📌 " + t)[:80]
+    return ""
+
+async def update_work_vc_status(now=None):
+    """作業部屋VCのステータスを更新（変化があるときだけAPIを叩く）"""
+    wid = await meta_get("ch_workvc")
+    vc = bot.get_channel(int(wid)) if wid else None
+    if not vc:
+        return None
+    status = await work_vc_status_text(now)
+    if _vc_status_cache["v"] == status:
+        return status
+    try:
+        await vc.edit(status=status or None)
+        _vc_status_cache["v"] = status
+    except Exception as e:
+        print(f"VCステータス更新エラー: {e!r}", flush=True)
+    return status
 
 async def reconcile_work_sessions():
     """再起動時の整合：VCにいない人の開きっぱなしセッションを閉じ、いる人のセッションを開く"""

@@ -1010,6 +1010,24 @@ async def main():
     check("勉強会: 枠外の人は入らない", all(u != "63" for u, _, _ in bk), True)
     check("勉強会: 時間帯の既定は22-23", (B.BENKYOKAI_START, B.BENKYOKAI_END), (22, 23))
 
+    # 🔊 作業部屋のVCステータス（サブタイトル）
+    check("VCステータス: 勉強会中が最優先", await B.work_vc_status_text(datetime(2026, 8, 21, 22, 30, tzinfo=JST)),
+          "📖 ミニ勉強会ちゅう（〜23:00）")
+    await B.ensure_user(M(64, "どん"))
+    cur = await B.db.execute("INSERT INTO work_sessions(user_id,start_ts,end_ts,day,note) VALUES('64',?,NULL,'2026-08-21','英検の単語')",
+                             (int(datetime(2026, 8, 21, 12, 0, tzinfo=JST).timestamp()),))
+    sid64 = cur.lastrowid
+    await B.db.commit()
+    check("VCステータス: ✍宣言を映す", await B.work_vc_status_text(datetime(2026, 8, 21, 13, 0, tzinfo=JST)), "📌 英検の単語")
+    await B.db.execute("UPDATE work_sessions SET note=NULL WHERE id=?", (sid64,))
+    await B.db.execute("INSERT INTO memos(user_id,text,day,ts) VALUES('64','レポート執筆','2026-08-21',0)")
+    await B.db.commit()
+    check("VCステータス: 宣言が無ければやること📌", await B.work_vc_status_text(datetime(2026, 8, 21, 13, 0, tzinfo=JST)), "📌 レポート執筆")
+    await B.db.execute("UPDATE work_sessions SET end_ts=start_ts+600 WHERE id=?", (sid64,))
+    await B.db.execute("UPDATE work_sessions SET end_ts=start_ts+600 WHERE end_ts IS NULL")   # 他テストの開きっぱなしも閉じる
+    await B.db.commit()
+    check("VCステータス: 誰もいなければ空", await B.work_vc_status_text(datetime(2026, 8, 21, 13, 0, tzinfo=JST)), "")
+
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
     check("meta 上書き", await B.meta_get("last_judge_day"), "2026-08-06")
