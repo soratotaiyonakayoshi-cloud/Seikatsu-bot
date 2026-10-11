@@ -994,6 +994,22 @@ async def main():
     a_hand = _PI2.open(B.render_meal_album([(_dummy((100, 100, 100)), "x")], "テスト", month=10))
     check("アルバム: 手描きヘッダー高さ132（茶碗＋右上ロゴ入り）", (a_plain.height, a_hand.height), (540, 540))   # 132 + (360+34+14)
 
+    # 📖 ミニ勉強会（22〜23時に作業部屋にいた時間の重なり）
+    bk_day = "2026-08-20"
+    bt = lambda h, m=0: int(datetime(2026, 8, 20, h, m, tzinfo=JST).timestamp())
+    await B.ensure_user(M(61, "どんちゃん")); await B.ensure_user(M(62, "ｴﾗ")); await B.ensure_user(M(63, "無関係"))
+    rows_bk = [("61", bt(21, 30), bt(22, 20)),   # 前から入って20分重なる
+               ("61", bt(22, 40), bt(22, 50)),   # 出入り自由＝再入室10分
+               ("62", bt(22, 50), None),          # 入りっぱなし→枠の終わりまで10分
+               ("63", bt(20, 0), bt(21, 0))]      # 枠外→不参加
+    for uid, s, e in rows_bk:
+        await B.db.execute("INSERT INTO work_sessions(user_id,start_ts,end_ts,day) VALUES(?,?,?,?)", (uid, s, e, bk_day))
+    await B.db.commit()
+    bk = await B.benkyokai_participants(bk_day, datetime(2026, 8, 20, 23, 0, tzinfo=JST))
+    check("勉強会: 重なり分の合計と順位", [(u, m) for u, _, m in bk], [("61", 30), ("62", 10)])
+    check("勉強会: 枠外の人は入らない", all(u != "63" for u, _, _ in bk), True)
+    check("勉強会: 時間帯の既定は22-23", (B.BENKYOKAI_START, B.BENKYOKAI_END), (22, 23))
+
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
     check("meta 上書き", await B.meta_get("last_judge_day"), "2026-08-06")

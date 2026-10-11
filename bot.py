@@ -41,6 +41,8 @@ BACKUP_DIR = os.getenv("BACKUP_DIR", "backups")   # 毎晩の判定後に seikat
 RADIO_VC_NAME = "ラジオ体操🏃"
 WORK_VC_NAME = "作業部屋🖥"
 WORK_MIN_LOG_SEC = 600   # これ未満のセッションはログを流さない（時間は記録する）
+BENKYOKAI_START = int(os.getenv("BENKYOKAI_START", "22"))   # 📖ミニ勉強会の時間帯（この間に作業部屋にいれば参加。0未満で無効）
+BENKYOKAI_END = int(os.getenv("BENKYOKAI_END", "23"))
 WORK_TO_GAKUSHU = os.getenv("WORK_TO_GAKUSHU", "1") == "1"   # 作業部屋の時間をみんなで暗記！！の作業時間にも加算
 # 改名前の旧チャンネル名（/setup が既存チャンネルを見つけて改名するために使う）
 OLD_CH_NAMES = {"wake": "起床", "meal": "ごはん", "chore": "家事", "bath": "おふろ", "kora": "こら",
@@ -2067,6 +2069,24 @@ async def judge_loop():
         await wake_remind_check(now)   # ⏰起床リマインド（オプトインの人だけ）
     except Exception as e:
         print(f"起床リマインドエラー: {e!r}", flush=True)
+    try:   # 📖ミニ勉強会：開始の合図と、終わりの参加発表（来なかった夜は何も言わない）
+        if BENKYOKAI_START >= 0:
+            if now.hour == BENKYOKAI_START and await meta_get("benkyokai_open_day") != day:
+                await meta_set("benkyokai_open_day", day)
+                ch = await get_ch("worklog")
+                if ch:
+                    await ch.send(f"📖 **ミニ勉強会の時間**（{BENKYOKAI_START}:00〜{BENKYOKAI_END}:00）！"
+                                  f"🔊作業部屋に入るだけで参加になります。10分だけでも、延長だらだらでも自由。" + hitokoto_suffix())
+            if now.hour >= BENKYOKAI_END and await meta_get("benkyokai_recap_day") != day:
+                await meta_set("benkyokai_recap_day", day)
+                parts = await benkyokai_participants(day, now)
+                if parts:
+                    ch = await get_ch("worklog")
+                    if ch:
+                        body = "／".join(f"**{name}** {m}分" for _, name, m in parts)
+                        await ch.send(f"📖 **今夜のミニ勉強会、おつかれさま！**　{body}　ちょーえらい！")
+    except Exception as e:
+        print(f"勉強会エラー: {e!r}", flush=True)
     if JUDGE_HOUR >= 1 and now.hour == JUDGE_HOUR - 1 and await meta_get("last_prejudge_day") != day:
         await meta_set("last_prejudge_day", day)   # 先に記録して二重投稿を防ぐ
         try:
@@ -4984,6 +5004,28 @@ async def work_close(uid, name, end_ts=None):
             pass
     if total >= 60 and GAKUSHU_SECRET and WORK_TO_GAKUSHU:
         await gakushu_vc_report(uid, total)
+
+async def benkyokai_participants(day, now=None):
+    """📖ミニ勉強会：その日の22〜23時枠と作業セッションの重なりを人ごとに分で集計（出入り自由・進行中は枠の終わりまで）"""
+    now = now or now_jst()
+    t0 = datetime.fromisoformat(day).replace(tzinfo=JST)
+    ws, we = t0 + timedelta(hours=BENKYOKAI_START), t0 + timedelta(hours=BENKYOKAI_END)
+    async with db.execute("SELECT user_id, start_ts, end_ts FROM work_sessions WHERE day=?", (day,)) as c:
+        rows = await c.fetchall()
+    per = {}
+    for r in rows:
+        s = datetime.fromtimestamp(r["start_ts"], JST)
+        e = datetime.fromtimestamp(r["end_ts"], JST) if r["end_ts"] else min(now, we)
+        ov = (min(e, we) - max(s, ws)).total_seconds()
+        if ov > 0:
+            per[r["user_id"]] = per.get(r["user_id"], 0) + ov
+    out = []
+    for uid, sec in sorted(per.items(), key=lambda x: -x[1]):
+        mins = int(sec // 60)
+        if mins >= 1:
+            u = await get_user(uid)
+            out.append((uid, (u["name"] if u and u["name"] else uid), mins))
+    return out
 
 async def reconcile_work_sessions():
     """再起動時の整合：VCにいない人の開きっぱなしセッションを閉じ、いる人のセッションを開く"""
