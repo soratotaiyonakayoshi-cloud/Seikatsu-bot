@@ -2070,9 +2070,8 @@ async def judge_loop():
     except Exception as e:
         print(f"起床リマインドエラー: {e!r}", flush=True)
     try:   # 📖ミニ勉強会：開始の合図と、終わりの参加発表（来なかった夜は何も言わない）
+        # サーバーイベントはユーザーが「毎日繰り返し」で手動作成（Botは触らない。クライアントUIにはrecurrence設定がある）
         if BENKYOKAI_START >= 0:
-            if 9 <= now.hour < BENKYOKAI_START:
-                await ensure_benkyokai_event(now)   # 朝9時にその日のサーバーイベントを立てる
             if now.hour == BENKYOKAI_START and await meta_get("benkyokai_open_day") != day:
                 await meta_set("benkyokai_open_day", day)
                 ch = await get_ch("worklog")
@@ -2081,7 +2080,6 @@ async def judge_loop():
             if now.hour >= BENKYOKAI_END and await meta_get("benkyokai_recap_day") != day:
                 await meta_set("benkyokai_recap_day", day)
                 await benkyokai_recap(day, now)
-                await close_benkyokai_event()   # イベントも片付ける
     except Exception as e:
         print(f"勉強会エラー: {e!r}", flush=True)
     try:
@@ -5039,47 +5037,6 @@ async def benkyokai_participants(day, now=None):
             u = await get_user(uid)
             out.append((uid, (u["name"] if u and u["name"] else uid), mins))
     return out
-
-BENKYOKAI_EVENT_NAME = "📖 ミニ勉強会"
-
-async def ensure_benkyokai_event(now):
-    """今日のミニ勉強会をサーバーイベントとして毎朝1回作成（チャンネル一覧の上に出る・🔔興味ありで開始通知）"""
-    day = day_str(now)
-    if await meta_get("benkyokai_event_day") == day:
-        return False
-    wid = await meta_get("ch_workvc")
-    vc = bot.get_channel(int(wid)) if wid else None
-    if not vc:
-        return False
-    await meta_set("benkyokai_event_day", day)   # 失敗しても二重作成よりマシなので先に記録
-    st = now.replace(hour=BENKYOKAI_START, minute=0, second=0, microsecond=0)
-    et = now.replace(hour=BENKYOKAI_END, minute=0, second=0, microsecond=0)
-    try:
-        await vc.guild.create_scheduled_event(
-            name=BENKYOKAI_EVENT_NAME, channel=vc, start_time=st, end_time=et,
-            entity_type=discord.EntityType.voice, privacy_level=discord.PrivacyLevel.guild_only,
-            description="🔊作業部屋に入るだけで参加となります。10分だけでも、延長だらだらでも自由。")
-        return True
-    except Exception as e:
-        print(f"勉強会イベント作成エラー: {e!r}", flush=True)
-        return False
-
-async def close_benkyokai_event():
-    """23:00すぎ：今日のイベントを終了（開始されずに残っていたら取り下げ）"""
-    wid = await meta_get("ch_workvc")
-    vc = bot.get_channel(int(wid)) if wid else None
-    if not vc:
-        return
-    for ev in vc.guild.scheduled_events:
-        if ev.name != BENKYOKAI_EVENT_NAME:
-            continue
-        try:
-            if ev.status == discord.EventStatus.active:
-                await ev.end()
-            elif ev.status == discord.EventStatus.scheduled:
-                await ev.cancel()
-        except Exception as e:
-            print(f"勉強会イベント終了エラー: {e!r}", flush=True)
 
 async def benkyokai_streak(uid, day):
     """dayを含めて遡った勉強会の連続参加日数（events kind='benkyokai' で数える。途切れても叱られない、表示が消えるだけ）"""
