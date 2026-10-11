@@ -2075,8 +2075,7 @@ async def judge_loop():
                 await meta_set("benkyokai_open_day", day)
                 ch = await get_ch("worklog")
                 if ch:
-                    await ch.send(f"📖 **ミニ勉強会の時間**（{BENKYOKAI_START}:00〜{BENKYOKAI_END}:00）！"
-                                  f"🔊作業部屋に入るだけで参加になります。10分だけでも、延長だらだらでも自由。" + hitokoto_suffix())
+                    await ch.send(f"📖 **ミニ勉強会の時間**（{BENKYOKAI_START}:00〜{BENKYOKAI_END}:00）！🔊作業部屋に入るだけで参加となります。")
             if now.hour >= BENKYOKAI_END and await meta_get("benkyokai_recap_day") != day:
                 await meta_set("benkyokai_recap_day", day)
                 parts = await benkyokai_participants(day, now)
