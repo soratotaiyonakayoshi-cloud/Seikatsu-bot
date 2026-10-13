@@ -881,10 +881,10 @@ async def main():
     await B.db.commit()
     dg = await B.today_digest(122, datetime(2026, 8, 3, 8, 0, tzinfo=JST))   # 月曜
     check("時間割: 空きコマは─で5限まで", "1限 8:45　─" in dg and "5限 16:30" in dg, True)
-    check("時間割: 実験は3限に教室付き・4限以降は〃", "3限 13:00　**生物学実験**（1講─15）" in dg and "〃 生物学実験" in dg, True)
+    check("時間割: 実験は3限に教室付き・4限以降は〃", "3限 13:00　**生物学実験（Aクラス）**（1講─15）" in dg and "〃 生物学実験（Aクラス）" in dg, True)
     await B.kesseki_bump("122", "bo1005b", 3)   # 既定4→あと1回
     dg2 = await B.today_digest(122, datetime(2026, 8, 3, 8, 0, tzinfo=JST))
-    check("時間割: 欠席残りわずか警告", "🚨 欠席はあと：**生物学実験** あと1回" in dg2, True)
+    check("時間割: 欠席残りわずか警告", "🚨 欠席はあと：**生物学実験（Aクラス）** あと1回" in dg2, True)
 
     # 👥 時間割コピー
     cp_src = M(112, "先人"); await B.ensure_user(cp_src)
