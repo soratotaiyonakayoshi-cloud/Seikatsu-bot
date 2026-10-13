@@ -964,6 +964,28 @@ async def main():
           (await (await B.db.execute("SELECT closed FROM exams WHERE exam_day='2026-09-04'")).fetchone())["closed"], 1)
     check("試験: クローズ後は一覧に出ない", len(await B.exam_rows_for("42")), 0)
 
+    # 🕑 毎週課題のルール締切変更（生成済み分にも反映）
+    cur = await B.db.execute("INSERT INTO recurring_kadai(code,title,due_time,created_by,created_at) VALUES('tst003','週プリ',NULL,'95',0)")
+    rid3 = cur.lastrowid
+    cur = await B.db.execute("INSERT INTO assignments(code,title,due_ts,created_by,created_at) VALUES('tst003','週プリ',?,'95',0)",
+                             (int(datetime(2026, 8, 24, 8, 45, tzinfo=JST).timestamp()),))   # 月1=8:45既定
+    aid3 = cur.lastrowid
+    await B.db.execute("INSERT INTO recurring_spawned(rule_id,due_day,assignment_id) VALUES(?, '2026-08-24', ?)", (rid3, aid3))
+    await B.db.execute("INSERT OR IGNORE INTO assignment_reminded(assignment_id,stage) VALUES(?, 'd1')", (aid3,))
+    await B.db.commit()
+    rule3, n3 = await B.teiki_set_time(rid3, "21:00")
+    a3 = await B.assignment_row(aid3)
+    check("定例時刻変更: 生成済み1件に反映", (n3, datetime.fromtimestamp(a3["due_ts"], JST).strftime("%H:%M")), (1, "21:00"))
+    check("定例時刻変更: リマインド記録リセット", (await (await B.db.execute(
+        "SELECT COUNT(*) AS n FROM assignment_reminded WHERE assignment_id=? AND stage IN ('d3','d1','d0')", (aid3,))).fetchone())["n"], 0)
+    check("定例時刻変更: ルールに保存", rule3["due_time"], "21:00")
+    rule3b, _ = await B.teiki_set_time(rid3, None)
+    a3b = await B.assignment_row(aid3)
+    check("定例時刻変更: 空欄で授業開始(月1=8:45)に戻る", datetime.fromtimestamp(a3b["due_ts"], JST).strftime("%H:%M"), "08:45")
+    await B.db.execute("UPDATE recurring_kadai SET active=0 WHERE id=?", (rid3,))
+    await B.db.execute("UPDATE assignments SET closed=1 WHERE id=?", (aid3,))
+    await B.db.commit()
+
     # 🧩 空きコマの個人予定
     await B.db.execute("INSERT INTO user_slots(user_id,slot,label,place) VALUES('42','火2','バイト','駅前')")
     await B.db.execute("INSERT INTO user_slots(user_id,slot,label,place) VALUES('42','火3','バイト','駅前')")
