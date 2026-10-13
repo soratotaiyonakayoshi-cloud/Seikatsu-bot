@@ -1117,6 +1117,15 @@ async def main():
     check("実験AB: 化学もA/B", ((await B.get_course("ch1004a"))["name"], (await B.get_course("ch1004aB"))["name"]),
           ("化学実験（Aクラス）", "化学実験（Bクラス）"))
     check("実験AB: コマは月3-5のまま", (await B.get_course("bo1005bB"))["slots"], "月3,月4,月5")
+    # 🧪 実験カレンダー（日付別の実施内容）
+    check("実験cal: データ読込（4科目）", sorted(B.LAB_SCHEDULE.keys()), ["bo1005b", "bo1005bB", "ch1004a", "ch1004aB"])
+    await B.ensure_user(M(123, "ビーさん"))
+    await B.db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES('123','bo1005bB')")
+    await B.db.commit()
+    dgl = await B.today_digest(123, datetime(2026, 10, 19, 8, 0, tzinfo=JST))   # 月曜・Bクラスは「動物」
+    check("実験cal: Bクラスの当日内容が出る", dgl is not None and "🧪 今日の実験" in dgl and "動物（2-428・宮本）" in dgl, True)
+    dgl2 = await B.today_digest(123, datetime(2026, 10, 12, 8, 0, tzinfo=JST))   # 予備日→実験行なし
+    check("実験cal: 予備日は出ない", dgl2 is None or "🧪" not in dgl2, True)
     await B.db.close()
 
 try:

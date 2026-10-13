@@ -57,6 +57,11 @@ MEMBERS_INTENT = os.getenv("MEMBERS_INTENT", "0") == "1"   # 1にすると新規
 COURSES_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "courses_2026_kouki.json")
 COURSES_EXTRA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "courses_extra.json")
 HITOKOTO_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "hitokoto.json")
+try:   # 🧪 実験の日付別カレンダー（科目コード→日付→実施内容。A/Bクラスで日程が違う実験用）
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "lab_schedule.json"), encoding="utf-8") as _f:
+        LAB_SCHEDULE = {k: v for k, v in json.load(_f).items() if not k.startswith("_")}
+except Exception:
+    LAB_SCHEDULE = {}
 JST = timezone(timedelta(hours=9))
 
 CATEGORY_NAME = "最低限生活リズム"
@@ -3962,6 +3967,16 @@ async def today_digest(uid, now):
                 lines.append("🚨 欠席はあと：" + "／".join(warn))
         except Exception:
             pass
+    try:   # 🧪 実験カレンダー：今日の実施内容（A/Bクラスで日程が違う実験用）
+        labs = []
+        for c in await user_course_rows(uid):
+            t = LAB_SCHEDULE.get(c["code"], {}).get(now.date().isoformat())
+            if t:
+                labs.append(f"**{c['name']}**：{t}")
+        if labs:
+            lines.append("🧪 今日の実験：" + "／".join(labs))
+    except Exception:
+        pass
     try:   # 試験1週間前からは朝のダイジェストでそっとカウントダウン（本人にだけ見える）
         exs = [e for e in await exam_rows_for(uid) if 0 <= exam_days_left(e["exam_day"], now) <= 7]
         if exs:
