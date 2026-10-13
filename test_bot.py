@@ -29,6 +29,9 @@ check("食事推定 8:00", B.infer_meal_sub(datetime(2026,8,5,8,0,tzinfo=JST)), 
 check("食事推定 12:30", B.infer_meal_sub(datetime(2026,8,5,12,30,tzinfo=JST)), "昼")
 check("食事推定 16:00", B.infer_meal_sub(datetime(2026,8,5,16,0,tzinfo=JST)), "間食")
 check("食事推定 19:00", B.infer_meal_sub(datetime(2026,8,5,19,0,tzinfo=JST)), "夜")
+check("空きコマ: 単発パース", B.parse_slots_input("金3"), ["金3"])
+check("空きコマ: 複数＋全角＋重複", B.parse_slots_input("金３、金4 金4"), ["金3", "金4"])
+check("空きコマ: 不正は None", B.parse_slots_input("金7"), None)
 check("定例: 曜日抽出 金1,金2→金", B.course_day_chars("金1,金2"), ["金"])
 check("定例: 曜日抽出 月3,木2→月木", B.course_day_chars("月3,木2"), ["月", "木"])
 check("定例: 曜日抽出 空→なし", B.course_day_chars(""), [])
@@ -43,8 +46,8 @@ check("ごはんパネルに🧊 2ボタン", {"sk_fridge_add", "sk_fridge_list"
 check("🧊は2段目・ごはんは1段目", sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_fridge")}) == [1]
       and sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_meal")}) == [0], True)
 check("起床パネルに📅今日の予定", any(getattr(i, "custom_id", "") == "sk_today" for i in B.WakeView().children), True)
-check("課題パネルは9ボタン", {i.custom_id for i in B.KadaiPanelView().children},
-      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki", "sk_exam"})
+check("課題パネルは10ボタン", {i.custom_id for i in B.KadaiPanelView().children},
+      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki", "sk_exam", "sk_jw_free"})
 check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
 check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["album", "erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kesseki", "kigen", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "reizouko", "saitei", "setup", "suimin", "tips", "tsushinbo", "watashi"])
 
@@ -960,6 +963,17 @@ async def main():
     check("試験: 過ぎたら自動クローズ", await B.remind_exams(datetime(2026, 9, 5, 8, 0, tzinfo=JST)) or
           (await (await B.db.execute("SELECT closed FROM exams WHERE exam_day='2026-09-04'")).fetchone())["closed"], 1)
     check("試験: クローズ後は一覧に出ない", len(await B.exam_rows_for("42")), 0)
+
+    # 🧩 空きコマの個人予定
+    await B.db.execute("INSERT INTO user_slots(user_id,slot,label,place) VALUES('42','火2','バイト','駅前')")
+    await B.db.execute("INSERT INTO user_slots(user_id,slot,label,place) VALUES('42','火3','バイト','駅前')")
+    await B.db.execute("INSERT INTO user_slots(user_id,slot,label,place) VALUES('42','水1','ジム',NULL)")
+    await B.db.commit()
+    pr42 = await B.personal_slot_rows("42")
+    check("空きコマ: 同じ予定はまとめて1行（同色）", sorted((r["name"], r["slots"]) for r in pr42),
+          [("ジム", "水1"), ("バイト", "火2,火3")])
+    dig_f = await B.today_digest("42", datetime(2026, 9, 1, 7, 0, tzinfo=JST))   # 火曜
+    check("空きコマ: ☀️の時間割に場所つきで出る", dig_f is not None and "バイト" in dig_f and "駅前" in dig_f, True)
 
     # 📖 ごはんアルバム
     check("ごはんパネルに📖アルバムボタン", any(i.custom_id == "sk_gohan_album" for i in B.MealView().children), True)

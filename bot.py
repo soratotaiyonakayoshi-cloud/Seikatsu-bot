@@ -204,6 +204,7 @@ CREATE TABLE IF NOT EXISTS exams(
   exam_day TEXT NOT NULL, created_by TEXT, created_at INTEGER, closed INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS exam_reminded(exam_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(exam_id, stage));
+CREATE TABLE IF NOT EXISTS user_slots(user_id TEXT NOT NULL, slot TEXT NOT NULL, label TEXT NOT NULL, place TEXT, PRIMARY KEY(user_id, slot));
 CREATE INDEX IF NOT EXISTS idx_work_user_day ON work_sessions(user_id, day);
 """
 db = None
@@ -2739,12 +2740,35 @@ def render_timetable(username, rows):
     buf.seek(0)
     return buf
 
+def parse_slots_input(s):
+    """「金3」「金3,金4」→ ['金3','金4']。読めなければ None"""
+    t = unicodedata.normalize("NFKC", s or "").strip()
+    out = []
+    for p in re.split(r"[,、\s]+", t):
+        if not p:
+            continue
+        if not re.fullmatch(r"[月火水木金土日][1-6]", p):
+            return None
+        if p not in out:
+            out.append(p)
+    return out or None
+
+async def personal_slot_rows(uid):
+    """空きコマの個人予定を時間割カード用の行に（同じ予定名はまとめて同色に）"""
+    async with db.execute("SELECT slot, label, place FROM user_slots WHERE user_id=? ORDER BY slot", (str(uid),)) as c:
+        rows = await c.fetchall()
+    by = {}
+    for r in rows:
+        by.setdefault((r["label"], r["place"] or ""), []).append(r["slot"])
+    return [{"name": lb, "slots": ",".join(sl), "room": pl or None, "term": None} for (lb, pl), sl in by.items()]
+
 async def send_timetable(interaction):
-    rows = await user_course_rows(interaction.user.id)
-    if not rows:
+    rows = list(await user_course_rows(interaction.user.id))
+    personal = await personal_slot_rows(interaction.user.id)
+    if not rows and not personal:
         await interaction.response.send_message("まだ履修科目がありません。「🎓 履修科目を登録」か `/jikanwari add` からどうぞ！", ephemeral=True)
         return
-    buf = await asyncio.to_thread(render_timetable, interaction.user.display_name, rows)
+    buf = await asyncio.to_thread(render_timetable, interaction.user.display_name, rows + personal)
     unslotted = [r["name"] for r in rows
                  if not any(len(s.strip()) >= 2 and s.strip()[0] in DAY_CHARS and s.strip()[1:].isdigit()
                             for s in (r["slots"] or "").split(","))]
@@ -3587,6 +3611,46 @@ class ExamRemoveSelect(discord.ui.Select):
             await bump_panel("kadai")
         await interaction.response.edit_message(content=f"🗑 取り下げました：{e['cname']}「{e['title']}」", view=None)
 
+class FreeSlotModal(discord.ui.Modal, title="🧩 空きコマの予定"):
+    koma = discord.ui.TextInput(label="コマ（例 金3 ／ 金3,金4）", max_length=20)
+    yotei = discord.ui.TextInput(label="予定（例 バイト／部活／ジム）", max_length=30)
+    basho = discord.ui.TextInput(label="場所（任意）", required=False, max_length=30)
+
+    async def on_submit(self, interaction):
+        await ensure_user(interaction.user)
+        slots = parse_slots_input(self.koma.value)
+        if not slots:
+            await interaction.response.send_message("⚠️ コマは `金3` や `金3,金4` の形式で入れてください（1〜6限）。", ephemeral=True)
+            return
+        label = self.yotei.value.strip()[:30]
+        place = self.basho.value.strip()[:30] or None
+        for s in slots:
+            await db.execute("INSERT INTO user_slots(user_id,slot,label,place) VALUES(?,?,?,?) "
+                             "ON CONFLICT(user_id,slot) DO UPDATE SET label=excluded.label, place=excluded.place",
+                             (str(interaction.user.id), s, label, place))
+        await db.commit()
+        await interaction.response.send_message(
+            f"🧩 登録しました：**{label}**（{'・'.join(slots)}" + (f"／{place}" if place else "") + "）\n"
+            "-# 時間割画像と☀️朝の時間割に表示されます（自分にだけ）。同じコマに入れ直すと上書きされます", ephemeral=True)
+
+class FreeSlotAddButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="➕ 予定を追加", style=discord.ButtonStyle.primary)
+
+    async def callback(self, interaction):
+        await interaction.response.send_modal(FreeSlotModal())
+
+class FreeSlotRemoveSelect(discord.ui.Select):
+    def __init__(self, rows):
+        opts = [discord.SelectOption(label=f"🗑 {r['slot']} {r['label']}"[:100], value=r["slot"]) for r in rows[:25]]
+        super().__init__(placeholder="🗑 予定を消す（複数OK）", options=opts, min_values=1, max_values=len(opts))
+
+    async def callback(self, interaction):
+        for s in self.values:
+            await db.execute("DELETE FROM user_slots WHERE user_id=? AND slot=?", (str(interaction.user.id), s))
+        await db.commit()
+        await interaction.response.edit_message(content=f"🗑 {len(self.values)} 件消しました。", view=None)
+
 class KadaiPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -3648,6 +3712,20 @@ class KadaiPanelView(discord.ui.View):
             "🚨 **欠席カウンター**（下のプルダウンで選ぶと+1）\n" + ("\n".join(tracked) + "\n" if tracked else "")
             + "-# 落単ラインは既定4回。`/kesseki set` で科目ごとに変更、間違えたら `/kesseki add kaisu:-1`",
             view=view, ephemeral=True)
+
+    @discord.ui.button(label="🧩 空きコマ予定", style=discord.ButtonStyle.secondary, custom_id="sk_jw_free", row=2)
+    async def jw_free(self, interaction, button):
+        await ensure_user(interaction.user)
+        async with db.execute("SELECT slot, label, place FROM user_slots WHERE user_id=? ORDER BY slot", (str(interaction.user.id),)) as c:
+            rows = await c.fetchall()
+        view = discord.ui.View(timeout=600)
+        view.add_item(FreeSlotAddButton())
+        if rows:
+            view.add_item(FreeSlotRemoveSelect(rows))
+        cur = "\n".join(f"・{r['slot']}　**{r['label']}**" + (f"（{r['place']}）" if r["place"] else "") for r in rows[:20])
+        await interaction.response.send_message(
+            "🧩 **空きコマの予定**（バイト・部活など。時間割画像と☀️朝の時間割に出ます・自分にだけ）\n"
+            + (cur if rows else "-# まだ登録がありません"), view=view, ephemeral=True)
 
     @discord.ui.button(label="📝 試験日", style=discord.ButtonStyle.secondary, custom_id="sk_exam", row=2)
     async def exam_btn(self, interaction, button):
@@ -3738,6 +3816,11 @@ async def today_digest(uid, now):
             slot = slot.strip()
             if len(slot) >= 2 and slot[0] == dc and slot[1:].isdigit():
                 per.setdefault(int(slot[1:]), []).append(c)
+    async with db.execute("SELECT slot, label, place FROM user_slots WHERE user_id=?", (str(uid),)) as c:
+        for r in await c.fetchall():   # 空きコマの個人予定（バイト・部活など）も今日の時間割に混ぜる
+            s = r["slot"]
+            if s and s[0] == dc and s[1:].isdigit():
+                per.setdefault(int(s[1:]), []).append({"name": r["label"], "room": r["place"], "code": "_us_" + s})
     lines = []
     if per:
         lines.append("📅 **今日の時間割**")
