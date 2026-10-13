@@ -196,7 +196,7 @@ CREATE TABLE IF NOT EXISTS goods_items(id INTEGER PRIMARY KEY AUTOINCREMENT, use
 CREATE TABLE IF NOT EXISTS attendance(user_id TEXT NOT NULL, code TEXT NOT NULL, absent INTEGER NOT NULL DEFAULT 0, limit_n INTEGER NOT NULL DEFAULT 4, PRIMARY KEY(user_id, code));
 CREATE TABLE IF NOT EXISTS recurring_kadai(
   id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL, title TEXT NOT NULL,
-  due_time TEXT, created_by TEXT, created_at INTEGER, active INTEGER NOT NULL DEFAULT 1
+  due_time TEXT, due_days TEXT, created_by TEXT, created_at INTEGER, active INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS recurring_spawned(rule_id INTEGER NOT NULL, due_day TEXT NOT NULL, assignment_id INTEGER, PRIMARY KEY(rule_id, due_day));
 CREATE TABLE IF NOT EXISTS exams(
@@ -238,7 +238,8 @@ async def db_init():
               "ALTER TABLE users ADD COLUMN benkyou_set_day TEXT",
               "ALTER TABLE memos ADD COLUMN done INTEGER NOT NULL DEFAULT 0",
               "ALTER TABLE users ADD COLUMN wake_remind INTEGER NOT NULL DEFAULT 0",
-              "ALTER TABLE events ADD COLUMN msg_id TEXT"):
+              "ALTER TABLE events ADD COLUMN msg_id TEXT",
+              "ALTER TABLE recurring_kadai ADD COLUMN due_days TEXT"):
         try:
             await db.execute(m)
             await db.commit()
@@ -3359,6 +3360,26 @@ def course_day_chars(slots):
             seen.append(s[0])
     return seen
 
+def parse_day_chars_input(s):
+    """「日」「月,木」→ ['日'] ['月','木']（週順）。読めなければ None"""
+    t = unicodedata.normalize("NFKC", s or "").strip()
+    out = []
+    for p in re.split(r"[,、\s・]+", t):
+        if not p:
+            continue
+        if len(p) != 1 or p not in DAY_CHARS:
+            return None
+        if p not in out:
+            out.append(p)
+    return sorted(out, key=DAY_CHARS.index) or None
+
+def rule_day_chars(rule, course):
+    """定例課題の生成曜日：ルールのdue_days指定 ＞ 授業の曜日"""
+    dd = rule["due_days"] if "due_days" in rule.keys() else None
+    if dd:
+        return [c for c in DAY_CHARS if c in dd]
+    return course_day_chars(course["slots"])
+
 def course_first_period(slots, dc):
     """その曜日の最初の時限番号。無ければ None"""
     ps = [int(s.strip()[1:]) for s in (slots or "").split(",")
@@ -3384,7 +3405,7 @@ async def spawn_recurring(now=None):
         course = await get_course(r["code"])
         if not course:
             continue
-        for dc in course_day_chars(course["slots"]):
+        for dc in rule_day_chars(r, course):
             off = (DAY_CHARS.index(dc) - now.weekday()) % 7
             if off > TEIKI_SPAWN_AHEAD:
                 continue
@@ -3415,32 +3436,42 @@ async def teiki_rules_for(uid):
         "WHERE r.active=1 AND r.code IN (SELECT code FROM user_courses WHERE user_id=?) ORDER BY r.id", (uid,)) as c:
         return await c.fetchall()
 
-async def teiki_set_time(rule_id, hm):
-    """毎週課題の締切時刻を変更（hm='23:59' or None=授業開始まで）。
-    生成済みで未クローズの課題にも新時刻を反映し、リマインド記録をリセット。(ルール, 反映件数) を返す"""
-    await db.execute("UPDATE recurring_kadai SET due_time=? WHERE id=?", (hm, rule_id))
+async def teiki_update_rule(rule_id, hm, days, now=None):
+    """毎週課題のルール変更（hm='23:59'/None=授業開始、days='日'や'月,木'/None=授業の曜日）。
+    生成済みで未クローズの課題は、新しい曜日に合うものは時刻を再計算、合わないものは取り下げて
+    新しい曜日の直近ぶんを即生成する。(ルール, 時刻反映件数, 取り下げ件数) を返す"""
+    now = now or now_jst()
+    await db.execute("UPDATE recurring_kadai SET due_time=?, due_days=? WHERE id=?", (hm, days, rule_id))
     await db.commit()
     async with db.execute("SELECT r.*, c.name AS cname, c.slots FROM recurring_kadai r JOIN courses c ON c.code=r.code WHERE r.id=?",
                           (rule_id,)) as c:
         rule = await c.fetchone()
     if not rule:
-        return None, 0
+        return None, 0, 0
     course = await get_course(rule["code"])
-    updated = 0
+    eff = rule_day_chars(rule, course)
+    retimed, dropped = 0, 0
     async with db.execute(
         "SELECT rs.due_day, rs.assignment_id FROM recurring_spawned rs JOIN assignments a ON a.id=rs.assignment_id "
         "WHERE rs.rule_id=? AND a.closed=0", (rule_id,)) as c:
         rows = await c.fetchall()
     for r in rows:
-        due = teiki_due_dt(course, rule, date.fromisoformat(r["due_day"]))
-        await db.execute("UPDATE assignments SET due_ts=? WHERE id=?", (int(due.timestamp()), r["assignment_id"]))
-        await db.execute("DELETE FROM assignment_reminded WHERE assignment_id=? AND stage IN ('d3','d1','d0')", (r["assignment_id"],))
-        updated += 1
+        d = date.fromisoformat(r["due_day"])
+        if DAY_CHARS[d.weekday()] in eff:
+            due = teiki_due_dt(course, rule, d)
+            await db.execute("UPDATE assignments SET due_ts=? WHERE id=?", (int(due.timestamp()), r["assignment_id"]))
+            await db.execute("DELETE FROM assignment_reminded WHERE assignment_id=? AND stage IN ('d3','d1','d0')", (r["assignment_id"],))
+            retimed += 1
+        else:   # 曜日が変わって合わなくなった分は取り下げ（spawned記録は残る＝旧曜日で再生成しない）
+            await db.execute("UPDATE assignments SET closed=1 WHERE id=?", (r["assignment_id"],))
+            dropped += 1
     await db.commit()
-    return rule, updated
+    if rule["active"]:
+        await spawn_recurring(now)   # 新しい曜日の直近ぶんをその場で生やす
+    return rule, retimed, dropped
 
 def teiki_label(r):
-    days = "・".join(course_day_chars(r["slots"])) or "？"
+    days = "・".join(rule_day_chars(r, r)) or "？"   # rにslotsが同梱されているのでcourse代わりに使える
     return f"{r['cname']}「{r['title']}」（毎週{days}・締切 {r['due_time'] or '授業開始'}）"
 
 # ---- #課題📚 パネル（履修登録と課題登録をボタンから） ----
@@ -3525,7 +3556,8 @@ class TeikiAddModal(discord.ui.Modal):
         self.code = course["code"]
         self.naiyou = discord.ui.TextInput(label="毎週の課題の内容（例 プリント提出／出席フォーム）", max_length=100)
         self.jikoku = discord.ui.TextInput(label="締切時刻（例 23:59。空欄なら授業開始まで）", required=False, max_length=5)
-        for i in (self.naiyou, self.jikoku):
+        self.youbi = discord.ui.TextInput(label="締切の曜日（例 日 ／ 月,木。空欄なら授業の曜日）", required=False, max_length=10)
+        for i in (self.naiyou, self.jikoku, self.youbi):
             self.add_item(i)
 
     async def on_submit(self, interaction):
@@ -3536,12 +3568,19 @@ class TeikiAddModal(discord.ui.Modal):
         if hm and not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", hm):
             await interaction.response.send_message("⚠️ 時刻は `23:59` のような形式で入れてください（空欄なら授業開始まで）。", ephemeral=True)
             return
+        days_list = None
+        if (self.youbi.value or "").strip():
+            days_list = parse_day_chars_input(self.youbi.value)
+            if not days_list:
+                await interaction.response.send_message("⚠️ 曜日は `日` や `月,木` の形式で入れてください（空欄なら授業の曜日）。", ephemeral=True)
+                return
         await db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES(?,?)", (str(user.id), c["code"]))
-        await db.execute("INSERT INTO recurring_kadai(code,title,due_time,created_by,created_at) VALUES(?,?,?,?,?)",
-                         (c["code"], self.naiyou.value.strip()[:100], hm or None, str(user.id), int(now_jst().timestamp())))
+        await db.execute("INSERT INTO recurring_kadai(code,title,due_time,due_days,created_by,created_at) VALUES(?,?,?,?,?,?)",
+                         (c["code"], self.naiyou.value.strip()[:100], hm or None,
+                          ",".join(days_list) if days_list else None, str(user.id), int(now_jst().timestamp())))
         await db.commit()
-        made = await spawn_recurring()   # 直近の授業日ぶんはその場で生成
-        days = "・".join(course_day_chars(c["slots"]))
+        made = await spawn_recurring()   # 直近ぶんはその場で生成
+        days = "・".join(days_list or course_day_chars(c["slots"]))
         ch = await get_ch("kadai")
         if ch:
             await ch.send(f"🔁 **{user.display_name}** が **{c['name']}** の毎週課題「{self.naiyou.value.strip()}」を登録しました"
@@ -3553,8 +3592,8 @@ class TeikiAddModal(discord.ui.Modal):
 
 class TeikiEditSelect(discord.ui.Select):
     def __init__(self, rules):
-        opts = [discord.SelectOption(label=f"🕑 時刻変更：{teiki_label(r)}"[:100], value=str(r["id"])) for r in rules[:25]]
-        super().__init__(placeholder="🕑 毎週の締切時刻を変更する", options=opts)
+        opts = [discord.SelectOption(label=f"🕑 変更：{teiki_label(r)}"[:100], value=str(r["id"])) for r in rules[:25]]
+        super().__init__(placeholder="🕑 毎週の締切（時刻・曜日）を変更する", options=opts)
 
     async def callback(self, interaction):
         async with db.execute("SELECT r.*, c.name AS cname FROM recurring_kadai r JOIN courses c ON c.code=r.code WHERE r.id=?",
@@ -3569,26 +3608,38 @@ class TeikiEditModal(discord.ui.Modal):
     def __init__(self, r):
         super().__init__(title=f"🕑 {r['cname']}「{r['title']}」"[:45])
         self.rid = r["id"]
-        self.jikoku = discord.ui.TextInput(label="新しい締切時刻（例 23:59。空欄なら授業開始まで）",
+        dd = r["due_days"] if "due_days" in r.keys() else None
+        self.jikoku = discord.ui.TextInput(label="締切時刻（例 23:59。空欄なら授業開始まで）",
                                            required=False, max_length=5, default=r["due_time"] or "")
-        self.add_item(self.jikoku)
+        self.youbi = discord.ui.TextInput(label="締切の曜日（例 日 ／ 月,木。空欄なら授業の曜日）",
+                                          required=False, max_length=10, default=(dd or "").replace(",", "、"))
+        for i in (self.jikoku, self.youbi):
+            self.add_item(i)
 
     async def on_submit(self, interaction):
         hm = (self.jikoku.value or "").strip()
         if hm and not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", hm):
             await interaction.response.send_message("⚠️ 時刻は `23:59` のような形式で入れてください（空欄なら授業開始まで）。", ephemeral=True)
             return
-        rule, n = await teiki_set_time(self.rid, hm or None)
+        days_list = None
+        if (self.youbi.value or "").strip():
+            days_list = parse_day_chars_input(self.youbi.value)
+            if not days_list:
+                await interaction.response.send_message("⚠️ 曜日は `日` や `月,木` の形式で入れてください（空欄なら授業の曜日）。", ephemeral=True)
+                return
+        rule, retimed, dropped = await teiki_update_rule(self.rid, hm or None, ",".join(days_list) if days_list else None)
         if not rule:
             await interaction.response.send_message("見つかりませんでした。", ephemeral=True)
             return
-        label = hm or "授業開始"
+        course = await get_course(rule["code"])
+        label = f"毎週{'・'.join(rule_day_chars(rule, course))}曜・{hm or '授業開始'}"
+        note = (f"・生成済み {retimed} 件に反映" if retimed else "") + (f"・旧曜日の {dropped} 件は取り下げ→新曜日で生成し直し" if dropped else "")
         ch = await get_ch("kadai")
         if ch:
             await ch.send(f"🕑 **{rule['cname']}** の毎週課題「{rule['title']}」の締切を **{label}** に変更しました"
-                          f"（by {interaction.user.display_name}" + (f"・生成済み {n} 件にも反映" if n else "") + "）")
+                          f"（by {interaction.user.display_name}{note}）")
             await bump_panel("kadai")
-        await interaction.response.send_message(f"✅ 締切を {label} に変更しました（生成済み {n} 件にも反映・以後の自動生成も新時刻）。", ephemeral=True)
+        await interaction.response.send_message(f"✅ 締切を {label} に変更しました{note}。以後の自動生成も新しい設定です。", ephemeral=True)
 
 class TeikiRemoveSelect(discord.ui.Select):
     def __init__(self, rules):
