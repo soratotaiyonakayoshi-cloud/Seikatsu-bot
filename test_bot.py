@@ -1111,6 +1111,12 @@ async def main():
     check("旧コード掃除: 参照なしは消える", await B.get_course("zz999"), None)
     check("旧コード掃除: 履修者がいる科目は残る", (await B.get_course("zz998")) is not None, True)
     check("旧コード掃除: テスト用参照つき科目も残る", (await B.get_course("tst001")) is not None, True)
+    # 実験のA/Bクラス分割（extraで既存コード上書き＋B用新コード）
+    check("実験AB: 既存コードはAクラスに改名", (await B.get_course("bo1005b"))["name"], "生物学実験（Aクラス）")
+    check("実験AB: Bクラスの新コード", (await B.get_course("bo1005bB"))["name"], "生物学実験（Bクラス）")
+    check("実験AB: 化学もA/B", ((await B.get_course("ch1004a"))["name"], (await B.get_course("ch1004aB"))["name"]),
+          ("化学実験（Aクラス）", "化学実験（Bクラス）"))
+    check("実験AB: コマは月3-5のまま", (await B.get_course("bo1005bB"))["slots"], "月3,月4,月5")
     await B.db.close()
 
 try:
