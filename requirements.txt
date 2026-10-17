@@ -3,4 +3,4 @@ aiosqlite
 python-dotenv
 davey
 matplotlib
-yt-dlp
+yt-dlp[default]
