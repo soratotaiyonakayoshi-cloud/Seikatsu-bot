@@ -9,3 +9,7 @@ venv/
 data/src/
 promo/saitei-seikatsu-recruit.html
 backups/
+
+# 音楽素材はVM側に置く（リポジトリには含めない）
+music/*
+!music/.gitkeep

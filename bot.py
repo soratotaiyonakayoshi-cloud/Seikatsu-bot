@@ -2469,9 +2469,16 @@ async def judge_loop():
                 ch = await get_ch("worklog")
                 if ch:
                     await ch.send(f"📖 **ミニ勉強会の時間**（{BENKYOKAI_START}:00〜{BENKYOKAI_END}:00）！🔊作業部屋に入るだけで参加となります。")
+                if BENKYOKAI_BGM and bgm_files() and not _player.get("vc"):
+                    try:
+                        await start_bgm(auto=True)   # 勉強会BGMを自動で流す（23時に自動停止）
+                    except Exception as e:
+                        print(f"勉強会BGMエラー: {e!r}", flush=True)
             if now.hour >= BENKYOKAI_END and await meta_get("benkyokai_recap_day") != day:
                 await meta_set("benkyokai_recap_day", day)
                 await benkyokai_recap(day, now)
+                if _player.get("auto"):   # 自動で流していた勉強会BGMは終了（手動の分には触らない）
+                    await stop_player()
     except Exception as e:
         print(f"勉強会エラー: {e!r}", flush=True)
     try:
@@ -2533,6 +2540,8 @@ async def play_radio(guild, manual=False):
                            + hitokoto_suffix())
     if not manual:
         await asyncio.sleep(60)
+    if vc_ch.guild.voice_client:   # BGM等が流れていたらラジオ体操を優先して止める
+        await stop_player()
     try:
         vc = await vc_ch.connect(timeout=20, reconnect=False)
     except Exception as e:
@@ -2564,6 +2573,189 @@ async def play_radio(guild, manual=False):
         await wake_ch.send("🏃 ラジオ体操おつかれさま！ 参加：" + ("、".join(names) if names else "誰もいなかった…😢"))
         await bump_panel("wake")
     return f"再生完了（参加 {len(names)} 人）"
+
+# ------------------------------------------------------------
+#  🎵 音楽プレイヤー（①作業用BGM=VMのmusic/を シャッフルループ ②/play=URL・検索語の再生）
+#  1つのキューを共有：/playの曲が優先、キューが空でBGMモードなら自前音源を補充し続ける
+# ------------------------------------------------------------
+BGM_DIR = os.getenv("BGM_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "music"))
+BENKYOKAI_BGM = os.getenv("BENKYOKAI_BGM", "1") == "1"   # 勉強会の時間に自動でBGMを流す
+_player = {"vc": None, "queue": [], "bgm": False, "auto": False, "current": None}
+
+def bgm_files():
+    try:
+        return sorted(f for f in os.listdir(BGM_DIR) if f.lower().endswith((".mp3", ".m4a", ".ogg", ".wav", ".flac")))
+    except Exception:
+        return []
+
+def looks_like_url(s):
+    return bool(re.match(r"https?://", (s or "").strip()))
+
+async def _ytdlp_resolve(query):
+    """URLまたは検索語 → (ストリームURL, タイトル)。失敗で None"""
+    try:
+        import yt_dlp
+    except Exception:
+        print("yt-dlp が入っていません（pip install -r requirements.txt）", flush=True)
+        return None
+    q = query.strip()
+    if not looks_like_url(q):
+        q = f"ytsearch1:{q}"
+    opts = {"format": "bestaudio/best", "quiet": True, "no_warnings": True, "noplaylist": True}
+
+    def _ex():
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(q, download=False)
+            if "entries" in info:
+                info = info["entries"][0]
+            return info["url"], (info.get("title") or "？")[:80]
+    try:
+        return await asyncio.to_thread(_ex)
+    except Exception as e:
+        print(f"yt-dlp失敗: {e!r}", flush=True)
+        return None
+
+async def _work_vc_channel():
+    wid = await meta_get("ch_workvc")
+    return bot.get_channel(int(wid)) if wid else None
+
+async def ensure_player_vc(prefer=None):
+    """再生用のVC接続（既存接続は流用・別チャンネルなら移動）"""
+    ch = prefer or await _work_vc_channel()
+    if not ch:
+        return None
+    vc = ch.guild.voice_client
+    if vc and vc.is_connected():
+        if vc.channel.id != ch.id:
+            try:
+                await vc.move_to(ch)
+            except Exception:
+                pass
+        return vc
+    try:
+        return await ch.connect(timeout=20, reconnect=False)
+    except Exception as e:
+        print(f"🎵 VC接続失敗: {e!r}", flush=True)
+        return None
+
+def _after_track(err):
+    if err:
+        print(f"🎵 再生エラー: {err!r}", flush=True)
+    try:
+        asyncio.run_coroutine_threadsafe(_play_next(), bot.loop)
+    except Exception:
+        pass
+
+async def _play_next():
+    vc = _player.get("vc")
+    if not vc or not vc.is_connected():
+        return
+    if not any(not m.bot for m in vc.channel.members):   # 無人になったら撤収
+        await stop_player()
+        return
+    item = None
+    if _player["queue"]:
+        item = _player["queue"].pop(0)
+    elif _player["bgm"]:
+        fs = bgm_files()
+        if fs:
+            item = {"type": "file", "path": os.path.join(BGM_DIR, random.choice(fs))}
+    if not item:
+        await stop_player()
+        return
+    try:
+        if item["type"] == "file":
+            src = discord.FFmpegPCMAudio(item["path"], executable=FFMPEG_PATH)
+            _player["current"] = f"🎵 {os.path.splitext(os.path.basename(item['path']))[0]}"
+        else:
+            src = discord.FFmpegPCMAudio(item["url"], executable=FFMPEG_PATH,
+                                         before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5")
+            _player["current"] = f"▶ {item['title']}"
+        vc.play(src, after=_after_track)
+    except Exception as e:
+        print(f"🎵 play失敗: {e!r}", flush=True)
+        _player["current"] = None
+
+async def start_bgm(auto=False):
+    if not bgm_files():
+        return "❌ 音源がありません（VMの `music/` フォルダに mp3 などを置いてください）"
+    vc = await ensure_player_vc()
+    if not vc:
+        return "❌ 作業部屋VCに接続できませんでした"
+    _player.update(vc=vc, bgm=True, auto=auto)
+    if not vc.is_playing():
+        await _play_next()
+    return f"🎵 作業用BGMをはじめました（{len(bgm_files())}曲シャッフルループ・`/bgm stop` で停止）"
+
+async def stop_player():
+    _player["queue"].clear()
+    _player.update(bgm=False, auto=False, current=None)
+    vc = _player.get("vc")
+    _player["vc"] = None
+    if vc and vc.is_connected():
+        try:
+            vc.stop()
+            await vc.disconnect()
+        except Exception:
+            pass
+
+bgm_grp = app_commands.Group(name="bgm", description="作業用BGM（自前音源のシャッフルループ・混雑知らず）")
+
+@bgm_grp.command(name="start", description="作業部屋で作業用BGMを流す")
+async def bgm_start(interaction):
+    await interaction.response.defer()
+    await interaction.followup.send(await start_bgm())
+
+@bgm_grp.command(name="stop", description="BGM・再生をぜんぶ止めてVCから退出")
+async def bgm_stop(interaction):
+    await stop_player()
+    await interaction.response.send_message("⏹ 止めました。")
+
+@bgm_grp.command(name="list", description="入っているBGM音源の一覧")
+async def bgm_list(interaction):
+    fs = bgm_files()
+    if not fs:
+        await interaction.response.send_message("音源がまだありません。VMの `music/` に mp3 などを置いてね。", ephemeral=True)
+        return
+    await interaction.response.send_message("🎵 BGM音源：\n" + "\n".join(f"・{os.path.splitext(f)[0]}" for f in fs[:30]), ephemeral=True)
+
+bot.tree.add_command(bgm_grp)
+
+@bot.tree.command(name="play", description="YouTube等のURLや検索語をVCで再生（キューに追加）")
+@app_commands.describe(kyoku="URL または 検索語（例 lofi hiphop）")
+async def play_command(interaction, kyoku: str):
+    await interaction.response.defer()
+    r = await _ytdlp_resolve(kyoku)
+    if not r:
+        await interaction.followup.send("⚠️ 再生情報を取得できませんでした（URLを確認。直らなければ yt-dlp の更新が必要かも）")
+        return
+    url, title = r
+    prefer = interaction.user.voice.channel if getattr(interaction.user, "voice", None) and interaction.user.voice else None
+    vc = await ensure_player_vc(prefer)
+    if not vc:
+        await interaction.followup.send("❌ VCに接続できませんでした。どこかのVCに入ってから実行してね。")
+        return
+    _player["vc"] = vc
+    _player["queue"].append({"type": "yt", "url": url, "title": title})
+    if not vc.is_playing():
+        await _play_next()
+        await interaction.followup.send(f"▶ 再生：**{title}**")
+    else:
+        await interaction.followup.send(f"⏭ キューに追加（{len(_player['queue'])} 曲待ち）：**{title}**")
+
+@bot.tree.command(name="skip", description="いま流れている曲をスキップ")
+async def skip_command(interaction):
+    vc = _player.get("vc")
+    if not vc or not vc.is_playing():
+        await interaction.response.send_message("いま何も流れていません。", ephemeral=True)
+        return
+    await interaction.response.send_message("⏭ スキップ！" + (f"（次：{_player['queue'][0]['title']}）" if _player["queue"] else ""))
+    vc.stop()   # afterコールバックが次の曲を再生する
+
+@bot.tree.command(name="stop", description="再生をぜんぶ止めてVCから退出")
+async def stop_command(interaction):
+    await stop_player()
+    await interaction.response.send_message("⏹ 停止しました。")
 
 @tasks.loop(minutes=1)
 async def radio_loop():
