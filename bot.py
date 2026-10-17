@@ -1228,14 +1228,18 @@ def render_recipe_card(author, title, ingredients, steps, memo="", main_img=None
             return p
         except Exception:
             return None
-    main_ph = _load(main_img, (640, 430)) if main_img else None
+    main_ph = _load(main_img, (460, 560)) if main_img else None
     step_phs = {i: _load(b, (380, 260)) for i, b in (step_imgs or {}).items()}
     step_phs = {i: p for i, p in step_phs.items() if p}
     title_lines = _wrap_px(probe, title, ft, fe, cw - 150)
     # 材料は (名前, 分量) のタプルでも文字列でも受ける
     norm_ing = [(s, "") if isinstance(s, str) else (s[0], (s[1] or "").strip()) for s in ingredients]
-    two_col = len(norm_ing) > 5
-    ing_w = (cw // 2 - 30) if two_col else cw - 30
+    if main_ph:   # メイン画像があるときは画像の右に材料を並べて余白を使う（1段組）
+        two_col = False
+        ing_w = cw - main_ph.width - 40
+    else:
+        two_col = len(norm_ing) > 5
+        ing_w = (cw // 2 - 30) if two_col else cw - 30
     ing = []
     for nm_, amt_ in norm_ing:
         aw = _mixed_w(probe, amt_, fr, fe) if amt_ else 0
@@ -1247,13 +1251,16 @@ def render_recipe_card(author, title, ingredients, steps, memo="", main_img=None
     # 高さ見積もり
     y_title = 56
     h_title = len(title_lines) * 58 + 34
-    h_main = (main_ph.height + 44) if main_ph else 0
     h_ing_rows = [max(len(ing[k][2]) for k in (r, r + 1) if k < len(ing)) for r in range(0, len(ing), 2)] if two_col \
         else [len(l) for _, _, l in ing]
-    h_ing = (hz_h if head_z else 52) + 14 + sum(r * 32 + 8 for r in h_ing_rows) + 18
+    ing_body = sum(r * 32 + 8 for r in h_ing_rows)
+    if main_ph:   # 画像と材料の横並びセクション（背の高い方＋余白）
+        h_ing = max(main_ph.height + 40, (hz_h if head_z else 52) + 12 + ing_body) + 30
+    else:
+        h_ing = (hz_h if head_z else 52) + 14 + ing_body + 18
     h_stp = (ht_h if head_t else 52) + 14 + sum(len(l) * 32 + 14 + (step_phs[i].height + 14 if i in step_phs else 0) for i, l in [(i, l) for i, l in stp]) + 10
     h_memo = (len(memo_lines) * 28 + 44) if memo_lines else 0
-    H = y_title + h_title + h_main + h_ing + h_stp + h_memo + 70
+    H = y_title + h_title + h_ing + h_stp + h_memo + 70
     img = PImage.new("RGB", (W, H), (247, 242, 232))
     d = ImageDraw.Draw(img)
     y = y_title
@@ -1268,24 +1275,6 @@ def render_recipe_card(author, title, ingredients, steps, memo="", main_img=None
         _paste_art(img, spark, W - pad - 140, y_title - 16, 40)
     d.text((pad + 6, y + 2), f"{_plain_name(author, 14)} のレシピ", font=fs, fill=(217, 112, 26))
     y += 34
-    if main_ph:   # メイン画像（上辺にマステを貼る）
-        mx = (W - main_ph.width) // 2
-        img.paste(main_ph, (mx, y + 14))
-        d.rectangle([mx, y + 14, mx + main_ph.width - 1, y + 14 + main_ph.height - 1], outline=(226, 218, 203), width=2)
-        tape = _gohan_art(rng.choice(("tape_red", "tape_teal", "tape_yellow")))
-        if tape:
-            tw = round(tape.width * 44 / tape.height)
-            _paste_art(img, tape, mx + main_ph.width // 2 - tw // 2 + rng.randint(-40, 40), y - 2, 44,
-                       angle=rng.choice((-1, 1)) * rng.uniform(2, 6), alpha=0.88)
-        y += main_ph.height + 44
-    # ざいりょう（手描き見出し）
-    if head_z:
-        _paste_art(img, head_z, pad, y + 6, hz_h)
-        y += hz_h + 14
-    else:
-        d.text((pad, y + 14), "ざいりょう", font=fh, fill=(27, 24, 21))
-        d.line([pad, y + 50, pad + 150, y + 50], fill=(217, 112, 26), width=3)
-        y += 52 + 14
     def _draw_ing(x0, yy, amt_, aw, lns):
         """材料1件：・名前 ……… 分量（分量は1行目の右端・点線リーダーつき）"""
         d.text((x0, yy + 4), "・", font=fr, fill=(217, 112, 26))
@@ -1301,22 +1290,46 @@ def render_recipe_card(author, title, ingredients, steps, memo="", main_img=None
             yy += 32
             _draw_mixed(d, x0 + 26, yy + 4, ln, fr, fe, (27, 24, 21))
 
-    if two_col:
-        for r in range(0, len(ing), 2):
-            rh = 0
-            for k in (r, r + 1):
-                if k >= len(ing):
-                    continue
-                x0 = pad + (0 if k == r else cw // 2 + 10)
-                amt_, aw, lns = ing[k]
-                _draw_ing(x0, y, amt_, aw, lns)
-                rh = max(rh, len(lns))
-            y += rh * 32 + 8
-    else:
+    def _draw_zairyo_head(x0, yy):
+        if head_z:
+            _paste_art(img, head_z, x0, yy + 6, hz_h)
+            return yy + hz_h + 12
+        d.text((x0, yy + 14), "ざいりょう", font=fh, fill=(27, 24, 21))
+        d.line([x0, yy + 50, x0 + 150, yy + 50], fill=(217, 112, 26), width=3)
+        return yy + 52 + 12
+
+    if main_ph:   # メイン画像を左・材料を右に並べて余白を使う
+        img.paste(main_ph, (pad, y + 16))
+        d.rectangle([pad, y + 16, pad + main_ph.width - 1, y + 16 + main_ph.height - 1], outline=(226, 218, 203), width=2)
+        tape = _gohan_art(rng.choice(("tape_red", "tape_teal", "tape_yellow")))
+        if tape:
+            tw = round(tape.width * 44 / tape.height)
+            _paste_art(img, tape, pad + main_ph.width // 2 - tw // 2 + rng.randint(-40, 40), y, 44,
+                       angle=rng.choice((-1, 1)) * rng.uniform(2, 6), alpha=0.88)
+        rx = pad + main_ph.width + 40
+        ry = _draw_zairyo_head(rx, y + 6)
         for amt_, aw, lns in ing:
-            _draw_ing(pad, y, amt_, aw, lns)
-            y += len(lns) * 32 + 8
-    y += 18
+            _draw_ing(rx, ry, amt_, aw, lns)
+            ry += len(lns) * 32 + 8
+        y = max(y + 16 + main_ph.height, ry) + 30
+    else:
+        y = _draw_zairyo_head(pad, y) + 2
+        if two_col:
+            for r in range(0, len(ing), 2):
+                rh = 0
+                for k in (r, r + 1):
+                    if k >= len(ing):
+                        continue
+                    x0 = pad + (0 if k == r else cw // 2 + 10)
+                    amt_, aw, lns = ing[k]
+                    _draw_ing(x0, y, amt_, aw, lns)
+                    rh = max(rh, len(lns))
+                y += rh * 32 + 8
+        else:
+            for amt_, aw, lns in ing:
+                _draw_ing(pad, y, amt_, aw, lns)
+                y += len(lns) * 32 + 8
+        y += 18
     # つくりかた（手描き見出し・手順番号は手描き数字）
     if head_t:
         htw = _paste_art(img, head_t, pad, y + 6, ht_h)
