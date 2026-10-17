@@ -64,6 +64,7 @@ check("環境音: 1音源はループ指定のみ", (_asrc, _ab, _ao), ("/a/rain
 _asrc3, _ab3, _ao3 = B.ambient_ffmpeg_args(["/a/r.mp3", "/a/f.mp3", "/a/b.mp3"])
 check("環境音: 3音源の追加入力はbefore側", _asrc3 == "/a/b.mp3" and "-stream_loop -1 -i /a/r.mp3" in _ab3 and "-i /a/f.mp3" in _ab3 and _ab3.endswith("-stream_loop -1"), True)
 check("環境音: optionsに-iを含まずamixミックス", "-i " not in _ao3 and "[0:a][1:a][2:a]amix=inputs=3" in _ao3 and "-map [mix]" in _ao3, True)
+check("音楽: VCチャット告知関数あり", callable(getattr(B, "_announce_now_playing", None)), True)
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n

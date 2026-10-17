@@ -2713,6 +2713,19 @@ def _after_track(err):
     except Exception:
         pass
 
+async def _announce_now_playing():
+    """VCの内蔵チャットに再生中の曲を流す（サブタイトル表示と併用・みんなに見える）"""
+    vc, cur = _player.get("vc"), _player.get("current")
+    if not vc or not cur:
+        return
+    if _player.get("announced") == cur:   # 1曲リピート等で同じ曲が続くときは繰り返さない
+        return
+    _player["announced"] = cur
+    try:
+        await vc.channel.send(cur, silent=True)
+    except Exception as e:
+        print(f"🎵 再生告知失敗: {e!r}", flush=True)
+
 async def _play_next():
     vc = _player.get("vc")
     if not vc or not vc.is_connected():
@@ -2737,6 +2750,7 @@ async def _play_next():
     if not item:
         _player["current"] = None   # キューが尽きてもVCに居残る（解読キャッシュが温かいまま次の/playが速い）。退出は/stopか無人化で
         _player["cur_item"] = None
+        _player["announced"] = None
         try:
             asyncio.create_task(update_work_vc_status())
         except Exception:
@@ -2752,6 +2766,7 @@ async def _play_next():
             _player["cur_item"] = item
             vc.play(discord.PCMVolumeTransformer(pcm, volume=vol), after=_after_track)
             asyncio.create_task(update_work_vc_status())
+            asyncio.create_task(_announce_now_playing())
             return
         if item["type"] == "file":
             target, before = item["path"], None
@@ -2775,6 +2790,7 @@ async def _play_next():
         vc.play(src, after=_after_track)
         asyncio.create_task(_prefetch_next())   # 次の曲を再生中に裏で解決（曲間のラグをなくす）
         asyncio.create_task(update_work_vc_status())   # VCサブタイトルに再生中の曲を出す
+        asyncio.create_task(_announce_now_playing())   # VC内蔵チャットにも流す
     except Exception as e:
         print(f"🎵 play失敗: {e!r}", flush=True)
         _player["current"] = None
@@ -2815,7 +2831,7 @@ async def warmup_player(reason=""):
 
 async def stop_player():
     _player["queue"].clear()
-    _player.update(bgm=False, auto=False, current=None, loop="off", cur_item=None)
+    _player.update(bgm=False, auto=False, current=None, loop="off", cur_item=None, announced=None)
     vc = _player.get("vc")
     _player["vc"] = None
     if vc and vc.is_connected():
