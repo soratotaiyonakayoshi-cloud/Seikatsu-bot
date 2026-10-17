@@ -2615,6 +2615,39 @@ async def _ytdlp_resolve(query):
         print(f"yt-dlp失敗: {e!r}", flush=True)
         return None
 
+PLAYLIST_MAX = 50   # プレイリストから一度に積む上限
+
+async def _ytdlp_playlist(query):
+    """プレイリストURLなら (タイトル, [(URL, 曲名), ...]) を軽量抽出で返す。単曲・失敗は None"""
+    try:
+        import yt_dlp
+    except Exception:
+        return None
+    q = query.strip()
+    if not looks_like_url(q):
+        return None
+    opts = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist", "noplaylist": False}
+
+    def _ex():
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(q, download=False)
+            ents = list(info.get("entries") or [])
+            if len(ents) < 2:
+                return None
+            out = []
+            for e in ents[:PLAYLIST_MAX]:
+                u = e.get("url") or e.get("webpage_url")
+                if u and not looks_like_url(u):
+                    u = f"https://www.youtube.com/watch?v={u}"
+                if u:
+                    out.append((u, (e.get("title") or "？")[:80]))
+            return ((info.get("title") or "プレイリスト")[:60], out) if out else None
+    try:
+        return await asyncio.to_thread(_ex)
+    except Exception as e:
+        print(f"yt-dlpプレイリスト失敗: {e!r}", flush=True)
+        return None
+
 async def _work_vc_channel():
     wid = await meta_get("ch_workvc")
     return bot.get_channel(int(wid)) if wid else None
@@ -2668,6 +2701,12 @@ async def _play_next():
             src = discord.FFmpegPCMAudio(item["path"], executable=FFMPEG_PATH)
             _player["current"] = f"🎵 {os.path.splitext(os.path.basename(item['path']))[0]}"
         else:
+            if item["type"] == "yt_lazy":   # プレイリストの曲：再生直前にストリームURLを取得
+                r = await _ytdlp_resolve(item["query"])
+                if not r:
+                    print(f"🎵 取得失敗につきスキップ: {item.get('title')}", flush=True)
+                    return await _play_next()
+                item = {"type": "yt", "url": r[0], "title": item.get("title") or r[1]}
             src = discord.FFmpegPCMAudio(item["url"], executable=FFMPEG_PATH,
                                          before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5")
             _player["current"] = f"▶ {item['title']}"
@@ -2721,27 +2760,52 @@ async def bgm_list(interaction):
 
 bot.tree.add_command(bgm_grp)
 
-@bot.tree.command(name="play", description="YouTube等のURLや検索語をVCで再生（キューに追加）")
-@app_commands.describe(kyoku="URL または 検索語（例 lofi hiphop）")
+@bot.tree.command(name="play", description="YouTube等のURL・プレイリスト・検索語をVCで再生（キューに追加）")
+@app_commands.describe(kyoku="URL／プレイリストURL／検索語（例 lofi hiphop）")
 async def play_command(interaction, kyoku: str):
     await interaction.response.defer()
-    r = await _ytdlp_resolve(kyoku)
-    if not r:
-        await interaction.followup.send("⚠️ 再生情報を取得できませんでした（URLを確認。直らなければ yt-dlp の更新が必要かも）")
-        return
-    url, title = r
+    pl = await _ytdlp_playlist(kyoku)   # まずプレイリストとして軽量抽出（単曲ならNone）
+    single = None
+    if not pl:
+        single = await _ytdlp_resolve(kyoku)
+        if not single:
+            await interaction.followup.send("⚠️ 再生情報を取得できませんでした（URLを確認。直らなければ yt-dlp の更新が必要かも）")
+            return
     prefer = interaction.user.voice.channel if getattr(interaction.user, "voice", None) and interaction.user.voice else None
     vc = await ensure_player_vc(prefer)
     if not vc:
         await interaction.followup.send("❌ VCに接続できませんでした。どこかのVCに入ってから実行してね。")
         return
     _player["vc"] = vc
-    _player["queue"].append({"type": "yt", "url": url, "title": title})
+    if pl:
+        pl_title, tracks = pl
+        for u, t in tracks:
+            _player["queue"].append({"type": "yt_lazy", "query": u, "title": t})
+        note = f"📃 プレイリスト「**{pl_title}**」から **{len(tracks)} 曲**をキューに追加"
+        if len(tracks) >= PLAYLIST_MAX:
+            note += f"（上限{PLAYLIST_MAX}曲で切りました）"
+    else:
+        url, title = single
+        _player["queue"].append({"type": "yt", "url": url, "title": title})
+        note = f"⏭ キューに追加（{len(_player['queue'])} 曲待ち）：**{title}**"
     if not vc.is_playing():
         await _play_next()
-        await interaction.followup.send(f"▶ 再生：**{title}**")
-    else:
-        await interaction.followup.send(f"⏭ キューに追加（{len(_player['queue'])} 曲待ち）：**{title}**")
+        note += f"\n▶ 再生開始：{(_player.get('current') or '').lstrip('▶🎵 ')}"
+    await interaction.followup.send(note)
+
+@bot.tree.command(name="queue", description="再生キューを見る")
+async def queue_command(interaction):
+    cur, q = _player.get("current"), _player["queue"]
+    if not cur and not q:
+        await interaction.response.send_message("キューは空です。`/play` で追加してね。", ephemeral=True)
+        return
+    lines = ([f"🎶 いま：{cur}"] if cur else []) + \
+            [f"{i}. {it.get('title') or '？'}" for i, it in enumerate(q[:10], 1)]
+    if len(q) > 10:
+        lines.append(f"…ほか {len(q) - 10} 曲")
+    if _player.get("bgm"):
+        lines.append("-# キューが空になったら作業用BGMに戻ります")
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 @bot.tree.command(name="skip", description="いま流れている曲をスキップ")
 async def skip_command(interaction):
