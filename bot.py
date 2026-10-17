@@ -2723,9 +2723,21 @@ async def _play_next():
                                          before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5")
             _player["current"] = f"▶ {item['title']}"
         vc.play(src, after=_after_track)
+        asyncio.create_task(_prefetch_next())   # 次の曲を再生中に裏で解決（曲間のラグをなくす）
     except Exception as e:
         print(f"🎵 play失敗: {e!r}", flush=True)
         _player["current"] = None
+
+async def _prefetch_next():
+    """キュー先頭が未解決（yt_lazy）なら、再生中のうちにストリームURLを取得しておく"""
+    try:
+        q = _player["queue"]
+        if q and q[0].get("type") == "yt_lazy":
+            r = await _ytdlp_resolve(q[0]["query"])
+            if r and q and q[0].get("type") == "yt_lazy":   # 解決中にキューが動いていないか確認
+                q[0] = {"type": "yt", "url": r[0], "title": q[0].get("title") or r[1]}
+    except Exception as e:
+        print(f"🎵 先読みエラー: {e!r}", flush=True)
 
 async def start_bgm(auto=False):
     if not bgm_files():
@@ -2776,7 +2788,10 @@ bot.tree.add_command(bgm_grp)
 @app_commands.describe(kyoku="URL／プレイリストURL／検索語（例 lofi hiphop）")
 async def play_command(interaction, kyoku: str):
     await interaction.response.defer()
-    pl = await _ytdlp_playlist(kyoku)   # まずプレイリストとして軽量抽出（単曲ならNone）
+    # プレイリストっぽいURLのときだけプレイリスト抽出を試す（単曲URLの余計な1往復を省いて高速化）
+    pl = None
+    if looks_like_url(kyoku) and re.search(r"list=|/playlist|/sets/|/album", kyoku):
+        pl = await _ytdlp_playlist(kyoku)
     single = None
     if not pl:
         single = await _ytdlp_resolve(kyoku)
