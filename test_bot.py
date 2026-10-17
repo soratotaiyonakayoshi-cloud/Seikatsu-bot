@@ -1091,6 +1091,17 @@ async def main():
     await B.db.commit()
     check("VCステータス: 誰もいなければ空", await B.work_vc_status_text(datetime(2026, 8, 21, 13, 0, tzinfo=JST)), "")
 
+    # 📜 レシピカード
+    check("レシピ: パネルにボタン", any(getattr(i, "custom_id", "") == "sk_recipe" for i in B.MealView().children), True)
+    check("レシピ: 行パース（記号・番号を剥がす）", B.parse_recipe_lines("・卵 1個\n2. めんつゆ\n\n●ネギ"), ["卵 1個", "めんつゆ", "ネギ"])
+    check("レシピ: 上限で切る", len(B.parse_recipe_lines("\n".join(f"材料{i}" for i in range(30)))), 14)
+    rbuf = B.render_recipe_card("テスト", "超ながい料理名のテストでカードがはみ出さないか確認するやつ",
+                                [f"材料{i} 100g" for i in range(8)],
+                                ["とても長い手順の説明文をここに書いて折り返しが正しく効いているかどうかを確かめる" * 2, "まぜる", "たべる🌙"],
+                                "コツも長めに書いて折り返しを確認する。深夜に食べるとうまい")
+    check("レシピ: カードPNG生成", rbuf is not None and len(rbuf.getvalue()) > 20000, True)
+    check("レシピ: 手順10個超でも落ちない", B.render_recipe_card("t", "x", ["a"], [f"手順{i}" for i in range(12)]) is not None, True)
+
     # 🛠 設定パネル（apply_saitei_item＝/saiteiと同じ意味論）
     s130 = M(130, "せっちゃん")
     await B.ensure_user(s130)
