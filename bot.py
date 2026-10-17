@@ -1171,11 +1171,20 @@ def _wrap_px(d, s, f, fe, maxw):
         lines.append(cur)
     return lines or [""]
 
-def parse_amount_lines(text, limit=14):
-    """分量欄のパース（「200g」の数字を剥がさない・空行は空のまま残して材料と順序を合わせる）"""
+def parse_ingredient_lines(text, limit=14):
+    """材料欄のパース：1行を (名前, 分量) に分ける。「卵 1個」「卵：1個」どちらもOK、分量なしは名前だけ"""
     out = []
     for l in (text or "").splitlines():
-        out.append(l.strip().lstrip("・-･•●　 ").strip()[:20])
+        l = l.strip().lstrip("・-･•●　 ").strip()
+        if not l:
+            continue
+        m = re.split(r"[：:]", l, 1)
+        if len(m) == 2:
+            nm_, amt_ = m[0], m[1]
+        else:
+            parts = re.split(r"[\s　]+", l)
+            nm_, amt_ = (" ".join(parts[:-1]), parts[-1]) if len(parts) >= 2 else (l, "")
+        out.append((nm_.strip()[:40], amt_.strip()[:20]))
         if len(out) >= limit:
             break
     return out
@@ -1310,7 +1319,10 @@ def render_recipe_card(author, title, ingredients, steps, memo="", main_img=None
     y += 18
     # つくりかた（手描き見出し・手順番号は手描き数字）
     if head_t:
-        _paste_art(img, head_t, pad, y + 6, ht_h)
+        htw = _paste_art(img, head_t, pad, y + 6, ht_h)
+        hearts = _gohan_art("hearts")
+        if hearts:   # ハートは「つくりかた」の右に
+            _paste_art(img, hearts, pad + htw + 22, y + 2, 48)
         y += ht_h + 14
     else:
         d.text((pad, y + 14), "つくりかた", font=fh, fill=(27, 24, 21))
@@ -1334,9 +1346,6 @@ def render_recipe_card(author, title, ingredients, steps, memo="", main_img=None
     # ひとこと
     if memo_lines:
         y += 8
-        hearts = _gohan_art("hearts")
-        if hearts:
-            _paste_art(img, hearts, W - pad - 70, y - 2, 56)
         _draw_mixed(d, pad, y + 2, "ひとこと：", fh, fe, (217, 112, 26))
         yy = y + 4
         for ln in memo_lines:
@@ -1353,6 +1362,25 @@ def render_recipe_card(author, title, ingredients, steps, memo="", main_img=None
     return buf
 
 RECIPE_DRAFTS = {}   # uid -> 下書き（画像待ちの状態もここに持つ・再起動で消える使い捨て）
+RECIPE_PHOTO_STASH = {}   # uid -> 右クリック「レシピカードにする」で選んだ写真（モーダル送信時にメイン画像へ）
+
+@bot.tree.context_menu(name="レシピカードにする")
+async def recipe_from_photo(interaction: discord.Interaction, message: discord.Message):
+    """#ごはんに投稿済みの料理写真から、あとからレシピカードを作る（写真がメイン画像になる）"""
+    att = next((a for a in message.attachments if (a.content_type or "").startswith("image/")), None)
+    if not att:
+        await interaction.response.send_message("この投稿には画像がありません。料理の写真を右クリック（長押し）→アプリ から使ってね。", ephemeral=True)
+        return
+    try:
+        b = await att.read()
+    except Exception:
+        b = None
+    if not b:
+        await interaction.response.send_message("画像を読み込めませんでした。", ephemeral=True)
+        return
+    await ensure_user(interaction.user)
+    RECIPE_PHOTO_STASH[str(interaction.user.id)] = b
+    await interaction.response.send_modal(RecipeModal())
 
 def consume_recipe_photo(uid, b):
     """#ごはんに投稿された画像をレシピ下書きに取り込む（取り込んだらTrue＝食事記録にしない）"""
@@ -1368,30 +1396,28 @@ def consume_recipe_photo(uid, b):
 
 class RecipeModal(discord.ui.Modal, title="📜 レシピカードをつくる"):
     nm = discord.ui.TextInput(label="料理名", max_length=30, placeholder="例 悪魔の釜玉うどん")
-    zairyo = discord.ui.TextInput(label="材料（1行に1つ）", style=discord.TextStyle.paragraph, max_length=600,
-                                  placeholder="冷凍うどん\n卵\nめんつゆ")
-    bunryo = discord.ui.TextInput(label="分量（材料と同じ順で1行ずつ・任意）", style=discord.TextStyle.paragraph,
-                                  required=False, max_length=400, placeholder="1玉\n1個\n大さじ1")
+    zairyo = discord.ui.TextInput(label="材料（1行に1つ「材料 分量」の順）", style=discord.TextStyle.paragraph, max_length=600,
+                                  placeholder="冷凍うどん 1玉\n卵 1個\nめんつゆ 大さじ1\nラー油")
     tsukurikata = discord.ui.TextInput(label="作り方（1行に1手順）", style=discord.TextStyle.paragraph, max_length=1000,
                                        placeholder="うどんをレンジで3分\n卵とめんつゆをのせて混ぜる")
     kotsu = discord.ui.TextInput(label="ひとこと（任意）", required=False, max_length=80)
 
     async def on_submit(self, interaction):
         await ensure_user(interaction.user)
-        ingredients = parse_recipe_lines(self.zairyo.value)
+        ingredients = parse_ingredient_lines(self.zairyo.value)
         steps = parse_recipe_lines(self.tsukurikata.value, limit=12)
         if not ingredients or not steps:
             await interaction.response.send_message("⚠️ 材料と作り方をそれぞれ1行以上入れてください。", ephemeral=True)
             return
-        amounts = parse_amount_lines(self.bunryo.value)
-        ingredients = [(nm_, amounts[i] if i < len(amounts) else "") for i, nm_ in enumerate(ingredients)]
+        stashed = RECIPE_PHOTO_STASH.pop(str(interaction.user.id), None)
         RECIPE_DRAFTS[str(interaction.user.id)] = {
             "title": self.nm.value.strip(), "ing": ingredients, "steps": steps,
-            "memo": (self.kotsu.value or "").strip(), "main": None, "imgs": {}, "await": None}
+            "memo": (self.kotsu.value or "").strip(), "main": stashed, "imgs": {}, "await": None}
+        head = "📜 下書きができました！（メイン画像：選んだ写真を設定済み）\n" if stashed else "📜 下書きができました！\n"
         await interaction.response.send_message(
-            "📜 下書きができました！\n"
-            "🖼 写真を付けるなら、下のプルダウンで場所を選んでから**このチャンネルに画像を投稿**してください（自動で回収します・食事記録にはなりません）。付けなくてもOK。\n"
-            "そろったら ✅ で完成です。", view=RecipeBuildView(steps), ephemeral=True)
+            head
+            + "🖼 写真を付けるなら、下のプルダウンで場所を選んでから**このチャンネルに画像を投稿**してください（自動で回収します・食事記録にはなりません）。付けなくてもOK。\n"
+            + "そろったら ✅ で完成です。", view=RecipeBuildView(steps), ephemeral=True)
 
 class RecipeImgSelect(discord.ui.Select):
     def __init__(self, steps):

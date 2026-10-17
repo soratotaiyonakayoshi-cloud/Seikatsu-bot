@@ -55,7 +55,7 @@ check("起床パネルに📅今日の予定", any(getattr(i, "custom_id", "") =
 check("課題パネルは10ボタン", {i.custom_id for i in B.KadaiPanelView().children},
       {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki", "sk_exam", "sk_jw_free"})
 check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["album", "erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kesseki", "kigen", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "reizouko", "saitei", "setup", "suimin", "tips", "tsushinbo", "watashi"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["album", "erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kesseki", "kigen", "kiroku", "kojin", "nakama", "oyasumi", "rajio", "reizouko", "saitei", "setup", "suimin", "tips", "tsushinbo", "watashi", "レシピカードにする"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n
@@ -1095,7 +1095,8 @@ async def main():
     check("レシピ: パネルにボタン", any(getattr(i, "custom_id", "") == "sk_recipe" for i in B.MealView().children), True)
     check("レシピ: 行パース（記号・番号を剥がす）", B.parse_recipe_lines("・卵 1個\n2. めんつゆ\n\n●ネギ"), ["卵 1個", "めんつゆ", "ネギ"])
     check("レシピ: 上限で切る", len(B.parse_recipe_lines("\n".join(f"材料{i}" for i in range(30)))), 14)
-    check("レシピ: 分量は数字を剥がさない・空行は保持", B.parse_amount_lines("200g\n\n大さじ1"), ["200g", "", "大さじ1"])
+    check("レシピ: 材料行を(名前,分量)に分割", B.parse_ingredient_lines("冷凍うどん 1玉\n鶏もも肉：250g\nラー油\n・オリーブ オイル 大さじ1"),
+          [("冷凍うどん", "1玉"), ("鶏もも肉", "250g"), ("ラー油", ""), ("オリーブ オイル", "大さじ1")])
     check("レシピ: 分量タプルでも描ける", B.render_recipe_card("t", "x", [("卵", "1個"), ("塩", "")], ["まぜる"]) is not None, True)
     rbuf = B.render_recipe_card("テスト", "超ながい料理名のテストでカードがはみ出さないか確認するやつ",
                                 [f"材料{i} 100g" for i in range(8)],
