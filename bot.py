@@ -941,6 +941,24 @@ async def on_message(message):
         return
     if not any((a.content_type or "").startswith("image/") for a in message.attachments):
         return
+    rd = RECIPE_DRAFTS.get(str(message.author.id))
+    if rd and rd.get("await") is not None:   # 📜レシピ下書きが画像待ちなら、食事記録ではなくレシピに回収
+        att = next((a for a in message.attachments if (a.content_type or "").startswith("image/")), None)
+        b = None
+        if att:
+            try:
+                b = await att.read()
+            except Exception:
+                b = None
+        if consume_recipe_photo(message.author.id, b):
+            try:
+                await message.delete()   # 回収済みの投稿は片付ける（消えた＝取り込み完了の合図）
+            except Exception:
+                try:
+                    await message.add_reaction("📜")
+                except Exception:
+                    pass
+            return
     now = now_jst()
     sub = infer_meal_sub(now)
     await ensure_user(message.author)
@@ -1163,10 +1181,10 @@ def parse_recipe_lines(text, limit=14):
             break
     return out
 
-def render_recipe_card(author, title, ingredients, steps, memo=""):
-    """レシピをブランド配色＋手描き素材の1枚カードに。描けなければ None"""
+def render_recipe_card(author, title, ingredients, steps, memo="", main_img=None, step_imgs=None):
+    """レシピをブランド配色＋手描き素材の1枚カードに。main_img/step_imgs は画像bytes（任意）。描けなければ None"""
     try:
-        from PIL import Image as PImage, ImageDraw, ImageFont
+        from PIL import Image as PImage, ImageDraw, ImageFont, ImageOps
     except Exception:
         return None
     f0 = _find_cjk_font()
@@ -1175,7 +1193,7 @@ def render_recipe_card(author, title, ingredients, steps, memo=""):
     fb0 = _find_cjk_font_bold() or f0
     ef = _find_emoji_font()
     ft = ImageFont.truetype(fb0, 46)        # 料理名
-    fh = ImageFont.truetype(fb0, 26)        # 見出し
+    fh = ImageFont.truetype(fb0, 26)        # 見出し（素材が無いときのフォールバック）
     fr = ImageFont.truetype(f0, 22)         # 本文
     fs = ImageFont.truetype(f0, 18)         # 小さめ
     fe = ImageFont.truetype(ef, 22) if ef else None
@@ -1183,45 +1201,68 @@ def render_recipe_card(author, title, ingredients, steps, memo=""):
     cw = W - pad * 2
     probe = ImageDraw.Draw(PImage.new("RGB", (10, 10)))
     rng = random.Random(zlib.crc32(f"{author}:{title}".encode("utf-8")))
+
+    def _load(b, box):
+        try:
+            p = PImage.open(io.BytesIO(b)).convert("RGB")
+            p = ImageOps.exif_transpose(p)
+            p.thumbnail(box)
+            return p
+        except Exception:
+            return None
+    main_ph = _load(main_img, (640, 430)) if main_img else None
+    step_phs = {i: _load(b, (380, 260)) for i, b in (step_imgs or {}).items()}
+    step_phs = {i: p for i, p in step_phs.items() if p}
     title_lines = _wrap_px(probe, title, ft, fe, cw - 150)
-    ing = [(i, _wrap_px(probe, s, fr, fe, cw // 2 - 60)) for i, s in enumerate(ingredients)]
     two_col = len(ingredients) > 5
     ing_w = (cw // 2 - 30) if two_col else cw - 30
     ing = [(i, _wrap_px(probe, s, fr, fe, ing_w)) for i, s in enumerate(ingredients)]
     stp = [(i, _wrap_px(probe, s, fr, fe, cw - 70)) for i, s in enumerate(steps)]
-    memo_lines = _wrap_px(probe, memo, fs, fe, cw - 150) if memo else []
+    memo_lines = _wrap_px(probe, memo, fs, fe, cw - 180) if memo else []
+    head_z, head_t = _gohan_art("head_zairyo"), _gohan_art("head_tsukurikata")
+    hz_h, ht_h = 84, 44
     # 高さ見積もり
-    y_title = 66
+    y_title = 56
     h_title = len(title_lines) * 58 + 34
+    h_main = (main_ph.height + 44) if main_ph else 0
     h_ing_rows = [max(len(ing[k][1]) for k in (r, r + 1) if k < len(ing)) for r in range(0, len(ing), 2)] if two_col \
         else [len(l) for _, l in ing]
-    h_ing = 52 + sum(r * 32 + 8 for r in h_ing_rows) + 18
-    h_stp = 52 + sum(len(l) * 32 + 14 for _, l in stp) + 10
+    h_ing = (hz_h if head_z else 52) + 14 + sum(r * 32 + 8 for r in h_ing_rows) + 18
+    h_stp = (ht_h if head_t else 52) + 14 + sum(len(l) * 32 + 14 + (step_phs[i].height + 14 if i in step_phs else 0) for i, l in [(i, l) for i, l in stp]) + 10
     h_memo = (len(memo_lines) * 28 + 44) if memo_lines else 0
-    H = y_title + h_title + h_ing + h_stp + h_memo + 70
+    H = y_title + h_title + h_main + h_ing + h_stp + h_memo + 70
     img = PImage.new("RGB", (W, H), (247, 242, 232))
     d = ImageDraw.Draw(img)
-    # 飾り：上辺のマステ＋キラキラ＋茶碗
-    tape = _gohan_art(rng.choice(("tape_red", "tape_teal", "tape_yellow")))
-    if tape:
-        tw = round(tape.width * 46 / tape.height)
-        _paste_art(img, tape, W // 2 - tw // 2 + rng.randint(-60, 60), -14, 46, angle=rng.choice((-1, 1)) * rng.uniform(2, 6), alpha=0.88)
     y = y_title
     for tl in title_lines:
         _draw_mixed(d, pad + 4, y, tl, ft, fe, (27, 24, 21))
         y += 58
     bowl = _gohan_art("bowl")
     if bowl:
-        _paste_art(img, bowl, W - pad - 96, y_title - 18, 92)
+        _paste_art(img, bowl, W - pad - 96, y_title - 8, 92)
     spark = _gohan_art("sparkle")
     if spark:
-        _paste_art(img, spark, W - pad - 140, y_title - 26, 40)
+        _paste_art(img, spark, W - pad - 140, y_title - 16, 40)
     d.text((pad + 6, y + 2), f"{_plain_name(author, 14)} のレシピ", font=fs, fill=(217, 112, 26))
     y += 34
-    # ざいりょう
-    d.text((pad, y + 14), "ざいりょう", font=fh, fill=(27, 24, 21))
-    d.line([pad, y + 50, pad + 150, y + 50], fill=(217, 112, 26), width=3)
-    y += 52
+    if main_ph:   # メイン画像（上辺にマステを貼る）
+        mx = (W - main_ph.width) // 2
+        img.paste(main_ph, (mx, y + 14))
+        d.rectangle([mx, y + 14, mx + main_ph.width - 1, y + 14 + main_ph.height - 1], outline=(226, 218, 203), width=2)
+        tape = _gohan_art(rng.choice(("tape_red", "tape_teal", "tape_yellow")))
+        if tape:
+            tw = round(tape.width * 44 / tape.height)
+            _paste_art(img, tape, mx + main_ph.width // 2 - tw // 2 + rng.randint(-40, 40), y - 2, 44,
+                       angle=rng.choice((-1, 1)) * rng.uniform(2, 6), alpha=0.88)
+        y += main_ph.height + 44
+    # ざいりょう（手描き見出し）
+    if head_z:
+        _paste_art(img, head_z, pad, y + 6, hz_h)
+        y += hz_h + 14
+    else:
+        d.text((pad, y + 14), "ざいりょう", font=fh, fill=(27, 24, 21))
+        d.line([pad, y + 50, pad + 150, y + 50], fill=(217, 112, 26), width=3)
+        y += 52 + 14
     if two_col:
         for r in range(0, len(ing), 2):
             rh = 0
@@ -1244,10 +1285,14 @@ def render_recipe_card(author, title, ingredients, steps, memo=""):
                 y += 32
             y += 8
     y += 18
-    # つくりかた（手順番号は手描き数字）
-    d.text((pad, y + 14), "つくりかた", font=fh, fill=(27, 24, 21))
-    d.line([pad, y + 50, pad + 150, y + 50], fill=(217, 112, 26), width=3)
-    y += 52
+    # つくりかた（手描き見出し・手順番号は手描き数字）
+    if head_t:
+        _paste_art(img, head_t, pad, y + 6, ht_h)
+        y += ht_h + 14
+    else:
+        d.text((pad, y + 14), "つくりかた", font=fh, fill=(27, 24, 21))
+        d.line([pad, y + 50, pad + 150, y + 50], fill=(217, 112, 26), width=3)
+        y += 52 + 14
     for i, (_, lns) in enumerate(stp):
         dg = _gohan_art(f"d{i + 1}") if i < 9 else None
         if dg:
@@ -1257,17 +1302,22 @@ def render_recipe_card(author, title, ingredients, steps, memo=""):
         for ln in lns:
             _draw_mixed(d, pad + 44, y + 4, ln, fr, fe, (27, 24, 21))
             y += 32
+        if i in step_phs:   # 工程の画像（任意）
+            p = step_phs[i]
+            img.paste(p, (pad + 44, y + 6))
+            d.rectangle([pad + 44, y + 6, pad + 44 + p.width - 1, y + 6 + p.height - 1], outline=(226, 218, 203), width=2)
+            y += p.height + 14
         y += 14
-    # コツ・ひとこと
+    # ひとこと
     if memo_lines:
         y += 8
         hearts = _gohan_art("hearts")
         if hearts:
             _paste_art(img, hearts, W - pad - 70, y - 2, 56)
-        _draw_mixed(d, pad, y + 2, "コツ：", fh, fe, (217, 112, 26))
+        _draw_mixed(d, pad, y + 2, "ひとこと：", fh, fe, (217, 112, 26))
         yy = y + 4
         for ln in memo_lines:
-            _draw_mixed(d, pad + 86, yy, ln, fs, fe, (138, 131, 120))
+            _draw_mixed(d, pad + 140, yy, ln, fs, fe, (138, 131, 120))
             yy += 28
         y = yy + 8
     logo = _gohan_art("logo")
@@ -1279,13 +1329,27 @@ def render_recipe_card(author, title, ingredients, steps, memo=""):
     buf.seek(0)
     return buf
 
+RECIPE_DRAFTS = {}   # uid -> 下書き（画像待ちの状態もここに持つ・再起動で消える使い捨て）
+
+def consume_recipe_photo(uid, b):
+    """#ごはんに投稿された画像をレシピ下書きに取り込む（取り込んだらTrue＝食事記録にしない）"""
+    d = RECIPE_DRAFTS.get(str(uid))
+    if not d or d.get("await") is None or not b:
+        return False
+    if d["await"] == "main":
+        d["main"] = b
+    else:
+        d["imgs"][d["await"]] = b
+    d["await"] = None
+    return True
+
 class RecipeModal(discord.ui.Modal, title="📜 レシピカードをつくる"):
     nm = discord.ui.TextInput(label="料理名", max_length=30, placeholder="例 悪魔の釜玉うどん")
     zairyo = discord.ui.TextInput(label="材料（1行に1つ）", style=discord.TextStyle.paragraph, max_length=600,
                                   placeholder="冷凍うどん 1玉\n卵 1個\nめんつゆ 大さじ1")
     tsukurikata = discord.ui.TextInput(label="作り方（1行に1手順）", style=discord.TextStyle.paragraph, max_length=1000,
                                        placeholder="うどんをレンジで3分\n卵とめんつゆをのせて混ぜる")
-    kotsu = discord.ui.TextInput(label="コツ・ひとこと（任意）", required=False, max_length=80)
+    kotsu = discord.ui.TextInput(label="ひとこと（任意）", required=False, max_length=80)
 
     async def on_submit(self, interaction):
         await ensure_user(interaction.user)
@@ -1294,15 +1358,55 @@ class RecipeModal(discord.ui.Modal, title="📜 レシピカードをつくる")
         if not ingredients or not steps:
             await interaction.response.send_message("⚠️ 材料と作り方をそれぞれ1行以上入れてください。", ephemeral=True)
             return
-        await interaction.response.defer()   # 描画に少しかかる（返事はチャンネルに公開で出す）
+        RECIPE_DRAFTS[str(interaction.user.id)] = {
+            "title": self.nm.value.strip(), "ing": ingredients, "steps": steps,
+            "memo": (self.kotsu.value or "").strip(), "main": None, "imgs": {}, "await": None}
+        await interaction.response.send_message(
+            "📜 下書きができました！\n"
+            "🖼 写真を付けるなら、下のプルダウンで場所を選んでから**このチャンネルに画像を投稿**してください（自動で回収します・食事記録にはなりません）。付けなくてもOK。\n"
+            "そろったら ✅ で完成です。", view=RecipeBuildView(steps), ephemeral=True)
+
+class RecipeImgSelect(discord.ui.Select):
+    def __init__(self, steps):
+        opts = [discord.SelectOption(label="🖼 メイン画像（完成写真）", value="main")] + \
+               [discord.SelectOption(label=f"🖼 工程{i + 1}：{s[:16]}"[:100], value=str(i)) for i, s in enumerate(steps[:12])]
+        super().__init__(placeholder="🖼 写真を付ける場所を選ぶ → 次に画像を投稿", options=opts)
+
+    async def callback(self, interaction):
+        d = RECIPE_DRAFTS.get(str(interaction.user.id))
+        if not d:
+            await interaction.response.send_message("下書きが見つかりません（期限切れ）。もう一度 📜 からどうぞ。", ephemeral=True)
+            return
+        v = self.values[0]
+        d["await"] = "main" if v == "main" else int(v)
+        where = "メイン画像" if v == "main" else f"工程{int(v) + 1}"
+        await interaction.response.send_message(f"📸 次にこのチャンネルへ投稿した画像を **{where}** にします（投稿は自動で回収します）", ephemeral=True)
+
+class RecipeBuildView(discord.ui.View):
+    def __init__(self, steps):
+        super().__init__(timeout=900)
+        self.add_item(RecipeImgSelect(steps))
+
+    @discord.ui.button(label="✅ これで完成", style=discord.ButtonStyle.success)
+    async def done(self, interaction, button):
+        d = RECIPE_DRAFTS.pop(str(interaction.user.id), None)
+        if not d:
+            await interaction.response.send_message("下書きが見つかりません（期限切れ）。もう一度 📜 からどうぞ。", ephemeral=True)
+            return
+        await interaction.response.edit_message(content="🎨 カードを描いています…", view=None)
         buf = await asyncio.to_thread(render_recipe_card, interaction.user.display_name,
-                                      self.nm.value.strip(), ingredients, steps, (self.kotsu.value or "").strip())
+                                      d["title"], d["ing"], d["steps"], d["memo"], d["main"], d["imgs"])
         if not buf:
             await interaction.followup.send("カードを描けませんでした（フォント未検出）。", ephemeral=True)
             return
-        await interaction.followup.send(f"📜 **{interaction.user.display_name}** さんのレシピ：**{self.nm.value.strip()}**",
-                                        file=discord.File(buf, filename="recipe.png"))
+        await interaction.channel.send(f"📜 **{interaction.user.display_name}** さんのレシピ：**{d['title']}**",
+                                       file=discord.File(buf, filename="recipe.png"))
         await bump_panel("meal")
+
+    @discord.ui.button(label="❌ やめる", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction, button):
+        RECIPE_DRAFTS.pop(str(interaction.user.id), None)
+        await interaction.response.edit_message(content="やめました（下書きは消えました）。", view=None)
 
 async def meal_photo_rows(d1, d2, uid=None, limit=9):
     """期間中の写真つき食事記録。uid指定=本人の新しい順／無指定=👏の多い順（ベスト飯）"""

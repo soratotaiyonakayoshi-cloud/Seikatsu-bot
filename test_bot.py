@@ -1036,8 +1036,8 @@ async def main():
     check("アルバム: コラージュPNG生成", alb is not None and len(alb.getvalue()) > 5000, True)
     check("アルバム: 壊れた画像でも落ちない", B.render_meal_album([(b"notimage", "x")], "t") is not None, True)
     check("アルバム: 手描き素材が全部ある", all(B._gohan_art(n) is not None for n in
-          ["logo", "title", "sparkle", "bowl", "crown", "hearts", "tape_red", "tape_teal", "tape_yellow"]
-          + [f"d{i}" for i in range(10)]), True)
+          ["logo", "title", "sparkle", "bowl", "crown", "hearts", "tape_red", "tape_teal", "tape_yellow",
+           "head_zairyo", "head_tsukurikata"] + [f"d{i}" for i in range(10)]), True)
     check("アルバム: crown付きでも生成できる", B.render_meal_album([(_dummy((90, 90, 90)), "x")], "t", month=10, crown=True) is not None, True)
     from PIL import Image as _PI2
     a_plain = _PI2.open(B.render_meal_album([(_dummy((100, 100, 100)), "x")], "テスト"))
@@ -1101,6 +1101,23 @@ async def main():
                                 "コツも長めに書いて折り返しを確認する。深夜に食べるとうまい")
     check("レシピ: カードPNG生成", rbuf is not None and len(rbuf.getvalue()) > 20000, True)
     check("レシピ: 手順10個超でも落ちない", B.render_recipe_card("t", "x", ["a"], [f"手順{i}" for i in range(12)]) is not None, True)
+    from PIL import Image as _PI3
+    _db = _io.BytesIO()
+    _PI3.new("RGB", (400, 300), (100, 120, 80)).save(_db, "PNG")
+    _plain_h = _PI3.open(B.render_recipe_card("t", "画像テスト", ["a"], ["b"])).height
+    _img_h = _PI3.open(B.render_recipe_card("t", "画像テスト", ["a"], ["b"], "", _db.getvalue(), {0: _db.getvalue()})).height
+    check("レシピ: メイン＋工程画像で背が伸びる", _img_h > _plain_h + 300, True)
+    check("レシピ: 壊れた画像bytesでも落ちない", B.render_recipe_card("t", "x", ["a"], ["b"], "", b"broken", {0: b"broken"}) is not None, True)
+    # 画像回収フロー（下書きの状態機械）
+    B.RECIPE_DRAFTS["77"] = {"title": "t", "ing": ["a"], "steps": ["b", "c"], "memo": "", "main": None, "imgs": {}, "await": None}
+    check("レシピ回収: 待ち状態でなければ回収しない", B.consume_recipe_photo(77, b"img"), False)
+    B.RECIPE_DRAFTS["77"]["await"] = "main"
+    check("レシピ回収: メイン画像に取り込み", (B.consume_recipe_photo(77, b"img"), B.RECIPE_DRAFTS["77"]["main"]), (True, b"img"))
+    check("レシピ回収: 取り込み後は待ち解除", B.RECIPE_DRAFTS["77"]["await"], None)
+    B.RECIPE_DRAFTS["77"]["await"] = 1
+    B.consume_recipe_photo(77, b"img2")
+    check("レシピ回収: 工程2に取り込み", B.RECIPE_DRAFTS["77"]["imgs"], {1: b"img2"})
+    del B.RECIPE_DRAFTS["77"]
 
     # 🛠 設定パネル（apply_saitei_item＝/saiteiと同じ意味論）
     s130 = M(130, "せっちゃん")
