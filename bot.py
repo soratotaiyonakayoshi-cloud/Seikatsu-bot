@@ -211,6 +211,7 @@ CREATE TABLE IF NOT EXISTS exams(
 );
 CREATE TABLE IF NOT EXISTS exam_reminded(exam_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(exam_id, stage));
 CREATE TABLE IF NOT EXISTS user_slots(user_id TEXT NOT NULL, slot TEXT NOT NULL, label TEXT NOT NULL, place TEXT, PRIMARY KEY(user_id, slot));
+CREATE TABLE IF NOT EXISTS play_history(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, title TEXT, url TEXT, ts INTEGER);
 CREATE INDEX IF NOT EXISTS idx_work_user_day ON work_sessions(user_id, day);
 """
 db = None
@@ -2580,7 +2581,8 @@ async def play_radio(guild, manual=False):
 # ------------------------------------------------------------
 BGM_DIR = os.getenv("BGM_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "music"))
 BENKYOKAI_BGM = os.getenv("BENKYOKAI_BGM", "1") == "1"   # 勉強会の時間に自動でBGMを流す
-_player = {"vc": None, "queue": [], "bgm": False, "auto": False, "current": None}
+_player = {"vc": None, "queue": [], "bgm": False, "auto": False, "current": None,
+           "volume": 1.0, "loop": "off", "cur_item": None}
 
 def bgm_files():
     try:
@@ -2699,16 +2701,29 @@ async def _play_next():
         await stop_player()
         return
     item = None
-    if _player["queue"]:
-        item = _player["queue"].pop(0)
-    elif _player["bgm"]:
-        fs = bgm_files()
-        if fs:
-            item = {"type": "file", "path": os.path.join(BGM_DIR, random.choice(fs))}
+    skip_once = _player.pop("skip_once", False)
+    cur = _player.get("cur_item")
+    if _player.get("loop") == "one" and cur and not skip_once:
+        item = cur   # 1曲リピート（/skipで抜けられる）
+    else:
+        if _player.get("loop") == "all" and cur:
+            _player["queue"].append(cur)   # キュー全体リピート：終わった曲を最後尾へ
+        if _player["queue"]:
+            item = _player["queue"].pop(0)
+        elif _player["bgm"]:
+            fs = bgm_files()
+            if fs:
+                item = {"type": "file", "path": os.path.join(BGM_DIR, random.choice(fs))}
     if not item:
         _player["current"] = None   # キューが尽きてもVCに居残る（解読キャッシュが温かいまま次の/playが速い）。退出は/stopか無人化で
+        _player["cur_item"] = None
+        try:
+            asyncio.create_task(update_work_vc_status())
+        except Exception:
+            pass
         return
     try:
+        by = item.get("by")
         if item["type"] == "file":
             src = discord.FFmpegPCMAudio(item["path"], executable=FFMPEG_PATH)
             _player["current"] = f"🎵 {os.path.splitext(os.path.basename(item['path']))[0]}"
@@ -2718,12 +2733,14 @@ async def _play_next():
                 if not r:
                     print(f"🎵 取得失敗につきスキップ: {item.get('title')}", flush=True)
                     return await _play_next()
-                item = {"type": "yt", "url": r[0], "title": item.get("title") or r[1]}
+                item = {"type": "yt", "url": r[0], "title": item.get("title") or r[1], "by": by}
             src = discord.FFmpegPCMAudio(item["url"], executable=FFMPEG_PATH,
                                          before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5")
-            _player["current"] = f"▶ {item['title']}"
-        vc.play(src, after=_after_track)
+            _player["current"] = f"▶ {item['title']}" + (f"（{by}）" if by else "")
+        _player["cur_item"] = item
+        vc.play(discord.PCMVolumeTransformer(src, volume=_player.get("volume", 1.0)), after=_after_track)
         asyncio.create_task(_prefetch_next())   # 次の曲を再生中に裏で解決（曲間のラグをなくす）
+        asyncio.create_task(update_work_vc_status())   # VCサブタイトルに再生中の曲を出す
     except Exception as e:
         print(f"🎵 play失敗: {e!r}", flush=True)
         _player["current"] = None
@@ -2735,7 +2752,7 @@ async def _prefetch_next():
         if q and q[0].get("type") == "yt_lazy":
             r = await _ytdlp_resolve(q[0]["query"])
             if r and q and q[0].get("type") == "yt_lazy":   # 解決中にキューが動いていないか確認
-                q[0] = {"type": "yt", "url": r[0], "title": q[0].get("title") or r[1]}
+                q[0] = {"type": "yt", "url": r[0], "title": q[0].get("title") or r[1], "by": q[0].get("by")}
     except Exception as e:
         print(f"🎵 先読みエラー: {e!r}", flush=True)
 
@@ -2763,7 +2780,7 @@ async def warmup_player(reason=""):
 
 async def stop_player():
     _player["queue"].clear()
-    _player.update(bgm=False, auto=False, current=None)
+    _player.update(bgm=False, auto=False, current=None, loop="off", cur_item=None)
     vc = _player.get("vc")
     _player["vc"] = None
     if vc and vc.is_connected():
@@ -2815,16 +2832,24 @@ async def play_command(interaction, kyoku: str):
         await interaction.followup.send("❌ VCに接続できませんでした。どこかのVCに入ってから実行してね。")
         return
     _player["vc"] = vc
+    by = interaction.user.display_name
+    ts0 = int(now_jst().timestamp())
     if pl:
         pl_title, tracks = pl
         for u, t in tracks:
-            _player["queue"].append({"type": "yt_lazy", "query": u, "title": t})
+            _player["queue"].append({"type": "yt_lazy", "query": u, "title": t, "by": by})
+            await db.execute("INSERT INTO play_history(user_id,title,url,ts) VALUES(?,?,?,?)",
+                             (str(interaction.user.id), t, u, ts0))
+        await db.commit()
         note = f"📃 プレイリスト「**{pl_title}**」から **{len(tracks)} 曲**をキューに追加"
         if len(tracks) >= PLAYLIST_MAX:
             note += f"（上限{PLAYLIST_MAX}曲で切りました）"
     else:
         url, title = single
-        _player["queue"].append({"type": "yt", "url": url, "title": title})
+        _player["queue"].append({"type": "yt", "url": url, "title": title, "by": by})
+        await db.execute("INSERT INTO play_history(user_id,title,url,ts) VALUES(?,?,?,?)",
+                         (str(interaction.user.id), title, kyoku.strip() if looks_like_url(kyoku) else "", ts0))
+        await db.commit()
         note = f"⏭ キューに追加（{len(_player['queue'])} 曲待ち）：**{title}**"
     if not vc.is_playing():
         await _play_next()
@@ -2837,13 +2862,59 @@ async def queue_command(interaction):
     if not cur and not q:
         await interaction.response.send_message("キューは空です。`/play` で追加してね。", ephemeral=True)
         return
-    lines = ([f"🎶 いま：{cur}"] if cur else []) + \
-            [f"{i}. {it.get('title') or '？'}" for i, it in enumerate(q[:10], 1)]
+    loop_note = {"one": "（🔂 1曲リピート中）", "all": "（🔁 キューリピート中）"}.get(_player.get("loop"), "")
+    lines = ([f"🎶 いま：{cur}{loop_note}"] if cur else []) + \
+            [f"{i}. {it.get('title') or '？'}" + (f"（{it['by']}）" if it.get("by") else "") for i, it in enumerate(q[:10], 1)]
     if len(q) > 10:
         lines.append(f"…ほか {len(q) - 10} 曲")
     if _player.get("bgm"):
         lines.append("-# キューが空になったら作業用BGMに戻ります")
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+@bot.tree.command(name="pause", description="再生を一時停止")
+async def pause_command(interaction):
+    vc = _player.get("vc")
+    if not vc or not vc.is_playing():
+        await interaction.response.send_message("いま何も流れていません。", ephemeral=True)
+        return
+    vc.pause()
+    await interaction.response.send_message("⏸ 一時停止しました（`/resume` で再開）。")
+
+@bot.tree.command(name="resume", description="一時停止中の再生を再開")
+async def resume_command(interaction):
+    vc = _player.get("vc")
+    if not vc or not vc.is_paused():
+        await interaction.response.send_message("一時停止中の曲はありません。", ephemeral=True)
+        return
+    vc.resume()
+    await interaction.response.send_message("▶ 再開しました。")
+
+@bot.tree.command(name="volume", description="音量を変える（10〜200%）")
+@app_commands.describe(percent="音量％（既定100）")
+async def volume_command(interaction, percent: int):
+    v = max(10, min(200, percent)) / 100
+    _player["volume"] = v
+    vc = _player.get("vc")
+    if vc and vc.source and hasattr(vc.source, "volume"):
+        vc.source.volume = v   # いま流れている曲にも即反映
+    await interaction.response.send_message(f"🔊 音量を {int(v * 100)}% にしました。")
+
+@bot.tree.command(name="loop", description="リピート再生の切り替え")
+@app_commands.describe(mode="リピートの種類")
+@app_commands.choices(mode=[app_commands.Choice(name="オフ", value="off"),
+                            app_commands.Choice(name="🔂 いまの曲を1曲リピート", value="one"),
+                            app_commands.Choice(name="🔁 キュー全体をリピート", value="all")])
+async def loop_command(interaction, mode: app_commands.Choice[str]):
+    _player["loop"] = mode.value
+    await interaction.response.send_message(f"{'🔂' if mode.value == 'one' else '🔁' if mode.value == 'all' else '➡'} リピート：**{mode.name}**")
+
+@bot.tree.command(name="shuffle", description="キューをシャッフル")
+async def shuffle_command(interaction):
+    if len(_player["queue"]) < 2:
+        await interaction.response.send_message("シャッフルするほどキューがありません。", ephemeral=True)
+        return
+    random.shuffle(_player["queue"])
+    await interaction.response.send_message(f"🔀 {len(_player['queue'])} 曲をシャッフルしました。")
 
 @bot.tree.command(name="join", description="BotをVCに呼ぶ（待機・準備だけして再生はしない）")
 async def join_command(interaction):
@@ -6118,6 +6189,11 @@ async def work_vc_status_text(now=None):
     now = now or now_jst()
     if BENKYOKAI_START >= 0 and BENKYOKAI_START <= now.hour < BENKYOKAI_END:
         return f"📖 ミニ勉強会ちゅう（〜{BENKYOKAI_END}:00）"
+    vc = _player.get("vc")   # 再生中の曲（作業部屋で流しているときだけ）
+    if _player.get("current") and vc and vc.is_connected():
+        wid = await meta_get("ch_workvc")
+        if wid and vc.channel.id == int(wid):
+            return _player["current"][:80]
     day = day_str(now)
     async with db.execute("SELECT user_id, note FROM work_sessions WHERE end_ts IS NULL ORDER BY start_ts") as c:
         rows = await c.fetchall()
