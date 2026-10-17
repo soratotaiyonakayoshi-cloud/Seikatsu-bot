@@ -2724,8 +2724,9 @@ async def _play_next():
         return
     try:
         by = item.get("by")
+        vol = _player.get("volume", 1.0)
         if item["type"] == "file":
-            src = discord.FFmpegPCMAudio(item["path"], executable=FFMPEG_PATH)
+            target, before = item["path"], None
             _player["current"] = f"🎵 {os.path.splitext(os.path.basename(item['path']))[0]}"
         else:
             if item["type"] == "yt_lazy":   # プレイリストの曲：再生直前にストリームURLを取得
@@ -2734,11 +2735,16 @@ async def _play_next():
                     print(f"🎵 取得失敗につきスキップ: {item.get('title')}", flush=True)
                     return await _play_next()
                 item = {"type": "yt", "url": r[0], "title": item.get("title") or r[1], "by": by}
-            src = discord.FFmpegPCMAudio(item["url"], executable=FFMPEG_PATH,
-                                         before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5")
+            target, before = item["url"], "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
             _player["current"] = f"▶ {item['title']}" + (f"（{by}）" if by else "")
         _player["cur_item"] = item
-        vc.play(discord.PCMVolumeTransformer(src, volume=_player.get("volume", 1.0)), after=_after_track)
+        if abs(vol - 1.0) < 0.01:
+            # 音量100%ならOpusパススルー：元がOpus（YouTube音声）なら再エンコードなしで転送＝CPU激減→速度ブレ対策
+            src = await discord.FFmpegOpusAudio.from_probe(target, executable=FFMPEG_PATH, before_options=before, method="fallback")
+        else:
+            pcm = discord.FFmpegPCMAudio(target, executable=FFMPEG_PATH, before_options=before)
+            src = discord.PCMVolumeTransformer(pcm, volume=vol)
+        vc.play(src, after=_after_track)
         asyncio.create_task(_prefetch_next())   # 次の曲を再生中に裏で解決（曲間のラグをなくす）
         asyncio.create_task(update_work_vc_status())   # VCサブタイトルに再生中の曲を出す
     except Exception as e:
@@ -2748,6 +2754,7 @@ async def _play_next():
 async def _prefetch_next():
     """キュー先頭が未解決（yt_lazy）なら、再生中のうちにストリームURLを取得しておく"""
     try:
+        await asyncio.sleep(3)   # 再生バッファが安定してから裏作業を始める（出だしの速度ブレ対策）
         q = _player["queue"]
         if q and q[0].get("type") == "yt_lazy":
             r = await _ytdlp_resolve(q[0]["query"])
@@ -2895,9 +2902,12 @@ async def volume_command(interaction, percent: int):
     v = max(10, min(200, percent)) / 100
     _player["volume"] = v
     vc = _player.get("vc")
-    if vc and vc.source and hasattr(vc.source, "volume"):
+    live = bool(vc and vc.source and hasattr(vc.source, "volume"))
+    if live:
         vc.source.volume = v   # いま流れている曲にも即反映
-    await interaction.response.send_message(f"🔊 音量を {int(v * 100)}% にしました。")
+    note = "" if live or not (vc and vc.is_playing()) else "（いまの曲は軽量モードで再生中のため、次の曲から反映）"
+    await interaction.response.send_message(f"🔊 音量を {int(v * 100)}% にしました。{note}"
+                                            + ("\n-# 100%に戻すとCPUにやさしい軽量モードで再生します" if abs(v - 1.0) >= 0.01 else ""))
 
 @bot.tree.command(name="loop", description="リピート再生の切り替え")
 @app_commands.describe(mode="リピートの種類")
