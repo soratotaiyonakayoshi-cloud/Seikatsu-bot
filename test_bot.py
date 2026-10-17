@@ -55,7 +55,7 @@ check("起床パネルに📅今日の予定", any(getattr(i, "custom_id", "") =
 check("課題パネルは10ボタン", {i.custom_id for i in B.KadaiPanelView().children},
       {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki", "sk_exam", "sk_jw_free"})
 check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["album", "ambient", "bgm", "erai", "hantei", "help", "jikanwari", "jikoshokai", "join", "kadai", "kesseki", "kigen", "kiroku", "kojin", "loop", "nakama", "oyasumi", "pause", "play", "queue", "rajio", "reizouko", "resume", "saitei", "setup", "shuffle", "skip", "stop", "suimin", "tips", "tsushinbo", "volume", "watashi", "レシピカードにする"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["BGMに追加", "album", "ambient", "bgm", "erai", "hantei", "help", "jikanwari", "jikoshokai", "join", "kadai", "kesseki", "kigen", "kiroku", "kojin", "loop", "nakama", "oyasumi", "pause", "play", "queue", "rajio", "reizouko", "resume", "saitei", "setup", "shuffle", "skip", "stop", "suimin", "tips", "tsushinbo", "volume", "watashi", "レシピカードにする"])
 check("音楽: URL判定", (B.looks_like_url("https://youtu.be/x"), B.looks_like_url("lofi hiphop")), (True, False))
 check("音楽: 音源なしなら空リスト", isinstance(B.bgm_files(), list), True)
 check("環境音: ファイル一覧はリスト", isinstance(B.ambient_files(), list), True)
@@ -65,6 +65,8 @@ _asrc3, _ab3, _ao3 = B.ambient_ffmpeg_args(["/a/r.mp3", "/a/f.mp3", "/a/b.mp3"])
 check("環境音: 3音源の追加入力はbefore側", _asrc3 == "/a/b.mp3" and "-stream_loop -1 -i /a/r.mp3" in _ab3 and "-i /a/f.mp3" in _ab3 and _ab3.endswith("-stream_loop -1"), True)
 check("環境音: optionsに-iを含まずamixミックス", "-i " not in _ao3 and "[0:a][1:a][2:a]amix=inputs=3" in _ao3 and "-map [mix]" in _ao3, True)
 check("音楽: VCチャット告知関数あり", callable(getattr(B, "_announce_now_playing", None)), True)
+check("BGM追加: パス区切りを除去", "/" not in B._safe_bgm_name("../../etc/passwd.mp3") and ".." not in B._safe_bgm_name("..\\..\\x.mp3") and B._safe_bgm_name("うた.mp3") == "うた.mp3", True)
+check("BGM: removeサブコマンドあり", sorted(c.name for c in B.bgm_grp.commands), ["list", "remove", "start", "stop"])
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n

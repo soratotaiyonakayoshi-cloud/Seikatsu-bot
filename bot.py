@@ -2764,7 +2764,8 @@ async def _play_next():
             pcm = discord.FFmpegPCMAudio(src_path, executable=FFMPEG_PATH, before_options=before, options=opts or None)
             _player["current"] = "🌿 環境音：" + "＋".join(item["names"])
             _player["cur_item"] = item
-            vc.play(discord.PCMVolumeTransformer(pcm, volume=vol), after=_after_track)
+            vc.play(discord.PCMVolumeTransformer(pcm, volume=vol), after=_after_track,
+                    bitrate=256, expected_packet_loss=0.05)
             asyncio.create_task(update_work_vc_status())
             asyncio.create_task(_announce_now_playing())
             return
@@ -2787,7 +2788,8 @@ async def _play_next():
         else:
             pcm = discord.FFmpegPCMAudio(target, executable=FFMPEG_PATH, before_options=before)
             src = discord.PCMVolumeTransformer(pcm, volume=vol)
-        vc.play(src, after=_after_track)
+        # 追加パラメータはPCM経路（音量≠100%）の内部エンコーダ向け高音質設定。Opusパススルー時は無視される
+        vc.play(src, after=_after_track, bitrate=256, signal_type="music", expected_packet_loss=0.05)
         asyncio.create_task(_prefetch_next())   # 次の曲を再生中に裏で解決（曲間のラグをなくす）
         asyncio.create_task(update_work_vc_status())   # VCサブタイトルに再生中の曲を出す
         asyncio.create_task(_announce_now_playing())   # VC内蔵チャットにも流す
@@ -2809,7 +2811,7 @@ async def _prefetch_next():
 
 async def start_bgm(auto=False):
     if not bgm_files():
-        return "❌ 音源がありません（VMの `music/` フォルダに mp3 などを置いてください）"
+        return "❌ 音源がありません（音声ファイルを投稿して右クリック→アプリ→「BGMに追加」で入れられます）"
     vc = await ensure_player_vc()
     if not vc:
         return "❌ 作業部屋VCに接続できませんでした"
@@ -2857,9 +2859,79 @@ async def bgm_stop(interaction):
 async def bgm_list(interaction):
     fs = bgm_files()
     if not fs:
-        await interaction.response.send_message("音源がまだありません。VMの `music/` に mp3 などを置いてね。", ephemeral=True)
+        await interaction.response.send_message("音源がまだありません。音声ファイルを投稿して右クリック→アプリ→「BGMに追加」で入れられるよ。", ephemeral=True)
         return
     await interaction.response.send_message("🎵 BGM音源：\n" + "\n".join(f"・{os.path.splitext(f)[0]}" for f in fs[:30]), ephemeral=True)
+
+BGM_EXTS = (".mp3", ".m4a", ".ogg", ".wav", ".flac")
+BGM_MAX_MB = 40
+
+def _safe_bgm_name(name):
+    """添付ファイル名を保存用に無害化（パス区切り除去・先頭ドット除去・80字まで）"""
+    base = os.path.basename(str(name or "")).replace("\\", "").replace("/", "").strip()
+    return base.lstrip(".")[:80]
+
+@bot.tree.context_menu(name="BGMに追加")
+async def add_bgm_ctx(interaction: discord.Interaction, message: discord.Message):
+    """音声ファイル付きの投稿を右クリック→アプリ→BGMに追加 で、だれでもBGM音源を増やせる"""
+    atts = [a for a in message.attachments if a.filename.lower().endswith(BGM_EXTS)]
+    if not atts:
+        await interaction.response.send_message("⚠️ 音声ファイル（mp3/m4a/ogg/wav/flac）が付いた投稿で使ってね。", ephemeral=True)
+        return
+    await interaction.response.defer()
+    added, skipped = [], []
+    for a in atts:
+        if a.size > BGM_MAX_MB * 1024 * 1024:
+            skipped.append(f"{a.filename}（{BGM_MAX_MB}MB超え）")
+            continue
+        name = _safe_bgm_name(a.filename)
+        if not name:
+            skipped.append(a.filename)
+            continue
+        stem, ext = os.path.splitext(name)
+        path, i = os.path.join(BGM_DIR, name), 2
+        while os.path.exists(path):   # 同名は(2)(3)…を付けて共存
+            path = os.path.join(BGM_DIR, f"{stem}({i}){ext}")
+            i += 1
+        try:
+            os.makedirs(BGM_DIR, exist_ok=True)
+            await a.save(path)
+            added.append(os.path.splitext(os.path.basename(path))[0])
+        except Exception as e:
+            print(f"🎵 BGM追加失敗: {e!r}", flush=True)
+            skipped.append(a.filename)
+    msg = ""
+    if added:
+        msg = "🎵 BGMに追加しました：" + "、".join(f"「{t}」" for t in added) + f"（ぜんぶで{len(bgm_files())}曲）"
+    if skipped:
+        msg += ("\n" if msg else "") + "⚠️ 追加できなかった：" + "、".join(skipped)
+    await interaction.followup.send(msg or "⚠️ 追加できませんでした。")
+
+class BgmRemoveSelect(discord.ui.Select):
+    def __init__(self):
+        fs = bgm_files()[:25]
+        super().__init__(placeholder="削除する曲を選ぶ", min_values=1, max_values=max(len(fs), 1),
+                         options=[discord.SelectOption(label=os.path.splitext(f)[0][:100], value=f) for f in fs])
+
+    async def callback(self, interaction):
+        done = []
+        for v in self.values:
+            try:
+                os.remove(os.path.join(BGM_DIR, os.path.basename(v)))
+                done.append(os.path.splitext(v)[0])
+            except Exception as e:
+                print(f"🎵 BGM削除失敗: {e!r}", flush=True)
+        await interaction.response.edit_message(
+            content=("🗑 削除しました：" + "、".join(f"「{t}」" for t in done)) if done else "⚠️ 削除できませんでした。", view=None)
+
+@bgm_grp.command(name="remove", description="BGM音源を削除（選択式）")
+async def bgm_remove(interaction):
+    if not bgm_files():
+        await interaction.response.send_message("音源がまだありません。", ephemeral=True)
+        return
+    v = discord.ui.View(timeout=300)
+    v.add_item(BgmRemoveSelect())
+    await interaction.response.send_message("削除する曲を選んでね（先頭25曲まで表示）", view=v, ephemeral=True)
 
 bot.tree.add_command(bgm_grp)
 
