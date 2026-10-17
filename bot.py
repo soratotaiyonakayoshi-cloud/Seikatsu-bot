@@ -91,7 +91,8 @@ CH = {
     "tsushinbo": ("つうしんぼ📮", "毎週日曜の夜に、その週の通信簿（達成率ランキング・各賞）が届く場所。"),
     "kadai": ("課題📚", "🎓 で履修科目を登録 → 気づいた人が ➕ で課題を登録 → 同じ科目の履修者だけに通知＆リマインド（3日前・前日・当日）。\n"
               "毎週出るプリントや出席フォームは 🔁 毎週課題に登録すれば自動で課題化。投稿の ✅ で完了。コマンド派は `/jikanwari` `/kadai` でも。"),
-    "settei": ("設定🔧", "`/saitei` で自分の最低限を決める。`/kojin add` で自分だけの項目を追加し、📝ボタンで毎日チェック。`/oyasumi` でお休み申告。"),
+    "settei": ("設定🔧", "🛠 ボタンから項目を選んで自分の最低限を設定（`/saitei` でまとめて設定も可）。毎週の定休日（曜日）もここで。\n"
+               "`/kojin add` で自分だけの項目を追加し、📝ボタンで毎日チェック。`/oyasumi` で単発のお休み申告。"),
 }
 CHORES = [  # (key, ラベル, 絵文字, 行)
     ("cook", "料理", "🍳", 0), ("clean", "掃除", "🧹", 0), ("dish", "皿洗い", "🍽️", 0), ("trash", "ごみ捨て", "🗑", 0),
@@ -244,7 +245,8 @@ async def db_init():
               "ALTER TABLE memos ADD COLUMN done INTEGER NOT NULL DEFAULT 0",
               "ALTER TABLE users ADD COLUMN wake_remind INTEGER NOT NULL DEFAULT 0",
               "ALTER TABLE events ADD COLUMN msg_id TEXT",
-              "ALTER TABLE recurring_kadai ADD COLUMN due_days TEXT"):
+              "ALTER TABLE recurring_kadai ADD COLUMN due_days TEXT",
+              "ALTER TABLE users ADD COLUMN off_weekdays TEXT"):
         try:
             await db.execute(m)
             await db.commit()
@@ -2068,10 +2070,29 @@ async def prejudge_reminder(day):
                   + "\n-# 🌙 を押してから寝ると、朝☀️を忘れても最初の活動で自動記録されます"
                   + hitokoto_suffix())
 
+async def materialize_weekly_off(day):
+    """毎週の定休日（users.off_weekdays）をその日の off_days に実体化する（毎日1回）。
+    判定・ストリーク・事前/起床リマインドは off_days を見るので、これだけで全部が休みになる"""
+    dc = DAY_CHARS[date.fromisoformat(day).weekday()]
+    async with db.execute("SELECT id FROM users WHERE off_weekdays LIKE ?", (f"%{dc}%",)) as c:
+        rows = await c.fetchall()
+    n = 0
+    for r in rows:
+        cur = await db.execute("INSERT OR IGNORE INTO off_days(day,user_id,reason) VALUES(?,?,'定休')", (day, r["id"]))
+        n += cur.rowcount
+    await db.commit()
+    return n
+
 @tasks.loop(minutes=1)
 async def judge_loop():
     now = now_jst()
     day = day_str(now)
+    try:
+        if await meta_get("weekly_off_day") != day:
+            await meta_set("weekly_off_day", day)
+            await materialize_weekly_off(day)
+    except Exception as e:
+        print(f"定休日エラー: {e!r}", flush=True)
     try:
         await wake_remind_check(now)   # ⏰起床リマインド（オプトインの人だけ）
     except Exception as e:
@@ -2408,13 +2429,13 @@ async def ensure_custom_course(name):
     await db.commit()
     return await get_course(code)
 
-def parse_due(s):
+def parse_due(s, now=None):
     """'10/15' '10/15 23:59' '10月15日' '2026/10/15 17:00' → datetime(JST)。不正なら None。時刻省略は 23:59"""
     t = unicodedata.normalize("NFKC", s or "").strip()
     m = re.fullmatch(r"(?:(\d{4})[/年])?\s*(\d{1,2})[/月]\s*(\d{1,2})日?\s*(?:(\d{1,2})[:時]\s*(\d{2})?分?)?", t)
     if not m:
         return None
-    now = now_jst()
+    now = now or now_jst()
     y = int(m.group(1)) if m.group(1) else now.year
     mo, d = int(m.group(2)), int(m.group(3))
     h = int(m.group(4)) if m.group(4) else 23
@@ -3372,10 +3393,11 @@ def parse_day_chars_input(s):
     for p in re.split(r"[,、\s・]+", t):
         if not p:
             continue
-        if len(p) != 1 or p not in DAY_CHARS:
+        if not all(ch in DAY_CHARS for ch in p):   # 「土日」のような連結表記もOK
             return None
-        if p not in out:
-            out.append(p)
+        for ch in p:
+            if ch not in out:
+                out.append(ch)
     return sorted(out, key=DAY_CHARS.index) or None
 
 def rule_day_chars(rule, course):
@@ -4035,7 +4057,7 @@ def parse_day_spec(spec, now):
     parts = [x for x in re.split(r"\s*[-〜~～]\s*", t) if x]
     if not parts or len(parts) > 2:
         return None
-    ds = [parse_due(x) for x in parts]
+    ds = [parse_due(x, now) for x in parts]
     if any(d is None for d in ds):
         return None
     a, b = ds[0].date(), ds[-1].date()
@@ -4178,6 +4200,117 @@ async def send_mycheck(interaction):
         return
     await interaction.response.send_message(await mycheck_text(uid, day), view=await MyCheckView.build(uid, day), ephemeral=True)
 
+# ---- 🛠 最低限の設定パネル（/saitei のパネル版：項目を選んで1つずつ設定） ----
+SAITEI_ITEMS = [
+    ("kishou",   "☀️ 起床の締切",            "例 7:00（「なし」で解除）"),
+    ("suimin",   "😴 最低睡眠時間(h)",        "例 6（0で解除）"),
+    ("kyujitsu", "🏖 土日の起床後ろ倒し(h)",   "例 2（0で解除）"),
+    ("yasumi",   "🗓 毎週の定休日（曜日）",    "例 土日（空欄で解除・その曜日は判定なし）"),
+    ("nyuyoku",  "🛁 毎日の入浴",             "はい／いいえ"),
+    ("hamigaki", "🪥 歯磨き（回/日）",         "例 2（0で解除）"),
+    ("shokuji",  "🍚 食事（回/日）",           "例 2（0で解除）"),
+    ("rajio",    "🏃 ラジオ体操",             "はい／いいえ"),
+    ("benkyou",  "📖 勉強（みんなで暗記1日1問）", "はい／いいえ"),
+    ("ryouri",   "🍳 料理（n日に1回）",        "例 1（0で解除）"),
+    ("souji",    "🧹 掃除（n日に1回）",        "例 3（0で解除）"),
+    ("sara",     "🍽️ 皿洗い（n日に1回）",      "例 1（0で解除）"),
+    ("sentaku",  "🧺 洗濯（n日に1回）",        "例 3（0で解除）"),
+    ("gomi",     "🗑 ごみ捨て（n日に1回）",    "例 3（0で解除）"),
+]
+_YES = ("はい", "する", "yes", "on", "1", "true")
+_NO = ("いいえ", "しない", "no", "off", "0", "false", "なし")
+
+async def apply_saitei_item(uid, key, raw):
+    """設定パネルからの1項目更新（/saitei と同じ意味論・同じ初日猶予）。エラーメッセージ or None を返す"""
+    uid = str(uid)
+    today = day_str(now_jst())
+    t = unicodedata.normalize("NFKC", raw or "").strip().casefold()
+    if key == "kishou":
+        if t in ("なし", "none", "-", "0", ""):
+            await db.execute("UPDATE users SET wake_deadline=NULL WHERE id=?", (uid,))
+        else:
+            hh = parse_hhmm(t)
+            if not hh:
+                return "⚠️ 起床時刻の形式が読めませんでした（例 7:00）"
+            await db.execute("UPDATE users SET wake_deadline=?, wake_set_day=? WHERE id=?", (hh, today, uid))
+    elif key in ("suimin", "kyujitsu"):
+        try:
+            v = float(t or "0")
+        except ValueError:
+            return "⚠️ 数字で入れてください（例 6。0で解除）"
+        if key == "suimin":
+            await db.execute("UPDATE users SET sleep_min=?, sleep_set_day=? WHERE id=?", (v if v > 0 else None, today, uid))
+        else:
+            await db.execute("UPDATE users SET holiday_shift=?, wake_set_day=? WHERE id=?", (int(max(0.0, min(12.0, v)) * 60), today, uid))
+    elif key == "yasumi":
+        if t in ("", "なし", "0"):
+            await db.execute("UPDATE users SET off_weekdays=NULL WHERE id=?", (uid,))
+        else:
+            ds = parse_day_chars_input(t)
+            if not ds:
+                return "⚠️ 曜日は `土日` や `土,日` の形式で入れてください（空欄で解除）"
+            await db.execute("UPDATE users SET off_weekdays=? WHERE id=?", ("".join(ds), uid))
+    elif key in ("nyuyoku", "rajio", "benkyou"):
+        if t in _YES:
+            v = 1
+        elif t in _NO:
+            v = 0
+        else:
+            return "⚠️ 「はい」か「いいえ」で入れてください"
+        col, sd = {"nyuyoku": ("bath_daily", "bath_set_day"), "rajio": ("radio_daily", "radio_set_day"),
+                   "benkyou": ("benkyou_min", "benkyou_set_day")}[key]
+        await db.execute(f"UPDATE users SET {col}=?, {sd}=? WHERE id=?", (v, today, uid))
+    elif key in ("hamigaki", "shokuji"):
+        try:
+            v = int(float(t or "0"))
+        except ValueError:
+            return "⚠️ 数字で入れてください（例 2。0で解除）"
+        if key == "hamigaki":
+            await db.execute("UPDATE users SET teeth_min=?, teeth_set_day=? WHERE id=?", (max(0, min(10, v)), today, uid))
+        else:
+            await db.execute("UPDATE users SET meals_min=?, meals_set_day=? WHERE id=?", (min(3, v) if v > 0 else None, today, uid))
+    elif key in ("ryouri", "souji", "sara", "sentaku", "gomi"):
+        try:
+            v = int(float(t or "0"))
+        except ValueError:
+            return "⚠️ 数字で入れてください（例 3＝3日に1回。0で解除）"
+        col = {"ryouri": "kaji_cook", "souji": "kaji_clean", "sara": "kaji_dish", "sentaku": "kaji_wash", "gomi": "kaji_trash"}[key]
+        await db.execute(f"UPDATE users SET {col}=?, kaji_since=? WHERE id=?", (max(0, min(30, v)), today, uid))
+    await db.commit()
+    return None
+
+class SaiteiModal(discord.ui.Modal):
+    def __init__(self, key, label, hint):
+        super().__init__(title=f"🛠 {label}"[:45])
+        self.key = key
+        self.label_ = label
+        self.val = discord.ui.TextInput(label=hint[:45], required=False, max_length=10)
+        self.add_item(self.val)
+
+    async def on_submit(self, interaction):
+        err = await apply_saitei_item(interaction.user.id, self.key, self.val.value)
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
+        u = await get_user(interaction.user.id)
+        off = f"\n🗓 定休日：{'・'.join(u['off_weekdays']) if u['off_weekdays'] else 'なし'}"
+        await interaction.response.send_message(
+            f"✅ {self.label_} を更新しました。\n\n🛠 **あなたの最低限**\n{settings_text(u)}{off}"
+            "\n\n🍀 今日設定・変更した項目は、**明日から**判定に入ります。", ephemeral=True)
+        settei = await get_ch("settei")
+        if settei:
+            await settei.send(f"🛠 **{interaction.user.display_name}** が最低限を更新：" + " / ".join(settings_text(u).split("\n")))
+
+class SaiteiSelect(discord.ui.Select):
+    def __init__(self):
+        opts = [discord.SelectOption(label=label[:100], value=key, description=hint[:100]) for key, label, hint in SAITEI_ITEMS]
+        super().__init__(placeholder="🛠 設定する項目を選ぶ", options=opts)
+
+    async def callback(self, interaction):
+        key = self.values[0]
+        _k, label, hint = next(x for x in SAITEI_ITEMS if x[0] == key)
+        await interaction.response.send_modal(SaiteiModal(key, label, hint))
+
 class SetteiView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -4186,6 +4319,17 @@ class SetteiView(discord.ui.View):
     async def mycheck(self, interaction, button):
         await ensure_user(interaction.user)
         await send_mycheck(interaction)
+
+    @discord.ui.button(label="🛠 最低限を設定", style=discord.ButtonStyle.success, custom_id="sk_saitei")
+    async def saitei_btn(self, interaction, button):
+        await ensure_user(interaction.user)
+        u = await get_user(interaction.user.id)
+        off = f"\n🗓 定休日：{'・'.join(u['off_weekdays']) if u['off_weekdays'] else 'なし'}"
+        view = discord.ui.View(timeout=600)
+        view.add_item(SaiteiSelect())
+        await interaction.response.send_message(
+            f"🛠 **あなたの最低限**（下のプルダウンから項目を選んで変更）\n{settings_text(u)}{off}"
+            "\n-# コマンド派は `/saitei` でまとめて設定もできます", view=view, ephemeral=True)
 
 VIEW_FACTORY["settei"] = SetteiView
 
@@ -5406,7 +5550,7 @@ def parse_tip_expiry(body, now):
     m = re.search(r"期限[:：]\s*([0-9０-９/／年月日\s:：-]+)", body or "")
     if not m:
         return None
-    d = parse_due(m.group(1).strip())
+    d = parse_due(m.group(1).strip(), now)
     return day_str(d) if d else None
 
 async def register_tip(thread, starter_content, applied_tags, owner_id):

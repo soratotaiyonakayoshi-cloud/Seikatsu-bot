@@ -40,6 +40,9 @@ check("定例: 最初の時限 無い曜日→None", B.course_first_period("金1
 check("定例曜日: 単発", B.parse_day_chars_input("日"), ["日"])
 check("定例曜日: 複数・週順に整列", B.parse_day_chars_input("木、月"), ["月", "木"])
 check("定例曜日: 不正は None", B.parse_day_chars_input("丑"), None)
+check("定例曜日: 連結表記 土日", B.parse_day_chars_input("土日"), ["土", "日"])
+check("設定パネル: 🛠ボタンあり", any(getattr(i, "custom_id", "") == "sk_saitei" for i in B.SetteiView().children), True)
+check("設定パネル: 項目セレクトは14項目", len(B.SaiteiSelect().options), 14)
 
 # ---- 永続ビュー（custom_id 必須制約）とコマンド登録 ----
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView, B.KadaiPanelView, B.GoodsPanelView):
@@ -1087,6 +1090,36 @@ async def main():
     await B.db.execute("UPDATE work_sessions SET end_ts=start_ts+600 WHERE end_ts IS NULL")   # 他テストの開きっぱなしも閉じる
     await B.db.commit()
     check("VCステータス: 誰もいなければ空", await B.work_vc_status_text(datetime(2026, 8, 21, 13, 0, tzinfo=JST)), "")
+
+    # 🛠 設定パネル（apply_saitei_item＝/saiteiと同じ意味論）
+    s130 = M(130, "せっちゃん")
+    await B.ensure_user(s130)
+    check("saitei項目: 起床設定", await B.apply_saitei_item(130, "kishou", "7時30分"), None)
+    u130 = await B.get_user(130)
+    check("saitei項目: 値とset_day", (u130["wake_deadline"], u130["wake_set_day"] is not None), ("07:30", True))
+    check("saitei項目: 不正な時刻はエラー文", (await B.apply_saitei_item(130, "kishou", "abc")) is not None, True)
+    check("saitei項目: なしで解除", await B.apply_saitei_item(130, "kishou", "なし"), None)
+    check("saitei項目: 解除反映", (await B.get_user(130))["wake_deadline"], None)
+    await B.apply_saitei_item(130, "suimin", "6.5")
+    check("saitei項目: 睡眠6.5h", (await B.get_user(130))["sleep_min"], 6.5)
+    await B.apply_saitei_item(130, "suimin", "0")
+    check("saitei項目: 0で解除", (await B.get_user(130))["sleep_min"], None)
+    await B.apply_saitei_item(130, "nyuyoku", "はい")
+    check("saitei項目: 入浴はい", (await B.get_user(130))["bath_daily"], 1)
+    check("saitei項目: はい/いいえ以外はエラー", (await B.apply_saitei_item(130, "nyuyoku", "たまに")) is not None, True)
+    await B.apply_saitei_item(130, "souji", "3")
+    u130 = await B.get_user(130)
+    check("saitei項目: 掃除3日に1回＋kaji_since", (u130["kaji_clean"], u130["kaji_since"] is not None), (3, True))
+    # 🗓 毎週の定休日
+    check("定休日: 土日を設定", await B.apply_saitei_item(130, "yasumi", "土日"), None)
+    check("定休日: 保存形式", (await B.get_user(130))["off_weekdays"], "土日")
+    check("定休日: 土曜に実体化される", await B.materialize_weekly_off("2026-08-08"), 1)   # 土
+    off130 = await (await B.db.execute("SELECT reason FROM off_days WHERE day='2026-08-08' AND user_id='130'")).fetchone()
+    check("定休日: off_daysに定休で記録", off130["reason"], "定休")
+    check("定休日: 二重実体化しない", await B.materialize_weekly_off("2026-08-08"), 0)
+    check("定休日: 平日は対象外", await B.materialize_weekly_off("2026-08-05"), 0)   # 水
+    check("定休日: 空欄で解除", await B.apply_saitei_item(130, "yasumi", ""), None)
+    check("定休日: 解除反映", (await B.get_user(130))["off_weekdays"], None)
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
