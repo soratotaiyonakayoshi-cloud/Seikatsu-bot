@@ -59,10 +59,11 @@ check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), [
 check("音楽: URL判定", (B.looks_like_url("https://youtu.be/x"), B.looks_like_url("lofi hiphop")), (True, False))
 check("音楽: 音源なしなら空リスト", isinstance(B.bgm_files(), list), True)
 check("環境音: ファイル一覧はリスト", isinstance(B.ambient_files(), list), True)
-_ab, _ao = B.ambient_ffmpeg_opts(["/a/rain.mp3"])
-check("環境音: 1音源はループ指定のみ", (_ab, _ao), ("-stream_loop -1", ""))
-_ab3, _ao3 = B.ambient_ffmpeg_opts(["/a/r.mp3", "/a/f.mp3", "/a/b.mp3"])
-check("環境音: 3音源でamixミックス", "-stream_loop -1 -i /a/f.mp3" in _ao3 and "amix=inputs=3" in _ao3 and "-map [mix]" in _ao3, True)
+_asrc, _ab, _ao = B.ambient_ffmpeg_args(["/a/rain.mp3"])
+check("環境音: 1音源はループ指定のみ", (_asrc, _ab, _ao), ("/a/rain.mp3", "-stream_loop -1", ""))
+_asrc3, _ab3, _ao3 = B.ambient_ffmpeg_args(["/a/r.mp3", "/a/f.mp3", "/a/b.mp3"])
+check("環境音: 3音源の追加入力はbefore側", _asrc3 == "/a/b.mp3" and "-stream_loop -1 -i /a/r.mp3" in _ab3 and "-i /a/f.mp3" in _ab3 and _ab3.endswith("-stream_loop -1"), True)
+check("環境音: optionsに-iを含まずamixミックス", "-i " not in _ao3 and "[0:a][1:a][2:a]amix=inputs=3" in _ao3 and "-map [mix]" in _ao3, True)
 
 class M:  # メンバー擬似
     def __init__(s, i, n): s.id, s.display_name = i, n

@@ -2598,17 +2598,17 @@ def ambient_files():
     except Exception:
         return []
 
-def ambient_ffmpeg_opts(paths):
-    """複数の環境音を無限ループで重ねるffmpeg引数（スペースを含まない形で組むのが肝）"""
-    before = "-stream_loop -1"
-    opts = ""
-    for p in paths[1:]:
-        opts += f" -stream_loop -1 -i {p}"
+def ambient_ffmpeg_args(paths):
+    """複数の環境音を無限ループで重ねるffmpeg引数 → (最後の入力=source, before_options, options)。
+    追加入力はbefore側に置く（discord.pyは出力フォーマット指定をoptionsの前に挟むため、
+    optionsに-iを入れると出力形式が壊れる）。パスにスペース不可。"""
     n = len(paths)
-    if n > 1:
-        labels = "".join(f"[{i}:a]" for i in range(n))
-        opts += f" -filter_complex {labels}amix=inputs={n}:duration=longest:normalize=0[mix] -map [mix]"
-    return before, opts.strip()
+    if n == 1:
+        return paths[0], "-stream_loop -1", ""
+    before = " ".join(f"-stream_loop -1 -i {p}" for p in paths[:-1]) + " -stream_loop -1"
+    labels = "".join(f"[{i}:a]" for i in range(n))
+    opts = f"-filter_complex {labels}amix=inputs={n}:duration=longest:normalize=0[mix] -map [mix]"
+    return paths[-1], before, opts
 
 def looks_like_url(s):
     return bool(re.match(r"https?://", (s or "").strip()))
@@ -2746,8 +2746,8 @@ async def _play_next():
         by = item.get("by")
         vol = _player.get("volume", 1.0)
         if item["type"] == "ambient":   # 🌿 環境音ミキサー（無限ループ・/skipか/stopで終了）
-            before, opts = ambient_ffmpeg_opts(item["paths"])
-            pcm = discord.FFmpegPCMAudio(item["paths"][0], executable=FFMPEG_PATH, before_options=before, options=opts or None)
+            src_path, before, opts = ambient_ffmpeg_args(item["paths"])
+            pcm = discord.FFmpegPCMAudio(src_path, executable=FFMPEG_PATH, before_options=before, options=opts or None)
             _player["current"] = "🌿 環境音：" + "＋".join(item["names"])
             _player["cur_item"] = item
             vc.play(discord.PCMVolumeTransformer(pcm, volume=vol), after=_after_track)
