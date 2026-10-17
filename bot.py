@@ -80,7 +80,9 @@ CH = {
     "erai": ("えらい🌟", "最低限とは別に、今日がんばったことを報告して褒め合う場所。🌟ボタン（または /erai）から。判定はされません。\n"
              "📌 やること宣言＝今日限りのメモ（1行に1つ・まとめて宣言OK）。終わったら✅、23時に引き継ぎ確認、放置なら翌朝ひっそり消えます（叱責なし）。"),
     "worklog": ("作業ログ🖥", f"🔊{WORK_VC_NAME} に入ると計測開始・出ると終了。入室中に ✍ ボタンで「何をやるか」をひとこと宣言できます。\n"
-                "10分未満のセッションはログに残りません（時間は記録）。`/kiroku` に今週の作業時間、通信簿に🖥もくもく賞。"),
+                "10分未満のセッションはログに残りません（時間は記録）。`/kiroku` に今週の作業時間、通信簿に🖥もくもく賞。\n"
+                "🎶 音楽はこのパネルから：リクエスト（URL・検索語・プレイリスト）／🎵BGM／🌿環境音／⏯⏭⏹。\n"
+                "-# 細かい操作はコマンドで：`/volume` `/loop` `/shuffle`。音源の追加は音声ファイルを投稿→右クリック→アプリ→「BGMに追加」"),
     "animal": ("どうぶつ🐄", "犬・猫・鳥・道端のなんか・ミニホース…癒しの写真や動画をどうぞ（判定なし・ただの癒し）。\n"
                "写真にはBotが🐾を付けます。1週間でいちばんリアクションを集めた写真の人は、通信簿で🐾癒し賞に。"),
     "bath": ("おふろ🛁", "🛁 お風呂に入ったら押す。🪥 歯磨きも（1日に何回でも）。"),
@@ -480,6 +482,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(KadaiPanelView())
         self.add_view(GoodsPanelView())
         self.add_view(SetteiView())
+        self.add_view(MusicPanelView())
         self.add_view(IntroView())
         self.add_dynamic_items(DoneButton, MealFixButton, PraiseButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
                                MemoDoneButton, MemoCarryButton, MemoDropButton, WorkNoteButton, GoodsResetButton)
@@ -2939,6 +2942,10 @@ bot.tree.add_command(bgm_grp)
 @app_commands.describe(kyoku="URL／プレイリストURL／検索語（例 lofi hiphop）")
 async def play_command(interaction, kyoku: str):
     await interaction.response.defer()
+    await do_play(interaction, kyoku)
+
+async def do_play(interaction, kyoku, eph=False):
+    """/playとパネル🎶の共通処理（呼び出し側でdefer済みであること）"""
     # プレイリストっぽいURLのときだけプレイリスト抽出を試す（単曲URLの余計な1往復を省いて高速化）
     pl = None
     if looks_like_url(kyoku) and re.search(r"list=|/playlist|/sets/|/album", kyoku):
@@ -2947,12 +2954,12 @@ async def play_command(interaction, kyoku: str):
     if not pl:
         single = await _ytdlp_resolve(kyoku)
         if not single:
-            await interaction.followup.send("⚠️ 再生情報を取得できませんでした（URLを確認。直らなければ yt-dlp の更新が必要かも）")
+            await interaction.followup.send("⚠️ 再生情報を取得できませんでした（URLを確認。直らなければ yt-dlp の更新が必要かも）", ephemeral=eph)
             return
     prefer = interaction.user.voice.channel if getattr(interaction.user, "voice", None) and interaction.user.voice else None
     vc = await ensure_player_vc(prefer)
     if not vc:
-        await interaction.followup.send("❌ VCに接続できませんでした。どこかのVCに入ってから実行してね。")
+        await interaction.followup.send("❌ VCに接続できませんでした。どこかのVCに入ってから実行してね。", ephemeral=eph)
         return
     _player["vc"] = vc
     by = interaction.user.display_name
@@ -2977,14 +2984,13 @@ async def play_command(interaction, kyoku: str):
     if not vc.is_playing():
         await _play_next()
         note += f"\n▶ 再生開始：{(_player.get('current') or '').lstrip('▶🎵 ')}"
-    await interaction.followup.send(note)
+    await interaction.followup.send(note, ephemeral=eph)
 
-@bot.tree.command(name="queue", description="再生キューを見る")
-async def queue_command(interaction):
+def queue_text():
+    """いまの曲とキューの表示テキスト。何もなければ None"""
     cur, q = _player.get("current"), _player["queue"]
     if not cur and not q:
-        await interaction.response.send_message("キューは空です。`/play` で追加してね。", ephemeral=True)
-        return
+        return None
     loop_note = {"one": "（🔂 1曲リピート中）", "all": "（🔁 キューリピート中）"}.get(_player.get("loop"), "")
     lines = ([f"🎶 いま：{cur}{loop_note}"] if cur else []) + \
             [f"{i}. {it.get('title') or '？'}" + (f"（{it['by']}）" if it.get("by") else "") for i, it in enumerate(q[:10], 1)]
@@ -2992,7 +2998,12 @@ async def queue_command(interaction):
         lines.append(f"…ほか {len(q) - 10} 曲")
     if _player.get("bgm"):
         lines.append("-# キューが空になったら作業用BGMに戻ります")
-    await interaction.response.send_message("\n".join(lines), ephemeral=True)
+    return "\n".join(lines)
+
+@bot.tree.command(name="queue", description="再生キューを見る")
+async def queue_command(interaction):
+    t = queue_text()
+    await interaction.response.send_message(t or "キューは空です。`/play` で追加してね。", ephemeral=True)
 
 class AmbientSelect(discord.ui.Select):
     def __init__(self, fs):
@@ -3018,8 +3029,8 @@ class AmbientSelect(discord.ui.Select):
         await interaction.response.edit_message(
             content="🌿 環境音をはじめました：**" + "＋".join(names) + "**\n-# 組み合わせを変えるならもう一度 `/ambient`、やめるなら `/skip` か `/stop`", view=None)
 
-@bot.tree.command(name="ambient", description="環境音ミキサー（雨・焚き火・鳥などを重ねてループ再生）")
-async def ambient_command(interaction):
+async def send_ambient_picker(interaction):
+    """/ambientとパネル🌿の共通処理：環境音セレクトをephemeralで出す"""
     fs = ambient_files()
     if not fs:
         await interaction.response.send_message(
@@ -3028,6 +3039,10 @@ async def ambient_command(interaction):
     view = discord.ui.View(timeout=300)
     view.add_item(AmbientSelect(fs))
     await interaction.response.send_message("🌿 **環境音ミキサー**（選んだ音を重ねて無限ループ）", view=view, ephemeral=True)
+
+@bot.tree.command(name="ambient", description="環境音ミキサー（雨・焚き火・鳥などを重ねてループ再生）")
+async def ambient_command(interaction):
+    await send_ambient_picker(interaction)
 
 @bot.tree.command(name="pause", description="再生を一時停止")
 async def pause_command(interaction):
@@ -3101,6 +3116,78 @@ async def skip_command(interaction):
 async def stop_command(interaction):
     await stop_player()
     await interaction.response.send_message("⏹ 停止しました。")
+
+# ------------------------------------------------------------
+#  🎶 音楽パネル（#作業ログ🖥に常駐・よく使う操作をボタン化。返事は本人だけ＝チャンネルを汚さない）
+# ------------------------------------------------------------
+class PlayModal(discord.ui.Modal, title="🎶 曲をリクエスト"):
+    kyoku = discord.ui.TextInput(label="URL または 検索語", placeholder="https://… か「lofi hiphop」など（プレイリストURLもOK）",
+                                 max_length=300)
+
+    async def on_submit(self, interaction):
+        await interaction.response.defer(ephemeral=True)
+        await do_play(interaction, str(self.kyoku.value), eph=True)
+
+class MusicPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="リクエスト", emoji="🎶", style=discord.ButtonStyle.primary, custom_id="sk_mu_play", row=0)
+    async def b_play(self, interaction, button):
+        await interaction.response.send_modal(PlayModal())
+
+    @discord.ui.button(label="BGM", emoji="🎵", style=discord.ButtonStyle.secondary, custom_id="sk_mu_bgm", row=0)
+    async def b_bgm(self, interaction, button):
+        await interaction.response.defer(ephemeral=True)
+        await interaction.followup.send(await start_bgm(), ephemeral=True)
+
+    @discord.ui.button(label="環境音", emoji="🌿", style=discord.ButtonStyle.secondary, custom_id="sk_mu_amb", row=0)
+    async def b_ambient(self, interaction, button):
+        await send_ambient_picker(interaction)
+
+    @discord.ui.button(label="よぶ", emoji="🎧", style=discord.ButtonStyle.secondary, custom_id="sk_mu_join", row=0)
+    async def b_join(self, interaction, button):
+        await interaction.response.defer(ephemeral=True)
+        prefer = interaction.user.voice.channel if getattr(interaction.user, "voice", None) and interaction.user.voice else None
+        vc = await ensure_player_vc(prefer)
+        if not vc:
+            await interaction.followup.send("❌ VCに接続できませんでした。どこかのVCに入ってから押してね。", ephemeral=True)
+            return
+        _player["vc"] = vc
+        asyncio.create_task(warmup_player("パネル🎧"))
+        await interaction.followup.send(f"🎧 {vc.channel.mention} で待機します（退出は ⏹）。", ephemeral=True)
+
+    @discord.ui.button(label="一時停止/再開", emoji="⏯", style=discord.ButtonStyle.secondary, custom_id="sk_mu_pause", row=1)
+    async def b_pause(self, interaction, button):
+        vc = _player.get("vc")
+        if vc and vc.is_playing():
+            vc.pause()
+            await interaction.response.send_message("⏸ 一時停止しました（もう一度押すと再開）。", ephemeral=True)
+        elif vc and vc.is_paused():
+            vc.resume()
+            await interaction.response.send_message("▶ 再開しました。", ephemeral=True)
+        else:
+            await interaction.response.send_message("いま何も流れていません。", ephemeral=True)
+
+    @discord.ui.button(label="スキップ", emoji="⏭", style=discord.ButtonStyle.secondary, custom_id="sk_mu_skip", row=1)
+    async def b_skip(self, interaction, button):
+        vc = _player.get("vc")
+        if not vc or not vc.is_playing():
+            await interaction.response.send_message("いま何も流れていません。", ephemeral=True)
+            return
+        await interaction.response.send_message("⏭ スキップ！" + (f"（次：{_player['queue'][0]['title']}）" if _player["queue"] else ""), ephemeral=True)
+        vc.stop()   # afterコールバックが次の曲を再生する
+
+    @discord.ui.button(label="キュー", emoji="📃", style=discord.ButtonStyle.secondary, custom_id="sk_mu_queue", row=1)
+    async def b_queue(self, interaction, button):
+        await interaction.response.send_message(queue_text() or "キューは空です。🎶 リクエストで追加してね。", ephemeral=True)
+
+    @discord.ui.button(label="退出", emoji="⏹", style=discord.ButtonStyle.danger, custom_id="sk_mu_stop", row=1)
+    async def b_stop(self, interaction, button):
+        await stop_player()
+        await interaction.response.send_message("⏹ ぜんぶ止めてVCから退出しました。", ephemeral=True)
+
+VIEW_FACTORY["worklog"] = MusicPanelView
 
 @tasks.loop(minutes=1)
 async def radio_loop():
@@ -6239,6 +6326,7 @@ async def work_start(member):
         msg = await ch.send(f"🖥 **{member.display_name}** さんが作業をはじめました" + (f"\n📌 {memos_txt}" if memos_txt else ""), view=view)
         await db.execute("UPDATE work_sessions SET msg_id=? WHERE id=?", (str(msg.id), sid))
         await db.commit()
+        await bump_panel("worklog")   # 🎶音楽パネルを最下部に置き直す
     except Exception as e:
         print(f"作業ログ投稿失敗: {e!r}", flush=True)
 

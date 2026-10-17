@@ -45,9 +45,12 @@ check("設定パネル: 🛠ボタンあり", any(getattr(i, "custom_id", "") ==
 check("設定パネル: 項目セレクトは14項目", len(B.SaiteiSelect().options), 14)
 
 # ---- 永続ビュー（custom_id 必須制約）とコマンド登録 ----
-for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView, B.KadaiPanelView, B.GoodsPanelView):
+for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView, B.KadaiPanelView, B.GoodsPanelView, B.MusicPanelView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
-check("永続ビュー6種 登録OK", True, True)
+check("永続ビュー7種 登録OK", True, True)
+check("音楽パネルは8ボタン", {i.custom_id for i in B.MusicPanelView().children},
+      {"sk_mu_play", "sk_mu_bgm", "sk_mu_amb", "sk_mu_join", "sk_mu_pause", "sk_mu_skip", "sk_mu_queue", "sk_mu_stop"})
+check("音楽パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("worklog") is B.MusicPanelView, True)
 check("ごはんパネルに🧊 2ボタン", {"sk_fridge_add", "sk_fridge_list"} <= {i.custom_id for i in B.MealView().children}, True)
 check("🧊は2段目・ごはんは1段目", sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_fridge")}) == [1]
       and sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_meal")}) == [0], True)
