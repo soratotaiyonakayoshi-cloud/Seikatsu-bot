@@ -2706,7 +2706,7 @@ async def _play_next():
         if fs:
             item = {"type": "file", "path": os.path.join(BGM_DIR, random.choice(fs))}
     if not item:
-        await stop_player()
+        _player["current"] = None   # キューが尽きてもVCに居残る（解読キャッシュが温かいまま次の/playが速い）。退出は/stopか無人化で
         return
     try:
         if item["type"] == "file":
@@ -2749,6 +2749,17 @@ async def start_bgm(auto=False):
     if not vc.is_playing():
         await _play_next()
     return f"🎵 作業用BGMをはじめました（{len(bgm_files())}曲シャッフルループ・`/bgm stop` で停止）"
+
+_warm_ts = {"t": 0.0}
+
+async def warmup_player(reason=""):
+    """PO Token発行＋n-sig解読を事前に走らせてキャッシュを温める（最初の/playのラグ対策・1時間に1回まで）"""
+    import time as _t
+    if _t.time() - _warm_ts["t"] < 3600:
+        return
+    _warm_ts["t"] = _t.time()
+    r = await _ytdlp_resolve("https://www.youtube.com/watch?v=jNQXAC9IVRw")
+    print(f"🎵 プレイヤーのウォームアップ{'OK' if r else '失敗'}（{reason}）", flush=True)
 
 async def stop_player():
     _player["queue"].clear()
@@ -2906,6 +2917,7 @@ async def on_ready():
         await backfill_meal_msg_ids()   # アルバム機能より前の写真記録にmsg_idを後付け（初回だけ）
     except Exception as e:
         print(f"ごはん写真の後付けエラー: {e!r}", flush=True)
+    asyncio.create_task(warmup_player("起動"))   # 起動直後にPO Token/解読キャッシュを温めておく
     if not judge_loop.is_running():
         judge_loop.start()
     if not radio_loop.is_running():
@@ -6153,6 +6165,12 @@ async def on_voice_state_update(member, before, after):
             await auto_wake(member, "VC入室")   # ラジオ体操・作業部屋への入室も起きている証拠
         except Exception as e:
             print(f"自動起床エラー: {e!r}", flush=True)
+    try:   # 🎵 待機中のプレイヤーVCが無人になったら退出（曲間チェックでは拾えない待機中の離脱用）
+        vc = _player.get("vc")
+        if vc and vc.is_connected() and not any(not m.bot for m in vc.channel.members):
+            await stop_player()
+    except Exception as e:
+        print(f"プレイヤー退出エラー: {e!r}", flush=True)
     wid = await meta_get("ch_workvc")
     if not wid:
         return
@@ -6160,6 +6178,7 @@ async def on_voice_state_update(member, before, after):
     try:
         if a_id == wid and b_id != wid:
             await work_start(member)
+            asyncio.create_task(warmup_player("作業部屋入室"))   # 入室＝そのうち/playしそうなので先に温める
         elif b_id == wid and a_id != wid:
             await work_close(member.id, member.display_name)
     except Exception as e:
