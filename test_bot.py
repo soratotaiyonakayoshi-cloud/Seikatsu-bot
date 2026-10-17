@@ -1095,6 +1095,8 @@ async def main():
     check("レシピ: パネルにボタン", any(getattr(i, "custom_id", "") == "sk_recipe" for i in B.MealView().children), True)
     check("レシピ: 行パース（記号・番号を剥がす）", B.parse_recipe_lines("・卵 1個\n2. めんつゆ\n\n●ネギ"), ["卵 1個", "めんつゆ", "ネギ"])
     check("レシピ: 上限で切る", len(B.parse_recipe_lines("\n".join(f"材料{i}" for i in range(30)))), 14)
+    check("レシピ: 分量は数字を剥がさない・空行は保持", B.parse_amount_lines("200g\n\n大さじ1"), ["200g", "", "大さじ1"])
+    check("レシピ: 分量タプルでも描ける", B.render_recipe_card("t", "x", [("卵", "1個"), ("塩", "")], ["まぜる"]) is not None, True)
     rbuf = B.render_recipe_card("テスト", "超ながい料理名のテストでカードがはみ出さないか確認するやつ",
                                 [f"材料{i} 100g" for i in range(8)],
                                 ["とても長い手順の説明文をここに書いて折り返しが正しく効いているかどうかを確かめる" * 2, "まぜる", "たべる🌙"],

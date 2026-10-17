@@ -1171,6 +1171,15 @@ def _wrap_px(d, s, f, fe, maxw):
         lines.append(cur)
     return lines or [""]
 
+def parse_amount_lines(text, limit=14):
+    """分量欄のパース（「200g」の数字を剥がさない・空行は空のまま残して材料と順序を合わせる）"""
+    out = []
+    for l in (text or "").splitlines():
+        out.append(l.strip().lstrip("・-･•●　 ").strip()[:20])
+        if len(out) >= limit:
+            break
+    return out
+
 def parse_recipe_lines(text, limit=14):
     out = []
     for l in (text or "").splitlines():
@@ -1214,9 +1223,14 @@ def render_recipe_card(author, title, ingredients, steps, memo="", main_img=None
     step_phs = {i: _load(b, (380, 260)) for i, b in (step_imgs or {}).items()}
     step_phs = {i: p for i, p in step_phs.items() if p}
     title_lines = _wrap_px(probe, title, ft, fe, cw - 150)
-    two_col = len(ingredients) > 5
+    # 材料は (名前, 分量) のタプルでも文字列でも受ける
+    norm_ing = [(s, "") if isinstance(s, str) else (s[0], (s[1] or "").strip()) for s in ingredients]
+    two_col = len(norm_ing) > 5
     ing_w = (cw // 2 - 30) if two_col else cw - 30
-    ing = [(i, _wrap_px(probe, s, fr, fe, ing_w)) for i, s in enumerate(ingredients)]
+    ing = []
+    for nm_, amt_ in norm_ing:
+        aw = _mixed_w(probe, amt_, fr, fe) if amt_ else 0
+        ing.append((amt_, aw, _wrap_px(probe, nm_, fr, fe, ing_w - 26 - (aw + 26 if amt_ else 0))))
     stp = [(i, _wrap_px(probe, s, fr, fe, cw - 70)) for i, s in enumerate(steps)]
     memo_lines = _wrap_px(probe, memo, fs, fe, cw - 180) if memo else []
     head_z, head_t = _gohan_art("head_zairyo"), _gohan_art("head_tsukurikata")
@@ -1225,8 +1239,8 @@ def render_recipe_card(author, title, ingredients, steps, memo="", main_img=None
     y_title = 56
     h_title = len(title_lines) * 58 + 34
     h_main = (main_ph.height + 44) if main_ph else 0
-    h_ing_rows = [max(len(ing[k][1]) for k in (r, r + 1) if k < len(ing)) for r in range(0, len(ing), 2)] if two_col \
-        else [len(l) for _, l in ing]
+    h_ing_rows = [max(len(ing[k][2]) for k in (r, r + 1) if k < len(ing)) for r in range(0, len(ing), 2)] if two_col \
+        else [len(l) for _, _, l in ing]
     h_ing = (hz_h if head_z else 52) + 14 + sum(r * 32 + 8 for r in h_ing_rows) + 18
     h_stp = (ht_h if head_t else 52) + 14 + sum(len(l) * 32 + 14 + (step_phs[i].height + 14 if i in step_phs else 0) for i, l in [(i, l) for i, l in stp]) + 10
     h_memo = (len(memo_lines) * 28 + 44) if memo_lines else 0
@@ -1263,6 +1277,21 @@ def render_recipe_card(author, title, ingredients, steps, memo="", main_img=None
         d.text((pad, y + 14), "ざいりょう", font=fh, fill=(27, 24, 21))
         d.line([pad, y + 50, pad + 150, y + 50], fill=(217, 112, 26), width=3)
         y += 52 + 14
+    def _draw_ing(x0, yy, amt_, aw, lns):
+        """材料1件：・名前 ……… 分量（分量は1行目の右端・点線リーダーつき）"""
+        d.text((x0, yy + 4), "・", font=fr, fill=(217, 112, 26))
+        nw = _draw_mixed(d, x0 + 26, yy + 4, lns[0], fr, fe, (27, 24, 21))
+        if amt_:
+            ax = x0 + ing_w - aw
+            _draw_mixed(d, ax, yy + 4, amt_, fr, fe, (27, 24, 21))
+            cx = x0 + 26 + nw + 12
+            while cx < ax - 12:   # 点線リーダー
+                d.ellipse([cx, yy + 22, cx + 2, yy + 24], fill=(176, 168, 154))
+                cx += 9
+        for ln in lns[1:]:
+            yy += 32
+            _draw_mixed(d, x0 + 26, yy + 4, ln, fr, fe, (27, 24, 21))
+
     if two_col:
         for r in range(0, len(ing), 2):
             rh = 0
@@ -1270,20 +1299,14 @@ def render_recipe_card(author, title, ingredients, steps, memo="", main_img=None
                 if k >= len(ing):
                     continue
                 x0 = pad + (0 if k == r else cw // 2 + 10)
-                d.text((x0, y + 4), "・", font=fr, fill=(217, 112, 26))
-                yy = y
-                for ln in ing[k][1]:
-                    _draw_mixed(d, x0 + 26, yy + 4, ln, fr, fe, (27, 24, 21))
-                    yy += 32
-                rh = max(rh, len(ing[k][1]))
+                amt_, aw, lns = ing[k]
+                _draw_ing(x0, y, amt_, aw, lns)
+                rh = max(rh, len(lns))
             y += rh * 32 + 8
     else:
-        for _, lns in ing:
-            d.text((pad, y + 4), "・", font=fr, fill=(217, 112, 26))
-            for ln in lns:
-                _draw_mixed(d, pad + 26, y + 4, ln, fr, fe, (27, 24, 21))
-                y += 32
-            y += 8
+        for amt_, aw, lns in ing:
+            _draw_ing(pad, y, amt_, aw, lns)
+            y += len(lns) * 32 + 8
     y += 18
     # つくりかた（手描き見出し・手順番号は手描き数字）
     if head_t:
@@ -1346,7 +1369,9 @@ def consume_recipe_photo(uid, b):
 class RecipeModal(discord.ui.Modal, title="📜 レシピカードをつくる"):
     nm = discord.ui.TextInput(label="料理名", max_length=30, placeholder="例 悪魔の釜玉うどん")
     zairyo = discord.ui.TextInput(label="材料（1行に1つ）", style=discord.TextStyle.paragraph, max_length=600,
-                                  placeholder="冷凍うどん 1玉\n卵 1個\nめんつゆ 大さじ1")
+                                  placeholder="冷凍うどん\n卵\nめんつゆ")
+    bunryo = discord.ui.TextInput(label="分量（材料と同じ順で1行ずつ・任意）", style=discord.TextStyle.paragraph,
+                                  required=False, max_length=400, placeholder="1玉\n1個\n大さじ1")
     tsukurikata = discord.ui.TextInput(label="作り方（1行に1手順）", style=discord.TextStyle.paragraph, max_length=1000,
                                        placeholder="うどんをレンジで3分\n卵とめんつゆをのせて混ぜる")
     kotsu = discord.ui.TextInput(label="ひとこと（任意）", required=False, max_length=80)
@@ -1358,6 +1383,8 @@ class RecipeModal(discord.ui.Modal, title="📜 レシピカードをつくる")
         if not ingredients or not steps:
             await interaction.response.send_message("⚠️ 材料と作り方をそれぞれ1行以上入れてください。", ephemeral=True)
             return
+        amounts = parse_amount_lines(self.bunryo.value)
+        ingredients = [(nm_, amounts[i] if i < len(amounts) else "") for i, nm_ in enumerate(ingredients)]
         RECIPE_DRAFTS[str(interaction.user.id)] = {
             "title": self.nm.value.strip(), "ing": ingredients, "steps": steps,
             "memo": (self.kotsu.value or "").strip(), "main": None, "imgs": {}, "await": None}
