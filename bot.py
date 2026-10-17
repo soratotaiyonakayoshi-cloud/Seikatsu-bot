@@ -1343,13 +1343,19 @@ def render_recipe_card(author, title, ingredients, steps, memo="", main_img=None
             d.rectangle([pad + 44, y + 6, pad + 44 + p.width - 1, y + 6 + p.height - 1], outline=(226, 218, 203), width=2)
             y += p.height + 14
         y += 14
-    # ひとこと
+    # ひとこと（手描き見出し）
     if memo_lines:
         y += 8
-        _draw_mixed(d, pad, y + 2, "ひとこと：", fh, fe, (217, 112, 26))
-        yy = y + 4
+        head_h = _gohan_art("head_hitokoto")
+        if head_h:
+            hw = _paste_art(img, head_h, pad, y + 2, 32)
+            mx0 = pad + hw + 22
+        else:
+            _draw_mixed(d, pad, y + 2, "ひとこと：", fh, fe, (217, 112, 26))
+            mx0 = pad + 140
+        yy = y + 6
         for ln in memo_lines:
-            _draw_mixed(d, pad + 140, yy, ln, fs, fe, (138, 131, 120))
+            _draw_mixed(d, mx0, yy, ln, fs, fe, (138, 131, 120))
             yy += 28
         y = yy + 8
     logo = _gohan_art("logo")
