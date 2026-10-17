@@ -2591,6 +2591,17 @@ def bgm_files():
 def looks_like_url(s):
     return bool(re.match(r"https?://", (s or "").strip()))
 
+# YouTubeはデータセンターIPをbot扱いすることがある。TV/Androidクライアント偽装で回避を試み、
+# それでもダメな場合は cookies.txt（ブラウザからエクスポートしてVMに置く）を使う
+YTDLP_COOKIES = os.getenv("YTDLP_COOKIES", os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt"))
+
+def _ytdlp_base_opts():
+    o = {"quiet": True, "no_warnings": True,
+         "extractor_args": {"youtube": {"player_client": ["tv", "android", "web"]}}}
+    if os.path.exists(YTDLP_COOKIES):
+        o["cookiefile"] = YTDLP_COOKIES
+    return o
+
 async def _ytdlp_resolve(query):
     """URLまたは検索語 → (ストリームURL, タイトル)。失敗で None"""
     try:
@@ -2601,7 +2612,7 @@ async def _ytdlp_resolve(query):
     q = query.strip()
     if not looks_like_url(q):
         q = f"ytsearch1:{q}"
-    opts = {"format": "bestaudio/best", "quiet": True, "no_warnings": True, "noplaylist": True}
+    opts = {**_ytdlp_base_opts(), "format": "bestaudio/best", "noplaylist": True}
 
     def _ex():
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -2626,7 +2637,7 @@ async def _ytdlp_playlist(query):
     q = query.strip()
     if not looks_like_url(q):
         return None
-    opts = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist", "noplaylist": False}
+    opts = {**_ytdlp_base_opts(), "extract_flat": "in_playlist", "noplaylist": False}
 
     def _ex():
         with yt_dlp.YoutubeDL(opts) as ydl:

@@ -13,3 +13,4 @@ backups/
 # 音楽素材はVM側に置く（リポジトリには含めない）
 music/*
 !music/.gitkeep
+cookies.txt
