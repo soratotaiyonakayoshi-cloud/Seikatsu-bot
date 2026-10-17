@@ -2596,8 +2596,9 @@ def looks_like_url(s):
 YTDLP_COOKIES = os.getenv("YTDLP_COOKIES", os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt"))
 
 def _ytdlp_base_opts():
-    o = {"quiet": True, "no_warnings": True,
-         "extractor_args": {"youtube": {"player_client": ["tv", "android", "web"]}}}
+    # クライアントはyt-dlpの既定に任せる（PO Tokenプロバイダ＋Deno＋cookies.txtの3点セットで再生できる構成。
+    # 詳細はVM側: bgutil-providerコンテナ(4416) / /usr/local/bin/deno / ~/seikatsu-bot/cookies.txt）
+    o = {"quiet": True, "no_warnings": True}
     if os.path.exists(YTDLP_COOKIES):
         o["cookiefile"] = YTDLP_COOKIES
     return o
