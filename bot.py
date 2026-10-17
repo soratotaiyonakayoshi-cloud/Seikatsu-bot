@@ -2845,6 +2845,17 @@ async def queue_command(interaction):
         lines.append("-# キューが空になったら作業用BGMに戻ります")
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
+@bot.tree.command(name="join", description="BotをVCに呼ぶ（待機・準備だけして再生はしない）")
+async def join_command(interaction):
+    prefer = interaction.user.voice.channel if getattr(interaction.user, "voice", None) and interaction.user.voice else None
+    vc = await ensure_player_vc(prefer)
+    if not vc:
+        await interaction.response.send_message("❌ VCに接続できませんでした。どこかのVCに入ってから実行してね。", ephemeral=True)
+        return
+    _player["vc"] = vc
+    asyncio.create_task(warmup_player("/join"))   # 待機中に解読キャッシュを温めておく
+    await interaction.response.send_message(f"🎧 {vc.channel.mention} で待機します。`/play` でいつでもどうぞ（退出は `/stop`）")
+
 @bot.tree.command(name="skip", description="いま流れている曲をスキップ")
 async def skip_command(interaction):
     vc = _player.get("vc")

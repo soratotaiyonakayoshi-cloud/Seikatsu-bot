@@ -55,7 +55,7 @@ check("起床パネルに📅今日の予定", any(getattr(i, "custom_id", "") =
 check("課題パネルは10ボタン", {i.custom_id for i in B.KadaiPanelView().children},
       {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki", "sk_exam", "sk_jw_free"})
 check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["album", "bgm", "erai", "hantei", "help", "jikanwari", "jikoshokai", "kadai", "kesseki", "kigen", "kiroku", "kojin", "nakama", "oyasumi", "play", "queue", "rajio", "reizouko", "saitei", "setup", "skip", "stop", "suimin", "tips", "tsushinbo", "watashi", "レシピカードにする"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["album", "bgm", "erai", "hantei", "help", "jikanwari", "jikoshokai", "join", "kadai", "kesseki", "kigen", "kiroku", "kojin", "nakama", "oyasumi", "play", "queue", "rajio", "reizouko", "saitei", "setup", "skip", "stop", "suimin", "tips", "tsushinbo", "watashi", "レシピカードにする"])
 check("音楽: URL判定", (B.looks_like_url("https://youtu.be/x"), B.looks_like_url("lofi hiphop")), (True, False))
 check("音楽: 音源なしなら空リスト", isinstance(B.bgm_files(), list), True)
 
