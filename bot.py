@@ -2590,6 +2590,26 @@ def bgm_files():
     except Exception:
         return []
 
+AMBIENT_DIR = os.path.join(BGM_DIR, "ambient")   # 環境音ループ素材（雨.mp3 焚き火.mp3 など）
+
+def ambient_files():
+    try:
+        return sorted(f for f in os.listdir(AMBIENT_DIR) if f.lower().endswith((".mp3", ".m4a", ".ogg", ".wav", ".flac")))
+    except Exception:
+        return []
+
+def ambient_ffmpeg_opts(paths):
+    """複数の環境音を無限ループで重ねるffmpeg引数（スペースを含まない形で組むのが肝）"""
+    before = "-stream_loop -1"
+    opts = ""
+    for p in paths[1:]:
+        opts += f" -stream_loop -1 -i {p}"
+    n = len(paths)
+    if n > 1:
+        labels = "".join(f"[{i}:a]" for i in range(n))
+        opts += f" -filter_complex {labels}amix=inputs={n}:duration=longest:normalize=0[mix] -map [mix]"
+    return before, opts.strip()
+
 def looks_like_url(s):
     return bool(re.match(r"https?://", (s or "").strip()))
 
@@ -2725,6 +2745,14 @@ async def _play_next():
     try:
         by = item.get("by")
         vol = _player.get("volume", 1.0)
+        if item["type"] == "ambient":   # 🌿 環境音ミキサー（無限ループ・/skipか/stopで終了）
+            before, opts = ambient_ffmpeg_opts(item["paths"])
+            pcm = discord.FFmpegPCMAudio(item["paths"][0], executable=FFMPEG_PATH, before_options=before, options=opts or None)
+            _player["current"] = "🌿 環境音：" + "＋".join(item["names"])
+            _player["cur_item"] = item
+            vc.play(discord.PCMVolumeTransformer(pcm, volume=vol), after=_after_track)
+            asyncio.create_task(update_work_vc_status())
+            return
         if item["type"] == "file":
             target, before = item["path"], None
             _player["current"] = f"🎵 {os.path.splitext(os.path.basename(item['path']))[0]}"
@@ -2877,6 +2905,41 @@ async def queue_command(interaction):
     if _player.get("bgm"):
         lines.append("-# キューが空になったら作業用BGMに戻ります")
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+class AmbientSelect(discord.ui.Select):
+    def __init__(self, fs):
+        opts = [discord.SelectOption(label=os.path.splitext(f)[0][:100], value=f) for f in fs[:25]]
+        super().__init__(placeholder="🌿 重ねる環境音を選ぶ（複数OK・最大5つ）", options=opts,
+                         min_values=1, max_values=min(5, len(opts)))
+
+    async def callback(self, interaction):
+        prefer = interaction.user.voice.channel if getattr(interaction.user, "voice", None) and interaction.user.voice else None
+        vc = await ensure_player_vc(prefer)
+        if not vc:
+            await interaction.response.edit_message(content="❌ VCに接続できませんでした。どこかのVCに入ってから実行してね。", view=None)
+            return
+        _player["vc"] = vc
+        names = [os.path.splitext(v)[0] for v in self.values]
+        item = {"type": "ambient", "paths": [os.path.join(AMBIENT_DIR, v) for v in self.values], "names": names}
+        _player["queue"].insert(0, item)
+        if vc.is_playing() or vc.is_paused():
+            _player["skip_once"] = True
+            vc.stop()   # afterコールバックが先頭の環境音を再生する
+        else:
+            await _play_next()
+        await interaction.response.edit_message(
+            content="🌿 環境音をはじめました：**" + "＋".join(names) + "**\n-# 組み合わせを変えるならもう一度 `/ambient`、やめるなら `/skip` か `/stop`", view=None)
+
+@bot.tree.command(name="ambient", description="環境音ミキサー（雨・焚き火・鳥などを重ねてループ再生）")
+async def ambient_command(interaction):
+    fs = ambient_files()
+    if not fs:
+        await interaction.response.send_message(
+            "環境音の素材がまだありません。VMの `music/ambient/` に `雨.mp3` `焚き火.mp3` のようなループ音源を置いてね。", ephemeral=True)
+        return
+    view = discord.ui.View(timeout=300)
+    view.add_item(AmbientSelect(fs))
+    await interaction.response.send_message("🌿 **環境音ミキサー**（選んだ音を重ねて無限ループ）", view=view, ephemeral=True)
 
 @bot.tree.command(name="pause", description="再生を一時停止")
 async def pause_command(interaction):

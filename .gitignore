@@ -14,3 +14,7 @@ backups/
 music/*
 !music/.gitkeep
 cookies.txt
+!music/ambient/
+!music/ambient/.gitkeep
+music/ambient/*
+!music/ambient/.gitkeep
