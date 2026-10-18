@@ -73,7 +73,8 @@ CH = {
     "wake": ("起床🌅", "☀️ 起きたら押す／🌙 寝る前に押す（睡眠時間は自動計算）／😴 二度寝したら正直に押す。\n"
              "🌙で寝た人は、☀️を押し忘れても朝の最初の発言・ボタン・VC入室で自動記録されます（押し忘れ救済）。\n"
              "🏭 夜勤の夜に押すと、翌朝の起床・睡眠・ラジオ体操は判定なし（ストリークも継続）。\n"
-             "🏃 で毎朝のラジオ体操の呼び出し、⏰ で締切前の起床リマインド（自分の締切の10分前にメンション＝実質アラーム）をON/OFF。"),
+             "🏃 で毎朝のラジオ体操の呼び出し、⏰ で締切前の起床リマインド（自分の締切の10分前にメンション＝実質アラーム）をON/OFF。\n"
+             "📅 今日・🗓 明日・📆 今後（7日の課題＋30日の試験＋実験）の予定はボタンでいつでも確認（自分にだけ表示）。"),
     "meal": ("ごはん🍚", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。\n"
              "🧊 冷蔵庫＝期限が近い食品のメモ。登録すると期限の前日・当日の朝にお知らせ（3日過ぎたら自動で消えます）。"),
     "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
@@ -703,6 +704,33 @@ class WakeView(discord.ui.View):
         else:
             parts.append("今日の授業・課題・試験はありません。のんびりいこう")
         await interaction.followup.send(f"📅 **{now.month}/{now.day}({DAY_CHARS[now.weekday()]}) の予定**\n" + "\n".join(parts),
+                                        ephemeral=True)
+
+    @discord.ui.button(label="🗓 明日の予定", style=discord.ButtonStyle.secondary, custom_id="sk_tomorrow", row=0)
+    async def tomorrow_btn(self, interaction, button):
+        """明日の天気＋時間割＋課題・試験を前日の夜から確認できる"""
+        await ensure_user(interaction.user)
+        await interaction.response.defer(ephemeral=True, thinking=True)   # 天気の取得に少しかかる
+        asu = now_jst() + timedelta(days=1)
+        parts = []
+        try:
+            w = await fetch_weather(1)
+            if w:
+                parts.append(w)
+        except Exception:
+            pass
+        digest = await today_digest(interaction.user.id, asu, label="明日")
+        parts.append(digest or "明日の授業・課題・試験はありません。のんびりいこう")
+        await interaction.followup.send(f"🗓 **{asu.month}/{asu.day}({DAY_CHARS[asu.weekday()]}) の予定**\n" + "\n".join(parts),
+                                        ephemeral=True)
+
+    @discord.ui.button(label="📆 今後の予定", style=discord.ButtonStyle.secondary, custom_id="sk_upcoming", row=1)
+    async def upcoming_btn(self, interaction, button):
+        """今後7日の課題・30日以内の試験・実験予定のまとめ"""
+        await ensure_user(interaction.user)
+        await interaction.response.defer(ephemeral=True)
+        text = await upcoming_digest(interaction.user.id, now_jst())
+        await interaction.followup.send("📆 **今後の予定**\n" + (text or "7日以内の課題・試験・実験はありません。のんびりいこう"),
                                         ephemeral=True)
 
     @discord.ui.button(label="🏭 今夜は夜勤", style=discord.ButtonStyle.secondary, custom_id="sk_yakin", row=1)
@@ -4920,26 +4948,28 @@ WMO = {0: "☀️快晴", 1: "🌤晴れ", 2: "⛅晴れ時々くもり", 3: "�
        56: "🌧みぞれ", 57: "🌧みぞれ", 61: "🌧雨", 63: "🌧雨", 65: "🌧強い雨", 66: "🌧みぞれ", 67: "🌧みぞれ", 71: "🌨雪", 73: "🌨雪", 75: "❄️大雪",
        77: "🌨雪", 80: "🌦にわか雨", 81: "🌧にわか雨", 82: "⛈激しい雨", 85: "🌨にわか雪", 86: "🌨にわか雪", 95: "⛈雷雨", 96: "⛈雷雨", 99: "⛈雷雨"}
 
-async def fetch_weather():
-    """今日の天気を1行で。失敗したら空文字"""
+async def fetch_weather(day_offset=0):
+    """今日（day_offset=0）または明日（=1）の天気を1行で。失敗したら空文字"""
     import aiohttp
     url = (f"https://api.open-meteo.com/v1/forecast?latitude={WEATHER_LAT}&longitude={WEATHER_LON}"
-           "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FTokyo&forecast_days=1")
+           "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+           f"&timezone=Asia%2FTokyo&forecast_days={day_offset + 1}")
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as sess:
             async with sess.get(url) as r:
                 if r.status != 200:
                     return ""
                 d = (await r.json())["daily"]
-        code = int(d["weather_code"][0])
-        return (f"{WMO.get(code, '🌡')}　最高 {d['temperature_2m_max'][0]:.0f}℃／最低 {d['temperature_2m_min'][0]:.0f}℃"
-                + (f"　☔ {int(d['precipitation_probability_max'][0])}%" if d.get("precipitation_probability_max") and d["precipitation_probability_max"][0] is not None else ""))
+        i = day_offset
+        code = int(d["weather_code"][i])
+        return (f"{WMO.get(code, '🌡')}　最高 {d['temperature_2m_max'][i]:.0f}℃／最低 {d['temperature_2m_min'][i]:.0f}℃"
+                + (f"　☔ {int(d['precipitation_probability_max'][i])}%" if d.get("precipitation_probability_max") and d["precipitation_probability_max"][i] is not None else ""))
     except Exception as e:
         print(f"天気取得失敗: {e!r}", flush=True)
         return ""
 
-async def today_digest(uid, now):
-    """起床報告の返事に添える「今日の授業」「未完了の課題」"""
+async def today_digest(uid, now, label="今日"):
+    """「今日（明日）の授業」「未完了の課題」のダイジェスト。明日分は now に翌日・label='明日' を渡す"""
     dc = DAY_CHARS[now.weekday()]
     per = {}
     for c in await user_course_rows(uid):
@@ -4954,7 +4984,7 @@ async def today_digest(uid, now):
                 per.setdefault(int(s[1:]), []).append({"name": r["label"], "room": r["place"], "code": "_us_" + s})
     lines = []
     if per:
-        lines.append("📅 **今日の時間割**")
+        lines.append(f"📅 **{label}の時間割**")
         seen = set()
         for p in range(1, max(5, max(per)) + 1):
             names = []
@@ -4985,7 +5015,7 @@ async def today_digest(uid, now):
             if t:
                 labs.append(f"**{c['name']}**：{t}")
         if labs:
-            lines.append("🧪 今日の実験：" + "／".join(labs))
+            lines.append(f"🧪 {label}の実験：" + "／".join(labs))
     except Exception:
         pass
     try:   # 試験1週間前からは朝のダイジェストでそっとカウントダウン（本人にだけ見える）
@@ -4994,7 +5024,7 @@ async def today_digest(uid, now):
             parts = []
             for e in exs[:4]:
                 left = exam_days_left(e["exam_day"], now)
-                parts.append(f"**{e['cname']}** " + ("**今日！🔥**" if left == 0 else f"あと{left}日") + f"（{exam_date_str(e['exam_day'])}）")
+                parts.append(f"**{e['cname']}** " + (f"**{label}！🔥**" if left == 0 else f"あと{left}日") + f"（{exam_date_str(e['exam_day'])}）")
             lines.append("📝 試験：" + "／".join(parts))
     except Exception:
         pass
@@ -5009,7 +5039,7 @@ async def today_digest(uid, now):
     if u:
         due = [st for st in await kaji_status(u, day_str(now)) if st["due"]]
         if due:
-            lines.append("🧹 今日やる家事：" + "／".join(f"{st['emoji']}{st['label']}（{kaji_interval_text(st['n'])}）" for st in due))
+            lines.append(f"🧹 {label}やる家事：" + "／".join(f"{st['emoji']}{st['label']}（{kaji_interval_text(st['n'])}）" for st in due))
     try:
         ms = await open_memos(uid, day_str(now))
         if ms:
@@ -5028,10 +5058,58 @@ async def today_digest(uid, now):
             lines.append("📦 使用期限：" + "／".join(gs))
     except Exception:
         pass
+    if label == "今日":   # TIPSとやることメモは「今日」専用（明日の分は存在しない）
+        try:
+            tp = await tip_of_day(day_str(now))
+            if tp:
+                lines.append(f"📚 今日のTIPS：**{tp['title']}** → <#{tp['thread_id']}>")
+        except Exception:
+            pass
+    return "\n".join(lines)
+
+async def upcoming_digest(uid, now, days=7):
+    """今後n日の課題・試験・実験のまとめ（起床パネル📆今後の予定ボタン用）"""
+    lines = []
+    end = now + timedelta(days=days)
+    async with db.execute(
+        "SELECT a.title, a.due_ts, c.name AS cname FROM assignments a JOIN courses c ON c.code=a.code "
+        "WHERE a.closed=0 AND a.code IN (SELECT code FROM user_courses WHERE user_id=?) "
+        "AND a.id NOT IN (SELECT assignment_id FROM assignment_done WHERE user_id=?) "
+        "AND a.due_ts<=? ORDER BY a.due_ts LIMIT 25", (str(uid), str(uid), int(end.timestamp()))) as c:
+        rows = await c.fetchall()
+    by_day = {}
+    for r in rows:
+        d = datetime.fromtimestamp(r["due_ts"], JST)
+        by_day.setdefault(d.date(), []).append((d, r))
+    if by_day:
+        lines.append(f"📚 **{days}日以内の課題**")
+        for dd in sorted(by_day):
+            items = "／".join(f"{r['cname']}「{r['title']}」{d.strftime('%H:%M')}" for d, r in by_day[dd])
+            mark = "⚠️期限切れ " if dd < now.date() else ""
+            lines.append(f"　{mark}{dd.month}/{dd.day}({DAY_CHARS[dd.weekday()]})　{items}")
     try:
-        tp = await tip_of_day(day_str(now))
-        if tp:
-            lines.append(f"📚 今日のTIPS：**{tp['title']}** → <#{tp['thread_id']}>")
+        exs = [e for e in await exam_rows_for(uid) if 0 <= exam_days_left(e["exam_day"], now) <= 30]
+        if exs:
+            lines.append("📝 **試験（30日以内）**")
+            for e in exs[:8]:
+                left = exam_days_left(e["exam_day"], now)
+                lines.append(f"　{exam_date_str(e['exam_day'])}　**{e['cname']}**" + ("　今日！🔥" if left == 0 else f"　あと{left}日"))
+    except Exception:
+        pass
+    try:
+        labs = []
+        for c2 in await user_course_rows(uid):
+            for iso, t in LAB_SCHEDULE.get(c2["code"], {}).items():
+                try:
+                    dd = datetime.fromisoformat(iso).date()
+                except Exception:
+                    continue
+                if now.date() <= dd <= end.date():
+                    labs.append((dd, f"**{c2['name']}**：{t}"))
+        if labs:
+            lines.append(f"🧪 **実験（{days}日以内）**")
+            for dd, t in sorted(labs):
+                lines.append(f"　{dd.month}/{dd.day}({DAY_CHARS[dd.weekday()]})　{t}")
     except Exception:
         pass
     return "\n".join(lines)
