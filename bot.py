@@ -5121,6 +5121,10 @@ def parse_day_spec(spec, now):
         return [day_str(now)]
     if t in ("明日", "あした"):
         return [day_str(now + timedelta(days=1))]
+    if t in ("昨日", "きのう"):   # さかのぼりのお休み申告用（判定済みでもストリークは救済される）
+        return [day_str(now - timedelta(days=1))]
+    if t in ("おととい", "一昨日"):
+        return [day_str(now - timedelta(days=2))]
     parts = [x for x in re.split(r"\s*[-〜~～]\s*", t) if x]
     if not parts or len(parts) > 2:
         return None
@@ -5184,7 +5188,7 @@ async def suimin_command(interaction, jikan: float, memo: str = None, uwagaki: b
     await post_log("wake", f"😪 **{user.display_name}** {label} の睡眠 {'=' if uwagaki else '+'}{fmt_hours(jikan)}{tag}　→ {label} 計 {fmt_hours(total)}")
 
 @bot.tree.command(name="oyasumi", description="お休み申告（その日は判定されず、連続達成も途切れない）")
-@app_commands.describe(riyuu="理由 例: 帰省／体調不良（「なし」で取り消し）", hi="日付 例: 明日／10/15／10/15-10/17（省略=今日）")
+@app_commands.describe(riyuu="理由 例: 帰省／体調不良（「なし」で取り消し）", hi="日付 例: 明日／昨日／10/15／10/15-10/17（省略=今日）")
 async def oyasumi_command(interaction, riyuu: str, hi: str = None):
     user = interaction.user
     await ensure_user(user)
@@ -5287,10 +5291,10 @@ SAITEI_ITEMS = [
 _YES = ("はい", "する", "yes", "on", "1", "true")
 _NO = ("いいえ", "しない", "no", "off", "0", "false", "なし")
 
-async def apply_saitei_item(uid, key, raw):
+async def apply_saitei_item(uid, key, raw, now=None):
     """設定パネルからの1項目更新（/saitei と同じ意味論・同じ初日猶予）。エラーメッセージ or None を返す"""
     uid = str(uid)
-    today = day_str(now_jst())
+    today = day_str(now or now_jst())
     t = unicodedata.normalize("NFKC", raw or "").strip().casefold()
     if key == "kishou":
         if t in ("なし", "none", "-", "0", ""):
@@ -5310,6 +5314,7 @@ async def apply_saitei_item(uid, key, raw):
         else:
             await db.execute("UPDATE users SET holiday_shift=?, wake_set_day=? WHERE id=?", (int(max(0.0, min(12.0, v)) * 60), today, uid))
     elif key == "yasumi":
+        ds = []
         if t in ("", "なし", "0"):
             await db.execute("UPDATE users SET off_weekdays=NULL WHERE id=?", (uid,))
         else:
@@ -5317,6 +5322,13 @@ async def apply_saitei_item(uid, key, raw):
             if not ds:
                 return "⚠️ 曜日は `土日` や `土,日` の形式で入れてください（空欄で解除）"
             await db.execute("UPDATE users SET off_weekdays=? WHERE id=?", ("".join(ds), uid))
+        # 今日の分はこの場で反映する。日次の実体化（materialize_weekly_off）は0時に実行済みなので、
+        # 昼間に設定した定休日はそれだけだと今晩の判定に乗らず叱責されてしまう
+        dc = DAY_CHARS[date.fromisoformat(today).weekday()]
+        if dc in ds:
+            await db.execute("INSERT OR IGNORE INTO off_days(day,user_id,reason) VALUES(?,?,'定休')", (today, uid))
+        else:   # 逆に今日が定休でなくなったら、0時に実体化済みの「定休」だけ取り消す（/oyasumiの手動申告は残す）
+            await db.execute("DELETE FROM off_days WHERE day=? AND user_id=? AND reason='定休'", (today, uid))
     elif key in ("nyuyoku", "rajio", "benkyou"):
         if t in _YES:
             v = 1

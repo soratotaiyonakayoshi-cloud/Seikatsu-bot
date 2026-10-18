@@ -244,6 +244,8 @@ async def main():
     nw = datetime(2026, 8, 5, 12, 0, tzinfo=JST)
     check("日付: 省略=今日", B.parse_day_spec("", nw), ["2026-08-05"])
     check("日付: 明日", B.parse_day_spec("明日", nw), ["2026-08-06"])
+    check("日付: 昨日（さかのぼりお休み用）", B.parse_day_spec("昨日", nw), ["2026-08-04"])
+    check("日付: おととい", B.parse_day_spec("おととい", nw), ["2026-08-03"])
     check("日付: 範囲", B.parse_day_spec("10/15-10/17", nw), ["2026-10-15", "2026-10-16", "2026-10-17"])
     check("日付: 不正", B.parse_day_spec("あさって", nw), None)
     # 個人項目が未チェックなら判定で未達
@@ -1169,6 +1171,20 @@ async def main():
     check("定休日: 平日は対象外", await B.materialize_weekly_off("2026-08-05"), 0)   # 水
     check("定休日: 空欄で解除", await B.apply_saitei_item(130, "yasumi", ""), None)
     check("定休日: 解除反映", (await B.get_user(130))["off_weekdays"], None)
+    # 設定したその日の分も即実体化される（0時の日次実体化は済んでいるため。土曜の昼に土日を設定→その夜に叱責された事故の対策）
+    nw_sat = datetime(2026, 8, 15, 14, 0, tzinfo=B.JST)   # 土曜の昼
+    check("定休日: 当日設定で即実体化", await B.apply_saitei_item(130, "yasumi", "土日", now=nw_sat), None)
+    off_sat = await (await B.db.execute("SELECT reason FROM off_days WHERE day='2026-08-15' AND user_id='130'")).fetchone()
+    check("定休日: 当日のoff_daysに定休", off_sat["reason"], "定休")
+    check("定休日: 当日解除で定休も取消", await B.apply_saitei_item(130, "yasumi", "", now=nw_sat), None)
+    off_sat = await (await B.db.execute("SELECT reason FROM off_days WHERE day='2026-08-15' AND user_id='130'")).fetchone()
+    check("定休日: 取消反映", off_sat, None)
+    # 定休でない日に設定しても今日のoff_daysは増えない
+    nw_wed = datetime(2026, 8, 12, 14, 0, tzinfo=B.JST)   # 水曜
+    await B.apply_saitei_item(130, "yasumi", "土日", now=nw_wed)
+    off_wed = await (await B.db.execute("SELECT reason FROM off_days WHERE day='2026-08-12' AND user_id='130'")).fetchone()
+    check("定休日: 平日設定では当日実体化なし", off_wed, None)
+    await B.apply_saitei_item(130, "yasumi", "", now=nw_wed)   # 後片付け
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
