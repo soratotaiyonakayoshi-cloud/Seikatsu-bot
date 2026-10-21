@@ -2781,6 +2781,55 @@ async def _spotify_token_get():
     _spotify_token["exp"] = _t.time() + int(d.get("expires_in", 3600))
     return _spotify_token["val"]
 
+def _find_key_deep(o, key, depth=0):
+    """ネストしたdict/listから最初に見つかったkeyの値を返す（埋め込みJSON用）"""
+    if depth > 8:
+        return None
+    if isinstance(o, dict):
+        if key in o:
+            return o[key]
+        for v in o.values():
+            r = _find_key_deep(v, key, depth + 1)
+            if r is not None:
+                return r
+    elif isinstance(o, list):
+        for v in o:
+            r = _find_key_deep(v, key, depth + 1)
+            if r is not None:
+                return r
+    return None
+
+async def _spotify_embed_tracks(sid):
+    """プレイリストの曲一覧を埋め込みページ(__NEXT_DATA__)から取得。
+    ※2025年からSpotifyは開発モードアプリにプレイリストの曲一覧APIを開放していない（403）ため、
+    こちらが本命ルート。ページ構造変更で壊れたらAPIフォールバックに落ちる"""
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15),
+                                         headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}) as sess:
+            async with sess.get(f"https://open.spotify.com/embed/playlist/{sid}") as r:
+                if r.status != 200:
+                    print(f"Spotify埋め込み {r.status}", flush=True)
+                    return None
+                html = await r.text()
+    except Exception as e:
+        print(f"Spotify埋め込み失敗: {e!r}", flush=True)
+        return None
+    m = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.S)
+    if not m:
+        print("Spotify埋め込み: __NEXT_DATA__が見つからない（ページ構造変更？）", flush=True)
+        return None
+    try:
+        tl = _find_key_deep(json.loads(m.group(1)), "trackList")
+    except Exception:
+        return None
+    out = []
+    for t in tl or []:
+        name, artist = (t.get("title") or "").strip(), (t.get("subtitle") or "").strip()
+        if name:
+            out.append((f"{artist} {name}".strip(), (f"{name}／{artist}" if artist else name)[:80]))
+    return out[:PLAYLIST_MAX] or None
+
 def _sp_entry(t):
     """Spotifyのtrackオブジェクト → (YouTube検索語, 表示名)"""
     arts = "、".join(a["name"] for a in (t.get("artists") or [])[:2])
@@ -2820,6 +2869,9 @@ async def spotify_tracks(kind, sid):
                     print(f"Spotify API {r.status}: {(await r.text())[:200]}", flush=True)
                     return None
                 title = ((await r.json()).get("name") or "プレイリスト")[:60]
+            emb = await _spotify_embed_tracks(sid)   # 曲一覧は埋め込みページが本命（APIは開発モードアプリに403）
+            if emb:
+                return (title, emb)
             url = (f"https://api.spotify.com/v1/playlists/{sid}/tracks?market=JP&limit=100"
                    "&fields=items(track(name,artists(name))),next")
             while url and len(out) < PLAYLIST_MAX:
