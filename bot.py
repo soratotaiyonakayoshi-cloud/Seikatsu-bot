@@ -2799,12 +2799,14 @@ async def spotify_tracks(kind, sid):
             if kind == "track":
                 async with sess.get(f"https://api.spotify.com/v1/tracks/{sid}?market=JP", headers=H) as r:
                     if r.status != 200:
+                        print(f"Spotify API(track) {r.status}: {(await r.text())[:200]}", flush=True)
                         return None
                     t = await r.json()
                 return ((t.get("name") or "曲")[:60], [_sp_entry(t)])
             if kind == "album":
                 async with sess.get(f"https://api.spotify.com/v1/albums/{sid}?market=JP", headers=H) as r:
                     if r.status != 200:
+                        print(f"Spotify API(album) {r.status}: {(await r.text())[:200]}", flush=True)
                         return None
                     d = await r.json()
                 for t in ((d.get("tracks") or {}).get("items") or [])[:PLAYLIST_MAX]:
@@ -2823,6 +2825,7 @@ async def spotify_tracks(kind, sid):
             while url and len(out) < PLAYLIST_MAX:
                 async with sess.get(url, headers=H) as r:
                     if r.status != 200:
+                        print(f"Spotify API(tracks) {r.status}: {(await r.text())[:200]}", flush=True)
                         break
                     d = await r.json()
                 for it in d.get("items") or []:
