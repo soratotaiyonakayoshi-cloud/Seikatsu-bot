@@ -83,7 +83,7 @@ CH = {
     "worklog": ("作業ログ🖥", f"🔊{WORK_VC_NAME} に入ると計測開始・出ると終了。入室中に ✍ ボタンで「何をやるか」をひとこと宣言できます。\n"
                 "10分未満のセッションはログに残りません（時間は記録）。`/kiroku` に今週の作業時間、通信簿に🖥もくもく賞。\n"
                 "🎶 音楽はこのパネルから：リクエスト（URL・検索語・プレイリスト）／🎵BGM／🌿環境音／⏯⏭⏹。\n"
-                "📂 みんなのプレイリスト＝サーバー共有の選曲リスト（作る・流す・自分のは編集）／⭐ おすすめ曲＝紹介文つきで登録（1人20曲まで）。\n"
+                "📂 みんなのプレイリスト＝サーバー共有の選曲リスト（作る・流す・自分のは編集）／⭐ おすすめ曲・🎤おすすめアーティスト＝紹介文つきで登録（1人20件まで）。\n"
                 "-# 細かい操作はコマンドで：`/volume` `/loop` `/shuffle`。音源の追加は音声ファイルを投稿→右クリック→アプリ→「BGMに追加」"),
     "animal": ("どうぶつ🐄", "犬・猫・鳥・道端のなんか・ミニホース…癒しの写真や動画をどうぞ（判定なし・ただの癒し）。\n"
                "写真にはBotが🐾を付けます。1週間でいちばんリアクションを集めた写真の人は、通信簿で🐾癒し賞に。"),
@@ -223,7 +223,8 @@ CREATE TABLE IF NOT EXISTS member_playlist_tracks(
   id INTEGER PRIMARY KEY AUTOINCREMENT, pl_id INTEGER NOT NULL, query TEXT NOT NULL, title TEXT, ts INTEGER
 );
 CREATE TABLE IF NOT EXISTS member_recs(
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, query TEXT NOT NULL, title TEXT, comment TEXT, ts INTEGER
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, query TEXT NOT NULL, title TEXT, comment TEXT, ts INTEGER,
+  kind TEXT NOT NULL DEFAULT 'song'
 );
 CREATE INDEX IF NOT EXISTS idx_work_user_day ON work_sessions(user_id, day);
 """
@@ -260,7 +261,8 @@ async def db_init():
               "ALTER TABLE users ADD COLUMN wake_remind INTEGER NOT NULL DEFAULT 0",
               "ALTER TABLE events ADD COLUMN msg_id TEXT",
               "ALTER TABLE recurring_kadai ADD COLUMN due_days TEXT",
-              "ALTER TABLE users ADD COLUMN off_weekdays TEXT"):
+              "ALTER TABLE users ADD COLUMN off_weekdays TEXT",
+              "ALTER TABLE member_recs ADD COLUMN kind TEXT NOT NULL DEFAULT 'song'"):
         try:
             await db.execute(m)
             await db.commit()
@@ -2823,6 +2825,29 @@ async def spotify_tracks(kind, sid):
         print(f"Spotify取得失敗: {e!r}", flush=True)
         return None
 
+async def _ytdlp_search_multi(query, n=5):
+    """検索語の上位n件 → [(URL, タイトル), ...]（extract_flatの軽量検索・おすすめアーティスト用）"""
+    try:
+        import yt_dlp
+    except Exception:
+        return []
+    opts = {**_ytdlp_base_opts(), "extract_flat": True, "noplaylist": True}
+
+    def _ex():
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"ytsearch{n}:{query}", download=False)
+            out = []
+            for e in info.get("entries") or []:
+                u = e.get("url") or e.get("webpage_url")
+                if u:
+                    out.append((u, (e.get("title") or "？")[:80]))
+            return out
+    try:
+        return await asyncio.to_thread(_ex)
+    except Exception as e:
+        print(f"yt-dlp検索失敗: {e!r}", flush=True)
+        return []
+
 async def _work_vc_channel():
     wid = await meta_get("ch_workvc")
     return bot.get_channel(int(wid)) if wid else None
@@ -3327,17 +3352,28 @@ async def pl_tracks(pid):
                           (pid, PLAYLIST_MAX)) as c:
         return await c.fetchall()
 
+ARTIST_TRACKS = 5   # おすすめアーティスト選択時に流す曲数（YouTube検索上位）
+
 async def rec_all():
     async with db.execute(
-        "SELECT r.id, r.query, r.title, r.comment, r.user_id, COALESCE(u.name,'?') AS uname "
+        "SELECT r.id, r.query, r.title, r.comment, r.user_id, r.kind, COALESCE(u.name,'?') AS uname "
         "FROM member_recs r LEFT JOIN users u ON u.id=r.user_id ORDER BY r.id DESC LIMIT 500") as c:
         return await c.fetchall()
 
+def rec_label(r):
+    """セレクト表示名（アーティストは🎤付き）"""
+    mark = "🎤 " if r["kind"] == "artist" else ""
+    return f"{mark}{(r['title'] or r['query'])[:80]}（{r['uname']}）"[:100]
+
+async def rec_count(uid):
+    async with db.execute("SELECT COUNT(*) AS n FROM member_recs WHERE user_id=?", (str(uid),)) as c:
+        return (await c.fetchone())["n"]
+
 def rec_head(rows, page=0):
     """⭐一覧のヘッダー文（曲数とページ表示つき）"""
-    base = "⭐ **みんなのおすすめ曲**（紹介文つき・選ぶと流れます）"
+    base = f"⭐ **みんなのおすすめ**（紹介文つき・選ぶと流れます。🎤アーティストは人気曲{ARTIST_TRACKS}曲）"
     if not rows:
-        return base + "\nまだありません。最初の1曲をどうぞ！"
+        return base + "\nまだありません。最初の1件をどうぞ！"
     pages = max(1, -(-len(rows) // REC_PAGE))
     if pages > 1:
         base += f"\n-# ぜんぶで{len(rows)}曲・{page + 1}/{pages}ページ（新しい順）"
@@ -3480,13 +3516,11 @@ class RecSetModal(discord.ui.Modal, title="⭐ おすすめ曲を登録"):
 
     async def on_submit(self, interaction):
         uid = str(interaction.user.id)
-        async with db.execute("SELECT COUNT(*) AS n FROM member_recs WHERE user_id=?", (uid,)) as c:
-            n = (await c.fetchone())["n"]
-        if n >= REC_MAX:
-            await interaction.response.send_message(f"⚠️ おすすめは1人{REC_MAX}曲まで。「🗑 自分のを消す」で空けてから登録してね。", ephemeral=True)
+        if await rec_count(uid) >= REC_MAX:
+            await interaction.response.send_message(f"⚠️ おすすめは1人{REC_MAX}件まで。「🗑 自分のを消す」で空けてから登録してね。", ephemeral=True)
             return
         q = str(self.q_in.value).strip()
-        cur = await db.execute("INSERT INTO member_recs(user_id,query,title,comment,ts) VALUES(?,?,?,?,?)",
+        cur = await db.execute("INSERT INTO member_recs(user_id,query,title,comment,ts,kind) VALUES(?,?,?,?,?,'song')",
                                (uid, q, q[:80], str(self.c_in.value).strip()[:200], int(now_jst().timestamp())))
         rid = cur.lastrowid
         await db.commit()
@@ -3494,23 +3528,47 @@ class RecSetModal(discord.ui.Modal, title="⭐ おすすめ曲を登録"):
             asyncio.create_task(_bg_fill_titles("member_recs", [(rid, q)]))
         await interaction.response.send_message("⭐ おすすめ曲を登録しました！パネル⭐からみんな聴けます。", ephemeral=True)
 
+class RecArtistModal(discord.ui.Modal, title="🎤 おすすめアーティストを登録"):
+    a_in = discord.ui.TextInput(label="アーティスト名", max_length=80, placeholder="YOASOBI など")
+    c_in = discord.ui.TextInput(label="紹介文（ひとこと）", style=discord.TextStyle.paragraph, max_length=200, required=False,
+                                placeholder="全曲はずれなしです など")
+
+    async def on_submit(self, interaction):
+        uid = str(interaction.user.id)
+        if await rec_count(uid) >= REC_MAX:
+            await interaction.response.send_message(f"⚠️ おすすめは1人{REC_MAX}件まで。「🗑 自分のを消す」で空けてから登録してね。", ephemeral=True)
+            return
+        name = str(self.a_in.value).strip()
+        await db.execute("INSERT INTO member_recs(user_id,query,title,comment,ts,kind) VALUES(?,?,?,?,?,'artist')",
+                         (uid, name, name[:80], str(self.c_in.value).strip()[:200], int(now_jst().timestamp())))
+        await db.commit()
+        await interaction.response.send_message(f"🎤 おすすめアーティスト「**{name}**」を登録しました！選ばれると人気曲{ARTIST_TRACKS}曲が流れます。", ephemeral=True)
+
 class RecPlaySelect(discord.ui.Select):
     def __init__(self, rows):
         self.meta = {str(r["id"]): r for r in rows}
-        opts = [discord.SelectOption(label=f"{(r['title'] or r['query'])[:80]}（{r['uname']}）"[:100], value=str(r["id"]),
+        opts = [discord.SelectOption(label=rec_label(r), value=str(r["id"]),
                                      description=(r["comment"] or "")[:100]) for r in rows]
-        super().__init__(placeholder="⭐ みんなのおすすめから選ぶ", options=opts)
+        super().__init__(placeholder="⭐ みんなのおすすめから選ぶ（🎤はアーティスト）", options=opts)
 
     async def callback(self, interaction):
         await interaction.response.defer(ephemeral=True)
         r = self.meta[self.values[0]]
-        note = await enqueue_lazy(interaction, [(r["query"], (r["title"] or r["query"])[:80])])
-        extra = f"\n⭐ {r['uname']}のおすすめ：{r['comment']}" if r["comment"] else ""
+        mark = "🎤" if r["kind"] == "artist" else "⭐"
+        if r["kind"] == "artist":   # アーティスト：YouTube検索の上位曲をまとめて流す
+            tracks = await _ytdlp_search_multi(r["query"], ARTIST_TRACKS)
+            if not tracks:
+                await interaction.followup.send("⚠️ 曲を見つけられませんでした（yt-dlpの更新が必要かも）", ephemeral=True)
+                return
+        else:
+            tracks = [(r["query"], (r["title"] or r["query"])[:80])]
+        note = await enqueue_lazy(interaction, tracks)
+        extra = f"\n{mark} {r['uname']}のおすすめ：{r['comment']}" if r["comment"] else ""
         await interaction.followup.send((note or "❌ VCに接続できませんでした。どこかのVCに入ってから選んでね。") + extra, ephemeral=True)
 
 class RecDelSelect(discord.ui.Select):
     def __init__(self, rows):
-        opts = [discord.SelectOption(label=(r["title"] or r["query"])[:100], value=str(r["id"])) for r in rows]
+        opts = [discord.SelectOption(label=rec_label(r), value=str(r["id"])) for r in rows]
         super().__init__(placeholder="消すおすすめを選ぶ（複数OK）", options=opts, min_values=1, max_values=len(opts))
 
     async def callback(self, interaction):
@@ -3540,9 +3598,13 @@ class RecHubView(discord.ui.View):
             await interaction.response.edit_message(content=rec_head(self.rows, p), view=RecHubView(self.rows, p))
         return flip
 
-    @discord.ui.button(label="⭐ 自分のおすすめを登録", style=discord.ButtonStyle.primary, row=1)
+    @discord.ui.button(label="⭐ おすすめ曲を登録", style=discord.ButtonStyle.primary, row=1)
     async def b_set(self, interaction, button):
         await interaction.response.send_modal(RecSetModal())
+
+    @discord.ui.button(label="🎤 アーティストを登録", style=discord.ButtonStyle.primary, row=1)
+    async def b_set_artist(self, interaction, button):
+        await interaction.response.send_modal(RecArtistModal())
 
     @discord.ui.button(label="🗑 自分のを消す", style=discord.ButtonStyle.secondary, row=1)
     async def b_del(self, interaction, button):

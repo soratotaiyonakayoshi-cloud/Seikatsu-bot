@@ -1208,6 +1208,13 @@ async def main():
     await B.db.commit()
     rec = next((r for r in await B.rec_all() if r["title"] == "おすすめ曲"), None)
     check("おすすめ: 一覧（紹介文・名前つき）", (rec["comment"], rec["uname"]), ("神曲です", "せっちゃん"))
+    check("おすすめ: 既定はsong", rec["kind"], "song")
+    check("おすすめ: 曲の表示名", B.rec_label(rec), "おすすめ曲（せっちゃん）")
+    await B.db.execute("INSERT INTO member_recs(user_id,query,title,comment,ts,kind) VALUES('130','YOASOBI','YOASOBI','全部いい',0,'artist')")
+    await B.db.commit()
+    art = next((r for r in await B.rec_all() if r["kind"] == "artist"), None)
+    check("おすすめ: アーティスト登録と🎤表示", B.rec_label(art), "🎤 YOASOBI（せっちゃん）")
+    check("おすすめ: 件数カウント", await B.rec_count(130), 2)
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
