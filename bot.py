@@ -83,7 +83,7 @@ CH = {
     "worklog": ("作業ログ🖥", f"🔊{WORK_VC_NAME} に入ると計測開始・出ると終了。入室中に ✍ ボタンで「何をやるか」をひとこと宣言できます。\n"
                 "10分未満のセッションはログに残りません（時間は記録）。`/kiroku` に今週の作業時間、通信簿に🖥もくもく賞。\n"
                 "🎶 音楽はこのパネルから：リクエスト（URL・検索語・プレイリスト）／🎵BGM／🌿環境音／⏯⏭⏹。\n"
-                "📂 みんなのプレイリスト＝サーバー共有の選曲リスト（作る・流す・自分のは編集）／⭐ おすすめ曲・🎤おすすめアーティスト＝紹介文つきで登録（1人20件まで）／📜 いま流れている曲の歌詞（自分にだけ表示）。\n"
+                "📂 みんなのプレイリスト＝サーバー共有の選曲リスト（作る・流す・自分のは編集）／⭐ おすすめ曲・🎤おすすめアーティスト＝紹介文つきで登録（1人20件まで）／📜 いま流れている曲の歌詞（自分にだけ表示）／🎤 歌詞をVCのサブタイトルにカラオケ風表示。\n"
                 "-# 細かい操作はコマンドで：`/volume` `/loop` `/shuffle`。音源の追加は音声ファイルを投稿→右クリック→アプリ→「BGMに追加」"),
     "animal": ("どうぶつ🐄", "犬・猫・鳥・道端のなんか・ミニホース…癒しの写真や動画をどうぞ（判定なし・ただの癒し）。\n"
                "写真にはBotが🐾を付けます。1週間でいちばんリアクションを集めた写真の人は、通信簿で🐾癒し賞に。"),
@@ -2684,7 +2684,7 @@ def _ytdlp_base_opts():
     return o
 
 async def _ytdlp_resolve(query):
-    """URLまたは検索語 → (ストリームURL, タイトル)。失敗で None"""
+    """URLまたは検索語 → (ストリームURL, タイトル, 秒数orNone)。失敗で None"""
     try:
         import yt_dlp
     except Exception:
@@ -2700,7 +2700,7 @@ async def _ytdlp_resolve(query):
             info = ydl.extract_info(q, download=False)
             if "entries" in info:
                 info = info["entries"][0]
-            return info["url"], (info.get("title") or "？")[:80]
+            return info["url"], (info.get("title") or "？")[:80], info.get("duration")
     try:
         return await asyncio.to_thread(_ex)
     except Exception as e:
@@ -2928,7 +2928,7 @@ async def _play_next():
                 if not r:
                     print(f"🎵 取得失敗につきスキップ: {item.get('title')}", flush=True)
                     return await _play_next()
-                item = {"type": "yt", "url": r[0], "title": item.get("title") or r[1], "by": by}
+                item = {"type": "yt", "url": r[0], "title": item.get("title") or r[1], "by": by, "duration": r[2]}
             target, before = item["url"], "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
             _player["current"] = f"▶ {item['title']}" + (f"（{by}）" if by else "")
         _player["cur_item"] = item
@@ -2955,7 +2955,7 @@ async def _prefetch_next():
         if q and q[0].get("type") == "yt_lazy":
             r = await _ytdlp_resolve(q[0]["query"])
             if r and q and q[0].get("type") == "yt_lazy":   # 解決中にキューが動いていないか確認
-                q[0] = {"type": "yt", "url": r[0], "title": q[0].get("title") or r[1], "by": q[0].get("by")}
+                q[0] = {"type": "yt", "url": r[0], "title": q[0].get("title") or r[1], "by": q[0].get("by"), "duration": r[2]}
     except Exception as e:
         print(f"🎵 先読みエラー: {e!r}", flush=True)
 
@@ -2983,7 +2983,7 @@ async def warmup_player(reason=""):
 
 async def stop_player():
     _player["queue"].clear()
-    _player.update(bgm=False, auto=False, current=None, loop="off", cur_item=None, announced=None)
+    _player.update(bgm=False, auto=False, current=None, loop="off", cur_item=None, announced=None, karaoke=None)
     vc = _player.get("vc")
     _player["vc"] = None
     if vc and vc.is_connected():
@@ -3137,8 +3137,8 @@ async def do_play(interaction, kyoku, eph=False):
             note += f"（上限{PLAYLIST_MAX}曲で切りました）"
         note += sp_note
     else:
-        url, title = single
-        _player["queue"].append({"type": "yt", "url": url, "title": title, "by": by})
+        url, title, dur = single
+        _player["queue"].append({"type": "yt", "url": url, "title": title, "by": by, "duration": dur})
         await db.execute("INSERT INTO play_history(user_id,title,url,ts) VALUES(?,?,?,?)",
                          (str(interaction.user.id), title, kyoku.strip() if looks_like_url(kyoku) else "", ts0))
         await db.commit()
@@ -3765,7 +3765,7 @@ async def custom_lyrics_find(title):
 class LyricsAddModal(discord.ui.Modal, title="📝 歌詞を登録"):
     t_in = discord.ui.TextInput(label="曲名（アーティスト名も入れると確実）", max_length=120)
     x_in = discord.ui.TextInput(label="歌詞", style=discord.TextStyle.paragraph, max_length=4000,
-                                placeholder="歌詞をまるごと貼り付け（4000字まで）")
+                                placeholder="歌詞を貼り付け（4000字まで）。[01:23.45]歌詞 の形式なら🎤カラオケ対応に")
 
     def __init__(self, default_title=""):
         super().__init__()
@@ -3805,6 +3805,129 @@ def current_track_title():
     if it.get("type") == "file":
         return os.path.splitext(os.path.basename(it.get("path", "")))[0] or None
     return None
+
+# ------------------------------------------------------------
+#  🎤 カラオケ：LRC（タイムスタンプ付き歌詞）をVCサブタイトルに1行ずつ流す
+#  実測：VCステータスAPIのバケットは約0.8秒/6回＝行替わり頻度なら余裕
+# ------------------------------------------------------------
+def parse_lrc(text):
+    """LRC形式テキスト → [(秒, 行), ...]（時刻順・空行=間奏）。タイムスタンプが無ければ []"""
+    out = []
+    for ln in (text or "").splitlines():
+        stamps = re.findall(r"\[(\d+):(\d{1,2}(?:\.\d+)?)\]", ln)
+        body = re.sub(r"\[[^\]]*\]", "", ln).strip()
+        for m, s in stamps:
+            out.append((int(m) * 60 + float(s), body))
+    out.sort(key=lambda x: x[0])
+    return out
+
+async def fetch_synced_lyrics(title, duration=None):
+    """lrclibから同期歌詞を取得 → ([(秒,行),...], 長さ差秒orNone)。見つからなければ None。
+    動画の長さに一番近い候補を選ぶ（MVのイントロ等によるズレ対策A）"""
+    import aiohttp
+    import urllib.parse
+    q = clean_track_title(title)
+    if not q:
+        return None
+    url = "https://lrclib.net/api/search?q=" + urllib.parse.quote(q)
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10),
+                                         headers={"User-Agent": "seikatsu-bot (private Discord circle bot)"}) as sess:
+            async with sess.get(url) as r:
+                if r.status != 200:
+                    return None
+                arr = await r.json()
+    except Exception as e:
+        print(f"同期歌詞取得失敗: {e!r}", flush=True)
+        return None
+    best, best_diff = None, None
+    for d in arr or []:
+        if d.get("instrumental") or re.search(r"(?i)\(?\b(inst(rumental)?|off vocal|karaoke)\b|\(inst", d.get("trackName") or ""):
+            continue
+        sync = (d.get("syncedLyrics") or "").strip()
+        if not sync:
+            continue
+        diff = abs((d.get("duration") or 0) - duration) if duration and d.get("duration") else None
+        if best is None or (diff is not None and (best_diff is None or diff < best_diff)):
+            best, best_diff = sync, diff
+    if not best:
+        return None
+    lines = parse_lrc(best)
+    return (lines, best_diff) if lines else None
+
+def track_pos():
+    """いまの曲の再生位置（秒）。送信済み音声フレーム数ベース＝一時停止中は進まない"""
+    vc = _player.get("vc")
+    try:
+        p = getattr(vc, "_player", None)
+        if p:
+            return p.loops * 0.02
+    except Exception:
+        pass
+    return None
+
+async def karaoke_task():
+    """1秒ごとに現在の歌詞行を計算してVCサブタイトルへ（行が変わったときだけAPIを叩く）"""
+    base_item = _player.get("cur_item")
+    last = None
+    try:
+        while True:
+            k = _player.get("karaoke")
+            vc = _player.get("vc")
+            if not k or not vc or not vc.is_connected() or _player.get("cur_item") is not base_item:
+                break   # OFF・切断・曲が変わったら終了（1曲リピートはcur_itemが同じなので続く＝位置も頭に戻る）
+            pos = track_pos()
+            if pos is not None:
+                t = pos + k.get("offset", 0.0)
+                line = None
+                for sec, txt in k["lines"]:
+                    if sec <= t:
+                        line = txt
+                    else:
+                        break
+                show = f"🎤 {line}"[:480] if line else "🎤 ♪〜"
+                if show != last:
+                    try:
+                        await vc.channel.edit(status=show)
+                        _vc_status_cache["v"] = show   # キャッシュも更新（カラオケ後の復帰が飛ばされないように）
+                        last = show
+                    except Exception as e:
+                        print(f"🎤 カラオケ表示エラー: {e!r}", flush=True)
+            await asyncio.sleep(1.0)
+    finally:
+        k = _player.get("karaoke")
+        if k and k.get("task") is asyncio.current_task():
+            _player["karaoke"] = None
+        try:
+            asyncio.create_task(update_work_vc_status())   # 通常のサブタイトルへ復帰
+        except Exception:
+            pass
+
+class KaraokeCtlView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=900)
+
+    async def _nudge(self, interaction, d):
+        k = _player.get("karaoke")
+        if not k:
+            await interaction.response.edit_message(content="🎤 カラオケは終了しています。", view=None)
+            return
+        k["offset"] = k.get("offset", 0.0) + d
+        await interaction.response.edit_message(
+            content=f"🎤 カラオケ中（ずれ補正：歌詞を {k['offset']:+.0f} 秒）\n-# 歌詞が遅れて見えるなら「はやく」、先走るなら「おそく」")
+
+    @discord.ui.button(label="⏪ 歌詞を2秒はやく", style=discord.ButtonStyle.secondary)
+    async def b_fast(self, interaction, button):
+        await self._nudge(interaction, +2.0)
+
+    @discord.ui.button(label="⏩ 歌詞を2秒おそく", style=discord.ButtonStyle.secondary)
+    async def b_slow(self, interaction, button):
+        await self._nudge(interaction, -2.0)
+
+    @discord.ui.button(label="⏹ カラオケOFF", style=discord.ButtonStyle.danger)
+    async def b_off(self, interaction, button):
+        _player["karaoke"] = None   # タスクが次のtickで気づいて通常表示に戻す
+        await interaction.response.edit_message(content="🎤 カラオケ表示をやめました。", view=None)
 
 # ------------------------------------------------------------
 #  🎶 音楽パネル（#作業ログ🖥に常駐・よく使う操作をボタン化。返事は本人だけ＝チャンネルを汚さない）
@@ -3914,6 +4037,44 @@ class MusicPanelView(discord.ui.View):
         if footer:
             embeds[-1].set_footer(text=footer)
         await interaction.followup.send(embeds=embeds, ephemeral=True)
+
+    @discord.ui.button(label="カラオケ", emoji="🎤", style=discord.ButtonStyle.secondary, custom_id="sk_mu_karaoke", row=2)
+    async def b_karaoke(self, interaction, button):
+        """いまの曲の歌詞をVCサブタイトルに1行ずつ流す（曲ごとにオン・曲が終わると自動オフ）"""
+        if _player.get("karaoke"):   # すでにオン→補正・OFFのコントロールを出す
+            k = _player["karaoke"]
+            await interaction.response.send_message(f"🎤 カラオケ中（ずれ補正：歌詞を {k.get('offset', 0.0):+.0f} 秒）",
+                                                    view=KaraokeCtlView(), ephemeral=True)
+            return
+        it = _player.get("cur_item") or {}
+        title = current_track_title()
+        vc = _player.get("vc")
+        if not title or not vc or not (vc.is_playing() or vc.is_paused()):
+            await interaction.response.send_message("いまカラオケにできる曲が流れていません。", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        lines, diff, src = [], None, "lrclib"
+        local = await custom_lyrics_find(title)   # メンバー歌詞がLRC形式なら最優先でカラオケ化
+        if local:
+            lines = parse_lrc(local["text"])
+            if lines:
+                src = f"メンバー登録（{local['uname']}）"
+        if not lines:
+            got = await fetch_synced_lyrics(title, it.get("duration"))
+            if not got:
+                await interaction.followup.send("🎤 タイムスタンプ付きの歌詞が見つかりませんでした（📜の全文表示なら出るかも）。\n"
+                                                "-# 📝で歌詞をLRC形式（[01:23.45]行）で登録するとカラオケ対応になります", ephemeral=True)
+                return
+            lines, diff = got
+        _player["karaoke"] = {"lines": lines, "offset": 0.0}
+        _player["karaoke"]["task"] = asyncio.create_task(karaoke_task())
+        warn = ""
+        if diff is not None and diff > 3:
+            warn = f"\n⚠️ 歌詞の元音源と動画の長さが {diff:.0f} 秒違います（MVのイントロ等）。ずれたら下のボタンで補正してね"
+        elif diff is None and src == "lrclib":
+            warn = "\n-# 動画の長さと照合できませんでした。ずれたら下のボタンで補正してね"
+        await interaction.followup.send(f"🎤 カラオケ表示をはじめました（歌詞: {src}・曲が終わると自動で戻ります）{warn}",
+                                        view=KaraokeCtlView(), ephemeral=True)
 
 VIEW_FACTORY["worklog"] = MusicPanelView
 
@@ -7249,6 +7410,8 @@ async def work_vc_status_text(now=None):
 
 async def update_work_vc_status(now=None):
     """作業部屋VCのステータスを更新（変化があるときだけAPIを叩く）"""
+    if _player.get("karaoke"):
+        return None   # 🎤カラオケ中はサブタイトルを歌詞が占有（終了時にタスクがここを呼び直す）
     wid = await meta_get("ch_workvc")
     vc = bot.get_channel(int(wid)) if wid else None
     if not vc:
