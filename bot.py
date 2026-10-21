@@ -2686,7 +2686,7 @@ def _ytdlp_base_opts():
     return o
 
 async def _ytdlp_resolve(query):
-    """URLまたは検索語 → (ストリームURL, タイトル, 秒数orNone, acodecorNone)。失敗で None"""
+    """URLまたは検索語 → {url,title,duration,acodec,page,thumb} の辞書。失敗で None"""
     try:
         import yt_dlp
     except Exception:
@@ -2703,7 +2703,8 @@ async def _ytdlp_resolve(query):
             info = ydl.extract_info(q, download=False)
             if "entries" in info:
                 info = info["entries"][0]
-            return info["url"], (info.get("title") or "？")[:80], info.get("duration"), info.get("acodec")
+            return {"url": info["url"], "title": (info.get("title") or "？")[:80], "duration": info.get("duration"),
+                    "acodec": info.get("acodec"), "page": info.get("webpage_url"), "thumb": info.get("thumbnail")}
     try:
         return await asyncio.to_thread(_ex)
     except Exception as e:
@@ -2712,8 +2713,15 @@ async def _ytdlp_resolve(query):
 
 PLAYLIST_MAX = 50   # プレイリストから一度に積む上限
 
+def fmt_dur_sec(s):
+    """秒数 → 36:59 / 1:02:03 形式"""
+    s = int(s)
+    h, r = divmod(s, 3600)
+    m, sec = divmod(r, 60)
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
 async def _ytdlp_playlist(query):
-    """プレイリストURLなら (タイトル, [(URL, 曲名), ...]) を軽量抽出で返す。単曲・失敗は None"""
+    """プレイリストURLなら (タイトル, [(URL, 曲名), ...], meta{dur,thumb,page}) を軽量抽出で返す。単曲・失敗は None"""
     try:
         import yt_dlp
     except Exception:
@@ -2736,7 +2744,13 @@ async def _ytdlp_playlist(query):
                     u = f"https://www.youtube.com/watch?v={u}"
                 if u:
                     out.append((u, (e.get("title") or "？")[:80]))
-            return ((info.get("title") or "プレイリスト")[:60], out) if out else None
+            if not out:
+                return None
+            total = sum(e.get("duration") or 0 for e in ents[:PLAYLIST_MAX])
+            ths = info.get("thumbnails") or (ents[0].get("thumbnails") if ents else None) or []
+            meta = {"dur": total or None, "thumb": ths[-1].get("url") if ths else None,
+                    "page": info.get("webpage_url") or q}
+            return ((info.get("title") or "プレイリスト")[:60], out, meta)
     try:
         return await asyncio.to_thread(_ex)
     except Exception as e:
@@ -2820,15 +2834,23 @@ async def _spotify_embed_tracks(sid):
         print("Spotify埋め込み: __NEXT_DATA__が見つからない（ページ構造変更？）", flush=True)
         return None
     try:
-        tl = _find_key_deep(json.loads(m.group(1)), "trackList")
+        data = json.loads(m.group(1))
+        tl = _find_key_deep(data, "trackList")
     except Exception:
         return None
-    out = []
+    out, total = [], 0
     for t in tl or []:
         name, artist = (t.get("title") or "").strip(), (t.get("subtitle") or "").strip()
         if name:
             out.append((f"{artist} {name}".strip(), (f"{name}／{artist}" if artist else name)[:80]))
-    return out[:PLAYLIST_MAX] or None
+            d = t.get("duration") or 0
+            total += d / 1000 if d > 10000 else d   # 埋め込みはミリ秒
+    thumb = None
+    cover = _find_key_deep(data, "coverArt")
+    if isinstance(cover, dict) and (cover.get("sources") or []):
+        thumb = cover["sources"][-1].get("url")
+    meta = {"dur": int(total) or None, "thumb": thumb, "page": f"https://open.spotify.com/playlist/{sid}"}
+    return (out[:PLAYLIST_MAX], meta) if out else None
 
 def _sp_entry(t):
     """Spotifyのtrackオブジェクト → (YouTube検索語, 表示名)"""
@@ -2851,17 +2873,26 @@ async def spotify_tracks(kind, sid):
                         print(f"Spotify API(track) {r.status}: {(await r.text())[:200]}", flush=True)
                         return None
                     t = await r.json()
-                return ((t.get("name") or "曲")[:60], [_sp_entry(t)])
+                imgs = ((t.get("album") or {}).get("images")) or []
+                meta = {"dur": int((t.get("duration_ms") or 0) / 1000) or None,
+                        "thumb": imgs[0].get("url") if imgs else None,
+                        "page": f"https://open.spotify.com/track/{sid}"}
+                return ((t.get("name") or "曲")[:60], [_sp_entry(t)], meta)
             if kind == "album":
                 async with sess.get(f"https://api.spotify.com/v1/albums/{sid}?market=JP", headers=H) as r:
                     if r.status != 200:
                         print(f"Spotify API(album) {r.status}: {(await r.text())[:200]}", flush=True)
                         return None
                     d = await r.json()
+                total = 0
                 for t in ((d.get("tracks") or {}).get("items") or [])[:PLAYLIST_MAX]:
                     if t.get("name"):
                         out.append(_sp_entry(t))
-                return ((d.get("name") or "アルバム")[:60], out) if out else None
+                        total += (t.get("duration_ms") or 0) / 1000
+                imgs = d.get("images") or []
+                meta = {"dur": int(total) or None, "thumb": imgs[0].get("url") if imgs else None,
+                        "page": f"https://open.spotify.com/album/{sid}"}
+                return ((d.get("name") or "アルバム")[:60], out, meta) if out else None
             # playlist（※Spotify公式編集のプレイリストは2024年からAPI非公開＝404になる。ユーザー作成の公開プレイリストはOK）
             async with sess.get(f"https://api.spotify.com/v1/playlists/{sid}?market=JP&fields=name", headers=H) as r:
                 if r.status != 200:
@@ -2871,7 +2902,7 @@ async def spotify_tracks(kind, sid):
                 title = ((await r.json()).get("name") or "プレイリスト")[:60]
             emb = await _spotify_embed_tracks(sid)   # 曲一覧は埋め込みページが本命（APIは開発モードアプリに403）
             if emb:
-                return (title, emb)
+                return (title, emb[0], emb[1])
             url = (f"https://api.spotify.com/v1/playlists/{sid}/tracks?market=JP&limit=100"
                    "&fields=items(track(name,artists(name))),next")
             while url and len(out) < PLAYLIST_MAX:
@@ -2885,7 +2916,7 @@ async def spotify_tracks(kind, sid):
                     if t.get("name"):
                         out.append(_sp_entry(t))
                 url = d.get("next")
-            return (title, out[:PLAYLIST_MAX]) if out else None
+            return (title, out[:PLAYLIST_MAX], {"page": f"https://open.spotify.com/playlist/{sid}"}) if out else None
     except Exception as e:
         print(f"Spotify取得失敗: {e!r}", flush=True)
         return None
@@ -2929,14 +2960,26 @@ async def _announce_now_playing():
     if _player.get("announced") == cur:   # 1曲リピート等で同じ曲が続くときは繰り返さない
         return
     _player["announced"] = cur
-    msg = cur
-    note = (_player.get("cur_item") or {}).get("note")
-    if note:   # ⭐おすすめの紹介文はサブテキストで薄く添える（-#は行頭にしか効かないので全行に付ける）
-        for ln in note[:150].splitlines():
-            if ln.strip():
-                msg += f"\n-# {ln.strip()}"
+    it = _player.get("cur_item") or {}
+    note = (it.get("note") or "")[:200]
     try:
-        await vc.channel.send(msg, silent=True)
+        if it.get("type") in ("yt", "file"):   # 曲はサムネ・リンク付きのカードで（Jockie風）
+            title = it.get("title") or os.path.splitext(os.path.basename(it.get("path", "")))[0] or cur
+            e = discord.Embed(title=title[:256], url=it.get("page") or None,
+                              description=note or None, color=discord.Color.gold())
+            e.set_author(name="♪ 再生中")
+            if it.get("thumb"):
+                e.set_thumbnail(url=it["thumb"])
+            foot = []
+            if it.get("duration"):
+                foot.append(fmt_dur_sec(it["duration"]))
+            if it.get("by"):
+                foot.append(f"リクエスト：{it['by']}")
+            if foot:
+                e.set_footer(text="　".join(foot))
+            await vc.channel.send(embed=e, silent=True)
+        else:   # 環境音などはテキストのまま
+            await vc.channel.send(cur, silent=True)
     except Exception as e:
         print(f"🎵 再生告知失敗: {e!r}", flush=True)
 
@@ -2992,8 +3035,7 @@ async def _play_next():
                 if not r:
                     print(f"🎵 取得失敗につきスキップ: {item.get('title')}", flush=True)
                     return await _play_next()
-                item = {"type": "yt", "url": r[0], "title": item.get("title") or r[1], "by": by, "duration": r[2],
-                        "acodec": r[3], "note": item.get("note")}
+                item = {**r, "type": "yt", "title": item.get("title") or r["title"], "by": by, "note": item.get("note")}
             target, before = item["url"], "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
             _player["current"] = f"▶ {item['title']}" + (f"（{by}）" if by else "")
         _player["cur_item"] = item
@@ -3030,8 +3072,7 @@ async def _prefetch_next():
         if q and q[0].get("type") == "yt_lazy":
             r = await _ytdlp_resolve(q[0]["query"])
             if r and q and q[0].get("type") == "yt_lazy":   # 解決中にキューが動いていないか確認
-                q[0] = {"type": "yt", "url": r[0], "title": q[0].get("title") or r[1], "by": q[0].get("by"), "duration": r[2],
-                        "acodec": r[3], "note": q[0].get("note")}
+                q[0] = {**r, "type": "yt", "title": q[0].get("title") or r["title"], "by": q[0].get("by"), "note": q[0].get("note")}
     except Exception as e:
         print(f"🎵 先読みエラー: {e!r}", flush=True)
 
@@ -3169,18 +3210,17 @@ async def play_command(interaction, kyoku: str):
 
 async def do_play(interaction, kyoku, eph=False):
     """/playとパネル🎶の共通処理（呼び出し側でdefer済みであること）"""
-    pl, sp_note = None, ""
+    pl = None
     sp = spotify_url_parts(kyoku)
-    if sp:   # 🟢 Spotify：曲名一覧をAPIで取り、1曲ずつYouTube検索で再生
+    if sp:   # 🟢 Spotify：曲一覧を取得して1曲ずつ再生キューへ
         if not (SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET):
             await interaction.followup.send("⚠️ Spotify連携が未設定です（VMの.envに SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET が必要）", ephemeral=eph)
             return
         pl = await spotify_tracks(*sp)
         if not pl:
             await interaction.followup.send("⚠️ Spotifyから曲一覧を取得できませんでした。\n"
-                                            "-# 非公開プレイリストと、Spotify公式が編集したプレイリスト（Today's Top Hits等）はAPIで取れません。自分や他ユーザーが作った公開プレイリストならOK", ephemeral=eph)
+                                            "-# 非公開プレイリストと、Spotify公式が編集したプレイリスト（Today's Top Hits等）は取れません。自分や他ユーザーが作った公開プレイリストならOK", ephemeral=eph)
             return
-        sp_note = "\n-# Spotifyの曲は曲名でYouTubeを検索して再生します（たまに別バージョンが流れることがあります）"
     # プレイリストっぽいURLのときだけプレイリスト抽出を試す（単曲URLの余計な1往復を省いて高速化）
     if not pl and looks_like_url(kyoku) and re.search(r"list=|/playlist|/sets/|/album", kyoku):
         pl = await _ytdlp_playlist(kyoku)
@@ -3199,31 +3239,43 @@ async def do_play(interaction, kyoku, eph=False):
     by = interaction.user.display_name
     ts0 = int(now_jst().timestamp())
     if pl:
-        pl_title, tracks = pl
+        pl_title, tracks = pl[0], pl[1]
+        meta = pl[2] if len(pl) > 2 else {}
         for u, t in tracks:
             _player["queue"].append({"type": "yt_lazy", "query": u, "title": t, "by": by})
             await db.execute("INSERT INTO play_history(user_id,title,url,ts) VALUES(?,?,?,?)",
                              (str(interaction.user.id), t, u, ts0))
         await db.commit()
-        if len(tracks) == 1:   # Spotifyの単曲リンクなど
-            note = f"⏭ キューに追加（{len(_player['queue'])} 曲待ち）：**{tracks[0][1]}**"
-        else:
-            note = f"📃 プレイリスト「**{pl_title}**」から **{len(tracks)} 曲**をキューに追加"
-        if len(tracks) >= PLAYLIST_MAX:
-            note += f"（上限{PLAYLIST_MAX}曲で切りました）"
-        note += sp_note
+        emb = discord.Embed(title="📃 プレイリストを追加" if len(tracks) > 1 else "⏭ キューに追加",
+                            color=discord.Color.gold())
+        name_v = f"[{pl_title}]({meta['page']})" if meta.get("page") else pl_title
+        emb.add_field(name="プレイリスト" if len(tracks) > 1 else "曲", value=name_v, inline=True)
+        emb.add_field(name="曲数", value=str(len(tracks)), inline=True)
+        if meta.get("dur"):
+            emb.add_field(name="合計", value=fmt_dur_sec(meta["dur"]), inline=True)
+        if meta.get("thumb"):
+            emb.set_thumbnail(url=meta["thumb"])
+        note = f"-# 上限{PLAYLIST_MAX}曲で切りました" if len(tracks) >= PLAYLIST_MAX else ""
     else:
-        url, title, dur, ac = single
-        _player["queue"].append({"type": "yt", "url": url, "title": title, "by": by, "duration": dur, "acodec": ac})
+        _player["queue"].append({**single, "type": "yt", "by": by})
         await db.execute("INSERT INTO play_history(user_id,title,url,ts) VALUES(?,?,?,?)",
-                         (str(interaction.user.id), title, kyoku.strip() if looks_like_url(kyoku) else "", ts0))
+                         (str(interaction.user.id), single["title"], kyoku.strip() if looks_like_url(kyoku) else "", ts0))
         await db.commit()
-        note = f"⏭ キューに追加（{len(_player['queue'])} 曲待ち）：**{title}**"
-    note += _bgm_mode_off()   # リクエストが来たらBGMモードは終了（終わったあと勝手にBGMへ戻らない）
+        emb = discord.Embed(title="⏭ キューに追加", color=discord.Color.gold(),
+                            description=f"[{single['title']}]({single['page']})" if single.get("page") else f"**{single['title']}**")
+        if single.get("duration"):
+            emb.add_field(name="長さ", value=fmt_dur_sec(single["duration"]), inline=True)
+        emb.add_field(name="待ち", value=f"{len(_player['queue'])} 曲", inline=True)
+        if single.get("thumb"):
+            emb.set_thumbnail(url=single["thumb"])
+        note = ""
+    off = _bgm_mode_off()   # リクエストが来たらBGMモードは終了（終わったあと勝手にBGMへ戻らない）
+    if off:
+        note += ("\n" if note else "") + off.strip("\n")
     if not vc.is_playing():
         await _play_next()
-        note += f"\n▶ 再生開始：{(_player.get('current') or '').lstrip('▶🎵 ')}"
-    await interaction.followup.send(note, ephemeral=eph)
+        emb.set_footer(text=f"▶ 再生開始：{(_player.get('current') or '').lstrip('▶🎵 ')}"[:200])
+    await interaction.followup.send(content=note or None, embed=emb, ephemeral=eph)
 
 def queue_text():
     """いまの曲とキューの表示テキスト。何もなければ None"""
@@ -3377,7 +3429,7 @@ async def _bg_fill_titles(table, rows):
         try:
             r = await _ytdlp_resolve(q)
             if r:
-                await db.execute(f"UPDATE {table} SET title=? WHERE id=?", (r[1], rid))   # tableは内部定数のみ
+                await db.execute(f"UPDATE {table} SET title=? WHERE id=?", (r["title"], rid))   # tableは内部定数のみ
                 await db.commit()
         except Exception:
             pass

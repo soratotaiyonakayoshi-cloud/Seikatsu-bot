@@ -98,6 +98,7 @@ check("Spotify: アルバムURL", B.spotify_url_parts("https://open.spotify.com/
 check("Spotify: 他のURLはNone", (B.spotify_url_parts("https://youtu.be/x"), B.spotify_url_parts("lofi hiphop")), (None, None))
 check("Spotify: 検索語への変換", B._sp_entry({"name": "夜に駆ける", "artists": [{"name": "YOASOBI"}]}), ("YOASOBI 夜に駆ける", "夜に駆ける／YOASOBI"))
 check("Spotify: 埋め込みJSONの深掘り", B._find_key_deep({"props": [{"x": 1}, {"trackList": [{"title": "a"}]}]}, "trackList"), [{"title": "a"}])
+check("時間表記: 分秒と時分秒", (B.fmt_dur_sec(2219), B.fmt_dur_sec(3723)), ("36:59", "1:02:03"))
 check("BGM追加: パス区切りを除去", "/" not in B._safe_bgm_name("../../etc/passwd.mp3") and ".." not in B._safe_bgm_name("..\\..\\x.mp3") and B._safe_bgm_name("うた.mp3") == "うた.mp3", True)
 check("BGM: removeサブコマンドあり", sorted(c.name for c in B.bgm_grp.commands), ["list", "remove", "start", "stop"])
 
