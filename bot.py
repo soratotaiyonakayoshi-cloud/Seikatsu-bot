@@ -3360,6 +3360,26 @@ async def pl_tracks(pid):
 
 REC_ARTIST_TRACK_MAX = 25   # 1アーティストに登録できる曲数（削除セレクト25枠）
 
+_RENAMABLE_TABLES = ("member_playlist_tracks", "member_rec_tracks", "member_recs")
+
+class TrackRenameModal(discord.ui.Modal, title="✏️ 曲名を変更"):
+    name_in = discord.ui.TextInput(label="新しい曲名", max_length=80)
+
+    def __init__(self, table, row_id, current):
+        super().__init__()
+        assert table in _RENAMABLE_TABLES
+        self.table, self.row_id = table, row_id
+        self.name_in.default = (current or "")[:80]
+
+    async def on_submit(self, interaction):
+        t = str(self.name_in.value).strip()
+        if not t:
+            await interaction.response.send_message("⚠️ 曲名が空です。", ephemeral=True)
+            return
+        await db.execute(f"UPDATE {self.table} SET title=? WHERE id=?", (t[:80], self.row_id))   # tableは内部定数のみ
+        await db.commit()
+        await interaction.response.send_message(f"✏️ 曲名を「**{t}**」に変更しました。", ephemeral=True)
+
 def _oneline(s):
     """紹介文を1行化（改行は／に）"""
     return "／".join(ln.strip() for ln in (s or "").splitlines() if ln.strip())
@@ -3484,9 +3504,28 @@ class PlPickOwnSelect(discord.ui.Select):
         if self.mode == "add":
             await interaction.response.send_modal(PlAddModal(pid, name))
             return
+        rows = await pl_tracks(pid)
+        if self.mode == "ren":
+            if not rows:
+                await interaction.response.edit_message(content=f"「**{name}**」にはまだ曲がありません。", view=None)
+                return
+            v = discord.ui.View(timeout=300)
+            v.add_item(PlTrackRenameSelect(rows))
+            await interaction.response.edit_message(content=f"✏️ 「**{name}**」のどの曲の名前を変える？", view=v)
+            return
         v = discord.ui.View(timeout=300)
-        v.add_item(PlDelSelect(pid, name, await pl_tracks(pid)))
+        v.add_item(PlDelSelect(pid, name, rows))
         await interaction.response.edit_message(content=f"🗑 「**{name}**」から消すものを選んでね", view=v)
+
+class PlTrackRenameSelect(discord.ui.Select):
+    def __init__(self, rows):
+        self.by_id = {str(r["id"]): r for r in rows}
+        opts = [discord.SelectOption(label=(r["title"] or r["query"])[:100], value=str(r["id"])) for r in rows[:25]]
+        super().__init__(placeholder="✏️ 名前を変える曲を選ぶ", options=opts)
+
+    async def callback(self, interaction):
+        r = self.by_id[self.values[0]]
+        await interaction.response.send_modal(TrackRenameModal("member_playlist_tracks", r["id"], r["title"] or r["query"]))
 
 class PlDelSelect(discord.ui.Select):
     def __init__(self, pid, name, rows):
@@ -3529,6 +3568,16 @@ class PlHubView(discord.ui.View):
         v = discord.ui.View(timeout=300)
         v.add_item(PlPickOwnSelect(mine, "add"))
         await interaction.response.send_message("🎵 どのプレイリストに追加する？", view=v, ephemeral=True)
+
+    @discord.ui.button(label="✏️ 曲名を変更", style=discord.ButtonStyle.secondary, row=1)
+    async def b_rename(self, interaction, button):
+        mine = await self._mine(interaction)
+        if not mine:
+            await interaction.response.send_message("自分のプレイリストがまだありません（直せるのは自分のものだけ）。", ephemeral=True)
+            return
+        v = discord.ui.View(timeout=300)
+        v.add_item(PlPickOwnSelect(mine, "ren"))
+        await interaction.response.send_message("✏️ どのプレイリストの曲名を直す？", view=v, ephemeral=True)
 
     @discord.ui.button(label="🗑 削除", style=discord.ButtonStyle.secondary, row=1)
     async def b_del(self, interaction, button):
@@ -3624,16 +3673,41 @@ class RecTrackDelSelect(discord.ui.Select):
             msg += "\n-# 消せるのは、アーティストの登録者（全曲）か、自分が追加した曲だけです"
         await interaction.response.edit_message(content=msg, view=None)
 
+class RecTrackRenameSelect(discord.ui.Select):
+    def __init__(self, rows, owner_id):
+        self.by_id = {str(r["id"]): r for r in rows}
+        self.owner_id = str(owner_id)
+        opts = [discord.SelectOption(label=(r["title"] or r["query"])[:100], value=str(r["id"])) for r in rows[:25]]
+        super().__init__(placeholder="✏️ 名前を変える曲を選ぶ", options=opts)
+
+    async def callback(self, interaction):
+        r = self.by_id[self.values[0]]
+        uid = str(interaction.user.id)
+        if uid != self.owner_id and uid != (r["added_by"] or ""):
+            await interaction.response.send_message("⚠️ 直せるのは、アーティストの登録者か、その曲を追加した人だけです。", ephemeral=True)
+            return
+        await interaction.response.send_modal(TrackRenameModal("member_rec_tracks", r["id"], r["title"] or r["query"]))
+
 class ArtistManageView(discord.ui.View):
     def __init__(self, rec_id, aname, rows, owner_id):
         super().__init__(timeout=600)
-        self.rec_id, self.aname = rec_id, aname
+        self.rec_id, self.aname, self.owner_id = rec_id, aname, owner_id
         if rows:
             self.add_item(RecTrackDelSelect(rec_id, aname, rows, owner_id))
 
     @discord.ui.button(label="➕ 曲を追加", style=discord.ButtonStyle.primary, row=1)
     async def b_add(self, interaction, button):
         await interaction.response.send_modal(RecSongAddModal(self.rec_id, self.aname))
+
+    @discord.ui.button(label="✏️ 曲名を変更", style=discord.ButtonStyle.secondary, row=1)
+    async def b_rename(self, interaction, button):
+        rows = await rec_tracks(self.rec_id)
+        if not rows:
+            await interaction.response.send_message("まだ曲がありません。", ephemeral=True)
+            return
+        v = discord.ui.View(timeout=300)
+        v.add_item(RecTrackRenameSelect(rows, self.owner_id))
+        await interaction.response.send_message(f"✏️ 「**{self.aname}**」のどの曲の名前を変える？", view=v, ephemeral=True)
 
 class ArtistPickSelect(discord.ui.Select):
     def __init__(self, rows):
@@ -3717,6 +3791,16 @@ class RecPlaySelect(discord.ui.Select):
         note = await enqueue_lazy(interaction, [(r["query"], (r["title"] or r["query"])[:80], note_txt)])
         await interaction.followup.send((note or "❌ VCに接続できませんでした。どこかのVCに入ってから選んでね。") + extra, ephemeral=True)
 
+class RecRenameSelect(discord.ui.Select):
+    def __init__(self, rows):
+        self.by_id = {str(r["id"]): r for r in rows}
+        opts = [discord.SelectOption(label=rec_label(r), value=str(r["id"])) for r in rows]
+        super().__init__(placeholder="✏️ 名前を変えるおすすめ曲を選ぶ", options=opts)
+
+    async def callback(self, interaction):
+        r = self.by_id[self.values[0]]
+        await interaction.response.send_modal(TrackRenameModal("member_recs", r["id"], r["title"] or r["query"]))
+
 class RecDelSelect(discord.ui.Select):
     def __init__(self, rows):
         opts = [discord.SelectOption(label=rec_label(r), value=str(r["id"])) for r in rows]
@@ -3769,6 +3853,16 @@ class RecHubView(discord.ui.View):
         v = discord.ui.View(timeout=300)
         v.add_item(ArtistPickSelect(artists))
         await interaction.response.send_message("🎵 どのアーティストに曲を追加・編集する？", view=v, ephemeral=True)
+
+    @discord.ui.button(label="✏️ 曲名を変更", style=discord.ButtonStyle.secondary, row=1)
+    async def b_rename(self, interaction, button):
+        mine = [r for r in await rec_all() if r["user_id"] == str(interaction.user.id) and r["kind"] == "song"][:25]
+        if not mine:
+            await interaction.response.send_message("自分のおすすめ曲がまだありません（アーティストの曲は「🎵 追加・編集」の中の✏️から）。", ephemeral=True)
+            return
+        v = discord.ui.View(timeout=300)
+        v.add_item(RecRenameSelect(mine))
+        await interaction.response.send_message("✏️ どのおすすめ曲の名前を直す？", view=v, ephemeral=True)
 
     @discord.ui.button(label="🗑 自分のを消す", style=discord.ButtonStyle.secondary, row=1)
     async def b_del(self, interaction, button):
