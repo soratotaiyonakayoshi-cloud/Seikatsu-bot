@@ -1216,8 +1216,18 @@ async def main():
     await B.db.execute("INSERT INTO member_recs(user_id,query,title,comment,ts,kind) VALUES('130','YOASOBI','YOASOBI','全部いい',0,'artist')")
     await B.db.commit()
     art = next((r for r in await B.rec_all() if r["kind"] == "artist"), None)
-    check("おすすめ: アーティスト登録と🎤表示", B.rec_label(art), "🎤 YOASOBI（せっちゃん）")
+    check("おすすめ: アーティスト登録と🎤表示（0曲）", B.rec_label(art), "🎤 YOASOBI（せっちゃん・0曲）")
     check("おすすめ: 件数カウント", await B.rec_count(130), 2)
+    await B.db.execute("INSERT INTO member_rec_tracks(rec_id,query,title,comment,ts) VALUES(?,?,?,?,0)",
+                       (art["id"], "q2", "夜に駆ける", "初見はこれ")); await B.db.commit()
+    check("おすすめ: アーティストの曲（紹介文つき）", [(t["title"], t["comment"]) for t in await B.rec_tracks(art["id"])],
+          [("夜に駆ける", "初見はこれ")])
+    art = next((r for r in await B.rec_all() if r["kind"] == "artist"), None)
+    check("おすすめ: 表示に曲数反映", B.rec_label(art), "🎤 YOASOBI（せっちゃん・1曲）")
+    B._player["bgm"] = True
+    _msg = B._bgm_mode_off()
+    check("BGM: リクエストでモードオフ＋案内", (B._player["bgm"], "オフ" in _msg), (False, True))
+    check("BGM: すでにオフなら案内なし", B._bgm_mode_off(), "")
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
