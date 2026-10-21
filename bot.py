@@ -83,7 +83,7 @@ CH = {
     "worklog": ("作業ログ🖥", f"🔊{WORK_VC_NAME} に入ると計測開始・出ると終了。入室中に ✍ ボタンで「何をやるか」をひとこと宣言できます。\n"
                 "10分未満のセッションはログに残りません（時間は記録）。`/kiroku` に今週の作業時間、通信簿に🖥もくもく賞。\n"
                 "🎶 音楽はこのパネルから：リクエスト（URL・検索語・プレイリスト）／🎵BGM／🌿環境音／⏯⏭⏹。\n"
-                "📂 みんなのプレイリスト＝サーバー共有の選曲リスト（作る・流す・自分のは編集）／⭐ おすすめ曲・🎤おすすめアーティスト＝紹介文つきで登録（1人20件まで）／📜 いま流れている曲の歌詞（自分にだけ表示）／🎤 歌詞をVCのサブタイトルに曲へ同期させて1行ずつ表示。\n"
+                "📂 みんなのプレイリスト＝サーバー共有の選曲リスト（作る・流す・自分のは編集）／⭐ おすすめ曲・🎤おすすめアーティスト＝紹介文つきで登録（1人20件まで）／📜 いま流れている曲の歌詞（自分にだけ表示）／🎤 同期歌詞がある曲は自動で歌詞表示（🎤からずれ補正・OFF・自動のON/OFF）。\n"
                 "-# 細かい操作はコマンドで：`/volume` `/loop` `/shuffle`。音源の追加は音声ファイルを投稿→右クリック→アプリ→「BGMに追加」"),
     "animal": ("どうぶつ🐄", "犬・猫・鳥・道端のなんか・ミニホース…癒しの写真や動画をどうぞ（判定なし・ただの癒し）。\n"
                "写真にはBotが🐾を付けます。1週間でいちばんリアクションを集めた写真の人は、通信簿で🐾癒し賞に。"),
@@ -2952,6 +2952,7 @@ async def _play_next():
         asyncio.create_task(_prefetch_next())   # 次の曲を再生中に裏で解決（曲間のラグをなくす）
         asyncio.create_task(update_work_vc_status())   # VCサブタイトルに再生中の曲を出す
         asyncio.create_task(_announce_now_playing())   # VC内蔵チャットにも流す
+        asyncio.create_task(_maybe_auto_karaoke())     # 同期歌詞がある曲は自動で歌詞同期（既定ON）
     except Exception as e:
         print(f"🎵 play失敗: {e!r}", flush=True)
         _player["current"] = None
@@ -3923,6 +3924,7 @@ async def karaoke_task():
     VCサブタイトルの両方に出す（どちらも変化があったときだけAPIを叩く）"""
     base_item = _player.get("cur_item")
     title = (current_track_title() or "")[:60]
+    was_auto = bool((_player.get("karaoke") or {}).get("auto"))
     msg, vc = None, _player.get("vc")
     if vc and vc.is_connected():
         try:   # 歌詞ウィンドウ＝VCチャットに1通だけ投稿して編集し続ける（新着は増えない）
@@ -3969,14 +3971,49 @@ async def karaoke_task():
         if k and k.get("task") is asyncio.current_task():
             _player["karaoke"] = None
         if msg:
-            try:   # 終わったら小さな1行にたたむ（チャットを占領しない）
-                await msg.edit(content=f"-# 🎤 歌詞同期おわり：{title}")
+            try:
+                if was_auto:   # 自動起動ぶんは消す（連続再生でチャットが「おわり」行だらけにならないように）
+                    await msg.delete()
+                else:          # 手動起動ぶんは小さな1行にたたむ
+                    await msg.edit(content=f"-# 🎤 歌詞同期おわり：{title}")
             except Exception:
                 pass
         try:
             asyncio.create_task(update_work_vc_status())   # 通常のサブタイトルへ復帰
         except Exception:
             pass
+
+async def karaoke_auto_enabled():
+    """歌詞同期の自動起動（既定ON・🎤のコントロールから切替）"""
+    return (await meta_get("karaoke_auto", "1")) != "0"
+
+async def _maybe_auto_karaoke():
+    """新しい曲が始まったとき、同期歌詞が見つかれば自動で歌詞同期を開始（無ければ静かに何もしない）"""
+    try:
+        if _player.get("karaoke") or not await karaoke_auto_enabled():
+            return
+        it = _player.get("cur_item") or {}
+        title = current_track_title()
+        vc = _player.get("vc")
+        if not title or not vc or not vc.is_connected():
+            return
+        lines, diff = [], None
+        local = await custom_lyrics_find(title)
+        if local:
+            lines = parse_lrc(local["text"])
+        if not lines:
+            got = await fetch_synced_lyrics(title, it.get("duration"))
+            if not got:
+                return
+            lines, diff = got
+        if diff is not None and diff > 10:
+            return   # 元音源と長さが大きく違う＝別物の可能性大。自動では出さない（手動🎤なら出せる）
+        if _player.get("cur_item") is not it or _player.get("karaoke"):
+            return   # 歌詞を取りに行っている間に曲が変わっていたらやめる
+        _player["karaoke"] = {"lines": lines, "offset": 0.0, "auto": True}
+        _player["karaoke"]["task"] = asyncio.create_task(karaoke_task())
+    except Exception as e:
+        print(f"🎤 自動同期エラー: {e!r}", flush=True)
 
 TAP_LEAD = 0.3   # ⏺打ち込みの反応遅れ補正（押した瞬間より少し手前に刻む）
 
@@ -4081,8 +4118,24 @@ class KaraokeMakeView(discord.ui.View):
             view=v, ephemeral=True)
 
 class KaraokeCtlView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, auto_on=True):
         super().__init__(timeout=900)
+        b = discord.ui.Button(label=("🚫 自動同期をやめる" if auto_on else "🔁 自動同期をONに戻す"),
+                              style=discord.ButtonStyle.secondary, row=1)
+        b.callback = self._mk_auto_toggle(auto_on)
+        self.add_item(b)
+
+    def _mk_auto_toggle(self, cur_on):
+        async def cb(interaction):
+            await meta_set("karaoke_auto", "0" if cur_on else "1")
+            if cur_on:
+                _player["karaoke"] = None   # いまの曲の表示も止める
+                await interaction.response.edit_message(
+                    content="🚫 自動同期をOFFにしました（出したい曲だけ🎤で手動起動できます）", view=None)
+            else:
+                await interaction.response.edit_message(
+                    content="🔁 自動同期をONに戻しました（同期歌詞がある曲は自動で表示されます）", view=None)
+        return cb
 
     async def _nudge(self, interaction, d):
         k = _player.get("karaoke")
@@ -4218,10 +4271,10 @@ class MusicPanelView(discord.ui.View):
     @discord.ui.button(label="歌詞を同期", emoji="🎤", style=discord.ButtonStyle.secondary, custom_id="sk_mu_karaoke", row=2)
     async def b_karaoke(self, interaction, button):
         """いまの曲の歌詞をVCサブタイトルに1行ずつ流す（曲ごとにオン・曲が終わると自動オフ）"""
-        if _player.get("karaoke"):   # すでにオン→補正・OFFのコントロールを出す
+        if _player.get("karaoke"):   # すでにオン→補正・OFF・自動切替のコントロールを出す
             k = _player["karaoke"]
             await interaction.response.send_message(f"🎤 歌詞同期中（ずれ補正：歌詞を {k.get('offset', 0.0):+.0f} 秒）",
-                                                    view=KaraokeCtlView(), ephemeral=True)
+                                                    view=KaraokeCtlView(await karaoke_auto_enabled()), ephemeral=True)
             return
         it = _player.get("cur_item") or {}
         title = current_track_title()
@@ -4245,7 +4298,7 @@ class MusicPanelView(discord.ui.View):
                     view=KaraokeMakeView(clean_track_title(title)), ephemeral=True)
                 return
             lines, diff = got
-        _player["karaoke"] = {"lines": lines, "offset": 0.0}
+        _player["karaoke"] = {"lines": lines, "offset": 0.0, "auto": False}
         _player["karaoke"]["task"] = asyncio.create_task(karaoke_task())
         warn = ""
         if diff is not None and diff > 3:
@@ -4253,7 +4306,7 @@ class MusicPanelView(discord.ui.View):
         elif diff is None and src == "lrclib":
             warn = "\n-# 動画の長さと照合できませんでした。ずれたら下のボタンで補正してね"
         await interaction.followup.send(f"🎤 歌詞の同期表示をはじめました（歌詞: {src}・曲が終わると自動で戻ります）{warn}",
-                                        view=KaraokeCtlView(), ephemeral=True)
+                                        view=KaraokeCtlView(await karaoke_auto_enabled()), ephemeral=True)
 
 VIEW_FACTORY["worklog"] = MusicPanelView
 

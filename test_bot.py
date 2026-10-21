@@ -1244,6 +1244,11 @@ async def main():
     check("歌詞登録: 同語順でもヒット", _cl2 and _cl2["text"], "ららら歌詞")
     check("歌詞登録: 無関係な曲はヒットしない", await B.custom_lyrics_find("米津玄師 Lemon"), None)
 
+    check("歌詞同期: 既定で自動ON", await B.karaoke_auto_enabled(), True)
+    await B.meta_set("karaoke_auto", "0")
+    check("歌詞同期: metaでOFFに切替", await B.karaoke_auto_enabled(), False)
+    await B.meta_set("karaoke_auto", "1")
+
     B._player["bgm"] = True
     _msg = B._bgm_mode_off()
     check("BGM: リクエストでモードオフ＋案内", (B._player["bgm"], "オフ" in _msg), (False, True))
