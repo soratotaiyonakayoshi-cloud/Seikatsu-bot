@@ -3350,6 +3350,14 @@ async def pl_tracks(pid):
 
 REC_ARTIST_TRACK_MAX = 25   # 1アーティストに登録できる曲数（削除セレクト25枠）
 
+def _oneline(s):
+    """紹介文を1行化（改行は／に）"""
+    return "／".join(ln.strip() for ln in (s or "").splitlines() if ln.strip())
+
+def sub_text(s):
+    """薄小文字（サブテキスト）行として先頭に改行付きで返す"""
+    return f"\n-# {s}"
+
 async def rec_all():
     async with db.execute(
         "SELECT r.id, r.query, r.title, r.comment, r.user_id, r.kind, COALESCE(u.name,'?') AS uname, "
@@ -3643,7 +3651,7 @@ class RecPlaySelect(discord.ui.Select):
         await interaction.response.defer(ephemeral=True)
         r = self.meta[self.values[0]]
         mark = "🎤" if r["kind"] == "artist" else "⭐"
-        extra = f"\n{mark} {r['uname']}のおすすめ：{r['comment']}" if r["comment"] else ""
+        extra = sub_text(f"{mark} {r['uname']}のおすすめ：{_oneline(r['comment'])}") if r["comment"] else ""
         if r["kind"] == "artist":   # アーティスト：手動で登録された曲をまとめて流す
             rows = await rec_tracks(r["id"])
             if not rows:
@@ -3655,9 +3663,9 @@ class RecPlaySelect(discord.ui.Select):
             tracks = [(t["query"], (t["title"] or t["query"])[:80],
                        f"{base}：{t['comment']}" if t["comment"] else (f"{base}：{r['comment']}" if r["comment"] else base))
                       for t in rows]
-            comments = [f"・{(t['title'] or t['query'])[:40]} — {t['comment']}" for t in rows if t["comment"]]
+            comments = [f"・{(t['title'] or t['query'])[:40]} — {_oneline(t['comment'])}" for t in rows if t["comment"]]
             if comments:
-                extra += "\n" + "\n".join(comments[:10])
+                extra += "".join(sub_text(c) for c in comments[:10])
         else:
             note = f"⭐ {r['uname']}のおすすめ：{r['comment']}" if r["comment"] else None
             tracks = [(r["query"], (r["title"] or r["query"])[:80], note)]
