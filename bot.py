@@ -3709,20 +3709,15 @@ class ArtistManageView(discord.ui.View):
         v.add_item(RecTrackRenameSelect(rows, self.owner_id))
         await interaction.response.send_message(f"✏️ 「**{self.aname}**」のどの曲の名前を変える？", view=v, ephemeral=True)
 
-class ArtistPickSelect(discord.ui.Select):
-    def __init__(self, rows):
-        self.names = {str(r["id"]): (r["title"] or r["query"]) for r in rows}
-        self.owners = {str(r["id"]): r["user_id"] for r in rows}
-        opts = [discord.SelectOption(label=rec_label(r), value=str(r["id"])) for r in rows]
-        super().__init__(placeholder="曲を追加・編集するアーティストを選ぶ", options=opts)
-
-    async def callback(self, interaction):
-        rid, name = int(self.values[0]), self.names[self.values[0]]
-        rows = await rec_tracks(rid)
-        await interaction.response.edit_message(
-            content=f"🎤 「**{name}**」（{len(rows)}曲）\n➕で曲を追加（URL推奨・曲ごとに紹介文OK・だれでも追加できます）、"
-                    "下のセレクトで曲を削除（登録者は全曲・ほかの人は自分が足した曲）。",
-            view=ArtistManageView(rid, name, rows, self.owners[self.values[0]]))
+    @discord.ui.button(label="🗑 アーティストごと削除", style=discord.ButtonStyle.danger, row=1)
+    async def b_delall(self, interaction, button):
+        if str(interaction.user.id) != str(self.owner_id):
+            await interaction.response.send_message("⚠️ アーティストごと消せるのは登録した本人だけです。", ephemeral=True)
+            return
+        await db.execute("DELETE FROM member_rec_tracks WHERE rec_id=?", (self.rec_id,))
+        await db.execute("DELETE FROM member_recs WHERE id=?", (self.rec_id,))
+        await db.commit()
+        await interaction.response.edit_message(content=f"🗑 「**{self.aname}**」を曲ごと削除しました。", view=None)
 
 def _artist_track_note(rec, t):
     """🎤アーティストの曲1つぶんの紹介ノート（曲の紹介文＞アーティストの紹介文＞名前のみ）"""
@@ -3791,29 +3786,42 @@ class RecPlaySelect(discord.ui.Select):
         note = await enqueue_lazy(interaction, [(r["query"], (r["title"] or r["query"])[:80], note_txt)])
         await interaction.followup.send((note or "❌ VCに接続できませんでした。どこかのVCに入ってから選んでね。") + extra, ephemeral=True)
 
-class RecRenameSelect(discord.ui.Select):
+class SongManageView(discord.ui.View):
+    """⭐自分のおすすめ曲の編集（曲名変更・削除）"""
+
+    def __init__(self, rec):
+        super().__init__(timeout=600)
+        self.rec = rec
+
+    @discord.ui.button(label="✏️ 曲名を変更", style=discord.ButtonStyle.primary)
+    async def b_ren(self, interaction, button):
+        await interaction.response.send_modal(TrackRenameModal("member_recs", self.rec["id"], self.rec["title"] or self.rec["query"]))
+
+    @discord.ui.button(label="🗑 このおすすめを削除", style=discord.ButtonStyle.danger)
+    async def b_del(self, interaction, button):
+        await db.execute("DELETE FROM member_recs WHERE id=? AND user_id=?", (self.rec["id"], str(interaction.user.id)))
+        await db.commit()
+        await interaction.response.edit_message(content=f"🗑 「{self.rec['title'] or self.rec['query']}」を削除しました。", view=None)
+
+class RecManagePickSelect(discord.ui.Select):
+    """🛠 編集対象を選ぶ：自分のおすすめ曲＋全アーティスト"""
+
     def __init__(self, rows):
         self.by_id = {str(r["id"]): r for r in rows}
         opts = [discord.SelectOption(label=rec_label(r), value=str(r["id"])) for r in rows]
-        super().__init__(placeholder="✏️ 名前を変えるおすすめ曲を選ぶ", options=opts)
+        super().__init__(placeholder="🛠 編集するものを選ぶ（⭐自分の曲・🎤アーティスト）", options=opts)
 
     async def callback(self, interaction):
         r = self.by_id[self.values[0]]
-        await interaction.response.send_modal(TrackRenameModal("member_recs", r["id"], r["title"] or r["query"]))
-
-class RecDelSelect(discord.ui.Select):
-    def __init__(self, rows):
-        opts = [discord.SelectOption(label=rec_label(r), value=str(r["id"])) for r in rows]
-        super().__init__(placeholder="消すおすすめを選ぶ（複数OK）", options=opts, min_values=1, max_values=len(opts))
-
-    async def callback(self, interaction):
-        ids = [int(v) for v in self.values]
-        await db.executemany("DELETE FROM member_recs WHERE id=? AND user_id=?", [(i, str(interaction.user.id)) for i in ids])
-        # 消えたアーティストの登録曲も道連れに（他人のものは本体が残るので消えない）
-        await db.executemany("DELETE FROM member_rec_tracks WHERE rec_id=? AND NOT EXISTS(SELECT 1 FROM member_recs WHERE id=?)",
-                             [(i, i) for i in ids])
-        await db.commit()
-        await interaction.response.edit_message(content=f"🗑 おすすめを {len(ids)} 件消しました。", view=None)
+        if r["kind"] == "artist":
+            name = r["title"] or r["query"]
+            rows = await rec_tracks(r["id"])
+            await interaction.response.edit_message(
+                content=f"🎤 「**{name}**」（{len(rows)}曲）\n➕で曲を追加（URL推奨・曲ごとに紹介文OK・だれでも追加できます）、"
+                        "✏️で曲名変更、セレクトで曲を削除（登録者は全曲・ほかの人は自分が足した曲）。",
+                view=ArtistManageView(r["id"], name, rows, r["user_id"]))
+            return
+        await interaction.response.edit_message(content=f"⭐ 「**{r['title'] or r['query']}**」をどうする？", view=SongManageView(r))
 
 class RecHubView(discord.ui.View):
     def __init__(self, rows, page=0):
@@ -3844,35 +3852,18 @@ class RecHubView(discord.ui.View):
     async def b_set_artist(self, interaction, button):
         await interaction.response.send_modal(RecArtistModal())
 
-    @discord.ui.button(label="🎵 アーティストの曲を追加・編集", style=discord.ButtonStyle.secondary, row=1)
-    async def b_songs(self, interaction, button):
-        artists = [r for r in await rec_all() if r["kind"] == "artist"][:25]   # だれのアーティストにも曲を足せる
-        if not artists:
-            await interaction.response.send_message("おすすめアーティストがまだありません。「🎤 アーティストを登録」からどうぞ。", ephemeral=True)
+    @discord.ui.button(label="🛠 編集（曲の追加・曲名・削除）", style=discord.ButtonStyle.secondary, row=1)
+    async def b_manage(self, interaction, button):
+        uid = str(interaction.user.id)
+        cands = [r for r in await rec_all() if r["kind"] == "artist" or r["user_id"] == uid][:25]
+        if not cands:
+            await interaction.response.send_message("編集できるものがまだありません。まずは⭐か🎤で登録してね。", ephemeral=True)
             return
         v = discord.ui.View(timeout=300)
-        v.add_item(ArtistPickSelect(artists))
-        await interaction.response.send_message("🎵 どのアーティストに曲を追加・編集する？", view=v, ephemeral=True)
-
-    @discord.ui.button(label="✏️ 曲名を変更", style=discord.ButtonStyle.secondary, row=1)
-    async def b_rename(self, interaction, button):
-        mine = [r for r in await rec_all() if r["user_id"] == str(interaction.user.id) and r["kind"] == "song"][:25]
-        if not mine:
-            await interaction.response.send_message("自分のおすすめ曲がまだありません（アーティストの曲は「🎵 追加・編集」の中の✏️から）。", ephemeral=True)
-            return
-        v = discord.ui.View(timeout=300)
-        v.add_item(RecRenameSelect(mine))
-        await interaction.response.send_message("✏️ どのおすすめ曲の名前を直す？", view=v, ephemeral=True)
-
-    @discord.ui.button(label="🗑 自分のを消す", style=discord.ButtonStyle.secondary, row=1)
-    async def b_del(self, interaction, button):
-        mine = [r for r in await rec_all() if r["user_id"] == str(interaction.user.id)][:25]
-        if not mine:
-            await interaction.response.send_message("自分のおすすめはまだありません。", ephemeral=True)
-            return
-        v = discord.ui.View(timeout=300)
-        v.add_item(RecDelSelect(mine))
-        await interaction.response.send_message("🗑 どれを消す？", view=v, ephemeral=True)
+        v.add_item(RecManagePickSelect(cands))
+        await interaction.response.send_message(
+            "🛠 編集するものを選んでね\n-# ⭐自分のおすすめ曲＝曲名変更・削除／🎤アーティスト＝曲の追加はだれでも・削除や曲名は登録者と追加した人",
+            view=v, ephemeral=True)
 
 # ------------------------------------------------------------
 #  📜 歌詞（lrclib.net＝無料・キー不要のコミュニティ歌詞DB。本人だけに表示）
