@@ -83,6 +83,7 @@ CH = {
     "worklog": ("作業ログ🖥", f"🔊{WORK_VC_NAME} に入ると計測開始・出ると終了。入室中に ✍ ボタンで「何をやるか」をひとこと宣言できます。\n"
                 "10分未満のセッションはログに残りません（時間は記録）。`/kiroku` に今週の作業時間、通信簿に🖥もくもく賞。\n"
                 "🎶 音楽はこのパネルから：リクエスト（URL・検索語・プレイリスト）／🎵BGM／🌿環境音／⏯⏭⏹。\n"
+                "📂 みんなのプレイリスト＝サーバー共有の選曲リスト（作る・流す・自分のは編集）／⭐ おすすめ曲＝1人3曲まで紹介文つきで登録。\n"
                 "-# 細かい操作はコマンドで：`/volume` `/loop` `/shuffle`。音源の追加は音声ファイルを投稿→右クリック→アプリ→「BGMに追加」"),
     "animal": ("どうぶつ🐄", "犬・猫・鳥・道端のなんか・ミニホース…癒しの写真や動画をどうぞ（判定なし・ただの癒し）。\n"
                "写真にはBotが🐾を付けます。1週間でいちばんリアクションを集めた写真の人は、通信簿で🐾癒し賞に。"),
@@ -215,6 +216,15 @@ CREATE TABLE IF NOT EXISTS exams(
 CREATE TABLE IF NOT EXISTS exam_reminded(exam_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(exam_id, stage));
 CREATE TABLE IF NOT EXISTS user_slots(user_id TEXT NOT NULL, slot TEXT NOT NULL, label TEXT NOT NULL, place TEXT, PRIMARY KEY(user_id, slot));
 CREATE TABLE IF NOT EXISTS play_history(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, title TEXT, url TEXT, ts INTEGER);
+CREATE TABLE IF NOT EXISTS member_playlists(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS member_playlist_tracks(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, pl_id INTEGER NOT NULL, query TEXT NOT NULL, title TEXT, ts INTEGER
+);
+CREATE TABLE IF NOT EXISTS member_recs(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, query TEXT NOT NULL, title TEXT, comment TEXT, ts INTEGER
+);
 CREATE INDEX IF NOT EXISTS idx_work_user_day ON work_sessions(user_id, day);
 """
 db = None
@@ -3261,6 +3271,264 @@ async def stop_command(interaction):
     await interaction.response.send_message("⏹ 停止しました。")
 
 # ------------------------------------------------------------
+#  📂 みんなのプレイリスト＆⭐おすすめ曲（サーバー内プリセット＝URLの自動入力）
+# ------------------------------------------------------------
+REC_MAX = 3   # おすすめ曲は1人3つまで（セレクト25枠に収める）
+
+def parse_track_lines(text, limit=PLAYLIST_MAX):
+    """モーダルの複数行入力 → 曲リスト（1行1曲・箇条書き記号は剥がす）"""
+    out = []
+    for ln in (text or "").splitlines():
+        t = ln.strip().lstrip("・-*").strip()
+        if t:
+            out.append(t)
+    return out[:limit]
+
+async def _bg_fill_titles(table, rows):
+    """URLで登録された曲の表示名を裏でyt-dlp解決して整える（失敗しても放置）"""
+    for rid, q in rows:
+        try:
+            r = await _ytdlp_resolve(q)
+            if r:
+                await db.execute(f"UPDATE {table} SET title=? WHERE id=?", (r[1], rid))   # tableは内部定数のみ
+                await db.commit()
+        except Exception:
+            pass
+
+async def pl_add_tracks(pid, lines):
+    ts0 = int(now_jst().timestamp())
+    urls = []
+    for q in lines:
+        cur = await db.execute("INSERT INTO member_playlist_tracks(pl_id,query,title,ts) VALUES(?,?,?,?)",
+                               (pid, q, q[:80], ts0))
+        if looks_like_url(q):
+            urls.append((cur.lastrowid, q))
+    await db.commit()
+    if urls:
+        asyncio.create_task(_bg_fill_titles("member_playlist_tracks", urls))
+
+async def pl_create(owner_id, name, lines):
+    cur = await db.execute("INSERT INTO member_playlists(owner_id,name,created_at) VALUES(?,?,?)",
+                           (str(owner_id), (name or "プレイリスト")[:40], int(now_jst().timestamp())))
+    pid = cur.lastrowid
+    await pl_add_tracks(pid, lines)
+    return pid
+
+async def pl_all():
+    async with db.execute(
+        "SELECT p.id, p.name, p.owner_id, COALESCE(u.name,'?') AS oname, COUNT(t.id) AS n "
+        "FROM member_playlists p LEFT JOIN member_playlist_tracks t ON t.pl_id=p.id "
+        "LEFT JOIN users u ON u.id=p.owner_id GROUP BY p.id ORDER BY p.id DESC LIMIT 25") as c:
+        return await c.fetchall()
+
+async def pl_tracks(pid):
+    async with db.execute("SELECT id, query, title FROM member_playlist_tracks WHERE pl_id=? ORDER BY id LIMIT ?",
+                          (pid, PLAYLIST_MAX)) as c:
+        return await c.fetchall()
+
+async def rec_all():
+    async with db.execute(
+        "SELECT r.id, r.query, r.title, r.comment, r.user_id, COALESCE(u.name,'?') AS uname "
+        "FROM member_recs r LEFT JOIN users u ON u.id=r.user_id ORDER BY r.id DESC LIMIT 25") as c:
+        return await c.fetchall()
+
+async def enqueue_lazy(interaction, tracks):
+    """[(query, title), ...] をキューに積み、止まっていれば再生開始。成功メッセージ or None（VC接続失敗）"""
+    prefer = interaction.user.voice.channel if getattr(interaction.user, "voice", None) and interaction.user.voice else None
+    vc = await ensure_player_vc(prefer)
+    if not vc:
+        return None
+    _player["vc"] = vc
+    by = interaction.user.display_name
+    ts0 = int(now_jst().timestamp())
+    for q, t in tracks:
+        _player["queue"].append({"type": "yt_lazy", "query": q, "title": t, "by": by})
+        await db.execute("INSERT INTO play_history(user_id,title,url,ts) VALUES(?,?,?,?)",
+                         (str(interaction.user.id), t, q if looks_like_url(q) else "", ts0))
+    await db.commit()
+    note = f"⏭ **{len(tracks)} 曲**をキューに追加"
+    if not vc.is_playing():
+        await _play_next()
+        note += f"\n▶ 再生開始：{(_player.get('current') or '').lstrip('▶🎵 ')}"
+    return note
+
+class PlCreateModal(discord.ui.Modal, title="📂 プレイリストを作る"):
+    name_in = discord.ui.TextInput(label="プレイリスト名", max_length=40, placeholder="作業用しっとり曲 など")
+    lines_in = discord.ui.TextInput(label="曲（1行に1つ・URLか検索語）", style=discord.TextStyle.paragraph, required=False,
+                                    placeholder="https://…\nYOASOBI 夜に駆ける\n米津玄師 Lemon", max_length=1500)
+
+    async def on_submit(self, interaction):
+        name = str(self.name_in.value).strip() or "プレイリスト"
+        lines = parse_track_lines(str(self.lines_in.value))
+        await pl_create(interaction.user.id, name, lines)
+        await interaction.response.send_message(
+            f"📂 「**{name}**」を作りました（{len(lines)}曲）。パネル📂からみんな流せます。曲は「🎵 曲を追加」で増やせます。", ephemeral=True)
+
+class PlAddModal(discord.ui.Modal, title="🎵 曲を追加"):
+    lines_in = discord.ui.TextInput(label="曲（1行に1つ・URLか検索語）", style=discord.TextStyle.paragraph, max_length=1500)
+
+    def __init__(self, pid, pname):
+        super().__init__()
+        self.pid, self.pname = pid, pname
+
+    async def on_submit(self, interaction):
+        room = PLAYLIST_MAX - len(await pl_tracks(self.pid))
+        lines = parse_track_lines(str(self.lines_in.value), limit=max(0, room))
+        if not lines:
+            await interaction.response.send_message(f"⚠️ 追加できませんでした（1プレイリスト{PLAYLIST_MAX}曲まで）", ephemeral=True)
+            return
+        await pl_add_tracks(self.pid, lines)
+        await interaction.response.send_message(f"🎵 「**{self.pname}**」に {len(lines)} 曲追加しました。", ephemeral=True)
+
+class PlPlaySelect(discord.ui.Select):
+    def __init__(self, rows):
+        opts = [discord.SelectOption(label=f"{r['name']}（{r['oname']}・{r['n']}曲）"[:100], value=str(r["id"])) for r in rows]
+        super().__init__(placeholder="📂 流すプレイリストを選ぶ", options=opts)
+
+    async def callback(self, interaction):
+        await interaction.response.defer(ephemeral=True)
+        rows = await pl_tracks(int(self.values[0]))
+        if not rows:
+            await interaction.followup.send("このプレイリストはまだ空です。", ephemeral=True)
+            return
+        note = await enqueue_lazy(interaction, [(r["query"], (r["title"] or r["query"])[:80]) for r in rows])
+        await interaction.followup.send(note or "❌ VCに接続できませんでした。どこかのVCに入ってから選んでね。", ephemeral=True)
+
+class PlPickOwnSelect(discord.ui.Select):
+    def __init__(self, rows, mode):
+        self.mode = mode
+        self.names = {str(r["id"]): r["name"] for r in rows}
+        opts = [discord.SelectOption(label=f"{r['name']}（{r['n']}曲）"[:100], value=str(r["id"])) for r in rows]
+        super().__init__(placeholder="自分のプレイリストを選ぶ", options=opts)
+
+    async def callback(self, interaction):
+        pid, name = int(self.values[0]), self.names[self.values[0]]
+        if self.mode == "add":
+            await interaction.response.send_modal(PlAddModal(pid, name))
+            return
+        v = discord.ui.View(timeout=300)
+        v.add_item(PlDelSelect(pid, name, await pl_tracks(pid)))
+        await interaction.response.edit_message(content=f"🗑 「**{name}**」から消すものを選んでね", view=v)
+
+class PlDelSelect(discord.ui.Select):
+    def __init__(self, pid, name, rows):
+        self.pid, self.pname = pid, name
+        opts = [discord.SelectOption(label="🗑 プレイリストごと削除", value="all")] + \
+               [discord.SelectOption(label=(r["title"] or r["query"])[:100], value=str(r["id"])) for r in rows[:24]]
+        super().__init__(placeholder="消す曲（複数OK）か、まるごと削除", options=opts, min_values=1, max_values=len(opts))
+
+    async def callback(self, interaction):
+        if "all" in self.values:
+            await db.execute("DELETE FROM member_playlist_tracks WHERE pl_id=?", (self.pid,))
+            await db.execute("DELETE FROM member_playlists WHERE id=?", (self.pid,))
+            await db.commit()
+            await interaction.response.edit_message(content=f"🗑 「**{self.pname}**」を削除しました。", view=None)
+            return
+        ids = [int(v) for v in self.values]
+        await db.executemany("DELETE FROM member_playlist_tracks WHERE id=? AND pl_id=?", [(i, self.pid) for i in ids])
+        await db.commit()
+        await interaction.response.edit_message(content=f"🗑 「**{self.pname}**」から {len(ids)} 曲消しました。", view=None)
+
+class PlHubView(discord.ui.View):
+    def __init__(self, rows):
+        super().__init__(timeout=600)
+        if rows:
+            self.add_item(PlPlaySelect(rows))
+
+    async def _mine(self, interaction):
+        return [r for r in await pl_all() if r["owner_id"] == str(interaction.user.id)]
+
+    @discord.ui.button(label="➕ 新しく作る", style=discord.ButtonStyle.primary, row=1)
+    async def b_create(self, interaction, button):
+        await interaction.response.send_modal(PlCreateModal())
+
+    @discord.ui.button(label="🎵 曲を追加", style=discord.ButtonStyle.secondary, row=1)
+    async def b_add(self, interaction, button):
+        mine = await self._mine(interaction)
+        if not mine:
+            await interaction.response.send_message("自分のプレイリストがまだありません。「➕ 新しく作る」からどうぞ。", ephemeral=True)
+            return
+        v = discord.ui.View(timeout=300)
+        v.add_item(PlPickOwnSelect(mine, "add"))
+        await interaction.response.send_message("🎵 どのプレイリストに追加する？", view=v, ephemeral=True)
+
+    @discord.ui.button(label="🗑 削除", style=discord.ButtonStyle.secondary, row=1)
+    async def b_del(self, interaction, button):
+        mine = await self._mine(interaction)
+        if not mine:
+            await interaction.response.send_message("自分のプレイリストがまだありません（消せるのは自分のものだけ）。", ephemeral=True)
+            return
+        v = discord.ui.View(timeout=300)
+        v.add_item(PlPickOwnSelect(mine, "del"))
+        await interaction.response.send_message("🗑 どのプレイリストを整理する？", view=v, ephemeral=True)
+
+class RecSetModal(discord.ui.Modal, title="⭐ おすすめ曲を登録"):
+    q_in = discord.ui.TextInput(label="曲のURL または 検索語", max_length=300)
+    c_in = discord.ui.TextInput(label="紹介文（ひとこと）", style=discord.TextStyle.paragraph, max_length=200, required=False,
+                                placeholder="作業がはかどる神曲です など")
+
+    async def on_submit(self, interaction):
+        uid = str(interaction.user.id)
+        async with db.execute("SELECT COUNT(*) AS n FROM member_recs WHERE user_id=?", (uid,)) as c:
+            n = (await c.fetchone())["n"]
+        if n >= REC_MAX:
+            await interaction.response.send_message(f"⚠️ おすすめは1人{REC_MAX}曲まで。「🗑 自分のを消す」で空けてから登録してね。", ephemeral=True)
+            return
+        q = str(self.q_in.value).strip()
+        cur = await db.execute("INSERT INTO member_recs(user_id,query,title,comment,ts) VALUES(?,?,?,?,?)",
+                               (uid, q, q[:80], str(self.c_in.value).strip()[:200], int(now_jst().timestamp())))
+        rid = cur.lastrowid
+        await db.commit()
+        if looks_like_url(q):
+            asyncio.create_task(_bg_fill_titles("member_recs", [(rid, q)]))
+        await interaction.response.send_message("⭐ おすすめ曲を登録しました！パネル⭐からみんな聴けます。", ephemeral=True)
+
+class RecPlaySelect(discord.ui.Select):
+    def __init__(self, rows):
+        self.meta = {str(r["id"]): r for r in rows}
+        opts = [discord.SelectOption(label=f"{(r['title'] or r['query'])[:80]}（{r['uname']}）"[:100], value=str(r["id"]),
+                                     description=(r["comment"] or "")[:100]) for r in rows]
+        super().__init__(placeholder="⭐ みんなのおすすめから選ぶ", options=opts)
+
+    async def callback(self, interaction):
+        await interaction.response.defer(ephemeral=True)
+        r = self.meta[self.values[0]]
+        note = await enqueue_lazy(interaction, [(r["query"], (r["title"] or r["query"])[:80])])
+        extra = f"\n⭐ {r['uname']}のおすすめ：{r['comment']}" if r["comment"] else ""
+        await interaction.followup.send((note or "❌ VCに接続できませんでした。どこかのVCに入ってから選んでね。") + extra, ephemeral=True)
+
+class RecDelSelect(discord.ui.Select):
+    def __init__(self, rows):
+        opts = [discord.SelectOption(label=(r["title"] or r["query"])[:100], value=str(r["id"])) for r in rows]
+        super().__init__(placeholder="消すおすすめを選ぶ（複数OK）", options=opts, min_values=1, max_values=len(opts))
+
+    async def callback(self, interaction):
+        ids = [int(v) for v in self.values]
+        await db.executemany("DELETE FROM member_recs WHERE id=? AND user_id=?", [(i, str(interaction.user.id)) for i in ids])
+        await db.commit()
+        await interaction.response.edit_message(content=f"🗑 おすすめを {len(ids)} 件消しました。", view=None)
+
+class RecHubView(discord.ui.View):
+    def __init__(self, rows):
+        super().__init__(timeout=600)
+        if rows:
+            self.add_item(RecPlaySelect(rows))
+
+    @discord.ui.button(label="⭐ 自分のおすすめを登録", style=discord.ButtonStyle.primary, row=1)
+    async def b_set(self, interaction, button):
+        await interaction.response.send_modal(RecSetModal())
+
+    @discord.ui.button(label="🗑 自分のを消す", style=discord.ButtonStyle.secondary, row=1)
+    async def b_del(self, interaction, button):
+        mine = [r for r in await rec_all() if r["user_id"] == str(interaction.user.id)]
+        if not mine:
+            await interaction.response.send_message("自分のおすすめはまだありません。", ephemeral=True)
+            return
+        v = discord.ui.View(timeout=300)
+        v.add_item(RecDelSelect(mine))
+        await interaction.response.send_message("🗑 どれを消す？", view=v, ephemeral=True)
+
+# ------------------------------------------------------------
 #  🎶 音楽パネル（#作業ログ🖥に常駐・よく使う操作をボタン化。返事は本人だけ＝チャンネルを汚さない）
 # ------------------------------------------------------------
 class PlayModal(discord.ui.Modal, title="🎶 曲をリクエスト"):
@@ -3329,6 +3597,20 @@ class MusicPanelView(discord.ui.View):
     async def b_stop(self, interaction, button):
         await stop_player()
         await interaction.response.send_message("⏹ ぜんぶ止めてVCから退出しました。", ephemeral=True)
+
+    @discord.ui.button(label="みんなのプレイリスト", emoji="📂", style=discord.ButtonStyle.secondary, custom_id="sk_mu_lists", row=2)
+    async def b_lists(self, interaction, button):
+        rows = await pl_all()
+        head = "📂 **みんなのプレイリスト**（選ぶとまとめてキューに入ります）" if rows else \
+               "📂 **みんなのプレイリスト**\nまだありません。「➕ 新しく作る」が最初の1人！"
+        await interaction.response.send_message(head, view=PlHubView(rows), ephemeral=True)
+
+    @discord.ui.button(label="おすすめ曲", emoji="⭐", style=discord.ButtonStyle.secondary, custom_id="sk_mu_recs", row=2)
+    async def b_recs(self, interaction, button):
+        rows = await rec_all()
+        head = "⭐ **みんなのおすすめ曲**（紹介文つき・選ぶと流れます）" if rows else \
+               "⭐ **みんなのおすすめ曲**\nまだありません。最初の1曲をどうぞ！"
+        await interaction.response.send_message(head, view=RecHubView(rows), ephemeral=True)
 
 VIEW_FACTORY["worklog"] = MusicPanelView
 

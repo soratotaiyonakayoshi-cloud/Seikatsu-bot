@@ -48,8 +48,11 @@ check("設定パネル: 項目セレクトは14項目", len(B.SaiteiSelect().opt
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView, B.KadaiPanelView, B.GoodsPanelView, B.MusicPanelView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー7種 登録OK", True, True)
-check("音楽パネルは8ボタン", {i.custom_id for i in B.MusicPanelView().children},
-      {"sk_mu_play", "sk_mu_bgm", "sk_mu_amb", "sk_mu_join", "sk_mu_pause", "sk_mu_skip", "sk_mu_queue", "sk_mu_stop"})
+check("音楽パネルは10ボタン", {i.custom_id for i in B.MusicPanelView().children},
+      {"sk_mu_play", "sk_mu_bgm", "sk_mu_amb", "sk_mu_join", "sk_mu_pause", "sk_mu_skip", "sk_mu_queue", "sk_mu_stop",
+       "sk_mu_lists", "sk_mu_recs"})
+check("曲リスト入力: 箇条書き剥がしと空行除去", B.parse_track_lines("・夜に駆ける\n\n- https://youtu.be/x\n米津玄師 Lemon"),
+      ["夜に駆ける", "https://youtu.be/x", "米津玄師 Lemon"])
 check("音楽パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("worklog") is B.MusicPanelView, True)
 check("ごはんパネルに🧊 2ボタン", {"sk_fridge_add", "sk_fridge_list"} <= {i.custom_id for i in B.MealView().children}, True)
 check("🧊は2段目・ごはんは1段目", sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_fridge")}) == [1]
@@ -1190,6 +1193,18 @@ async def main():
     off_wed = await (await B.db.execute("SELECT reason FROM off_days WHERE day='2026-08-12' AND user_id='130'")).fetchone()
     check("定休日: 平日設定では当日実体化なし", off_wed, None)
     await B.apply_saitei_item(130, "yasumi", "", now=nw_wed)   # 後片付け
+
+    # 📂 プレイリスト＆⭐おすすめ曲（URLを混ぜると裏のタイトル解決タスクが走るので検索語のみでテスト）
+    pid = await B.pl_create(130, "テスト用", ["YOASOBI 夜に駆ける", "米津玄師 Lemon"])
+    check("プレイリスト: 作成と曲数", len(await B.pl_tracks(pid)), 2)
+    pl_row = next((r for r in await B.pl_all() if r["id"] == pid), None)
+    check("プレイリスト: 一覧（名前・曲数・作者名）", (pl_row["name"], pl_row["n"], pl_row["oname"]), ("テスト用", 2, "せっちゃん"))
+    await B.pl_add_tracks(pid, ["あいみょん マリーゴールド"])
+    check("プレイリスト: 曲追加", len(await B.pl_tracks(pid)), 3)
+    await B.db.execute("INSERT INTO member_recs(user_id,query,title,comment,ts) VALUES('130','q1','おすすめ曲','神曲です',0)")
+    await B.db.commit()
+    rec = next((r for r in await B.rec_all() if r["title"] == "おすすめ曲"), None)
+    check("おすすめ: 一覧（紹介文・名前つき）", (rec["comment"], rec["uname"]), ("神曲です", "せっちゃん"))
 
     # meta の upsert
     await B.meta_set("last_judge_day", "2026-08-05"); await B.meta_set("last_judge_day", "2026-08-06")
