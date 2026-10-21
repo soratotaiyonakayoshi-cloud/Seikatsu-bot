@@ -4008,9 +4008,12 @@ async def karaoke_auto_enabled():
 async def _maybe_auto_karaoke():
     """新しい曲が始まったとき、同期歌詞が見つかれば自動で歌詞同期を開始（無ければ静かに何もしない）"""
     try:
-        if _player.get("karaoke") or not await karaoke_auto_enabled():
+        if not await karaoke_auto_enabled():
             return
         it = _player.get("cur_item") or {}
+        k = _player.get("karaoke")
+        if k and k.get("item") is it:
+            return   # この曲の同期はもう動いている（前の曲の残りtaskは曲変更を検知して自分で片付ける）
         title = current_track_title()
         vc = _player.get("vc")
         if not title or not vc or not vc.is_connected():
@@ -4026,9 +4029,10 @@ async def _maybe_auto_karaoke():
             lines, diff = got
         if diff is not None and diff > 10:
             return   # 元音源と長さが大きく違う＝別物の可能性大。自動では出さない（手動🎤なら出せる）
-        if _player.get("cur_item") is not it or _player.get("karaoke"):
-            return   # 歌詞を取りに行っている間に曲が変わっていたらやめる
-        _player["karaoke"] = {"lines": lines, "offset": 0.0, "auto": True}
+        k = _player.get("karaoke")
+        if _player.get("cur_item") is not it or (k and k.get("item") is it):
+            return   # 歌詞を取りに行っている間に曲が変わった／すでにこの曲の同期が始まっていたらやめる
+        _player["karaoke"] = {"lines": lines, "offset": 0.0, "auto": True, "item": it}
         _player["karaoke"]["task"] = asyncio.create_task(karaoke_task())
     except Exception as e:
         print(f"🎤 自動同期エラー: {e!r}", flush=True)
@@ -4316,7 +4320,7 @@ class MusicPanelView(discord.ui.View):
                     view=KaraokeMakeView(clean_track_title(title)), ephemeral=True)
                 return
             lines, diff = got
-        _player["karaoke"] = {"lines": lines, "offset": 0.0, "auto": False}
+        _player["karaoke"] = {"lines": lines, "offset": 0.0, "auto": False, "item": _player.get("cur_item")}
         _player["karaoke"]["task"] = asyncio.create_task(karaoke_task())
         warn = ""
         if diff is not None and diff > 3:
