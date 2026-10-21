@@ -3842,14 +3842,53 @@ async def save_custom_lyrics(title, text, uid):
     await db.commit()
     return True
 
-class LyricsAddView(discord.ui.View):
-    def __init__(self, default_title=""):
+async def lyrics_candidate_titles():
+    """歌詞登録の候補曲：いまの曲→キュー→最近の再生履歴（重複除去・25件）"""
+    out, seen = [], set()
+
+    def add(t):
+        t = (t or "").strip()
+        k = " ".join(sorted(clean_track_title(t).casefold().split()))   # 語順違いの同曲も1つに
+        if t and k and k not in seen:
+            seen.add(k)
+            out.append(t)
+    add(current_track_title())
+    for it in _player["queue"]:
+        if it.get("type") in ("yt", "yt_lazy"):
+            add(it.get("title"))
+    async with db.execute("SELECT title FROM play_history ORDER BY id DESC LIMIT 60") as c:
+        for r in await c.fetchall():
+            add(r["title"])
+    return out[:25]
+
+class LyricsPickSelect(discord.ui.Select):
+    def __init__(self, titles):
+        self.titles = titles
+        opts = [discord.SelectOption(label=t[:100], value=str(i)) for i, t in enumerate(titles)]
+        super().__init__(placeholder="📝 歌詞を登録・修正する曲を選ぶ（キュー・最近の曲）", options=opts)
+
+    async def callback(self, interaction):
+        await interaction.response.send_modal(LyricsAddModal(clean_track_title(self.titles[int(self.values[0])])))
+
+class LyricsHubView(discord.ui.View):
+    """歌詞の登録・修正への入口：いまの曲ボタン＋曲セレクト＋自由入力"""
+
+    def __init__(self, titles=(), default_title=""):
         super().__init__(timeout=600)
         self.default_title = default_title
+        if default_title:
+            b = discord.ui.Button(label="📝 この曲の歌詞を登録・修正", style=discord.ButtonStyle.primary, row=1)
+            b.callback = self._open_default
+            self.add_item(b)
+        if titles:
+            self.add_item(LyricsPickSelect(list(titles)))
 
-    @discord.ui.button(label="📝 歌詞を自分で登録する", style=discord.ButtonStyle.primary)
-    async def b_add(self, interaction, button):
+    async def _open_default(self, interaction):
         await interaction.response.send_modal(LyricsAddModal(self.default_title))
+
+    @discord.ui.button(label="⌨ 曲名を入力して登録", style=discord.ButtonStyle.secondary, row=1)
+    async def b_free(self, interaction, button):
+        await interaction.response.send_modal(LyricsAddModal())
 
 def current_track_title():
     """いま流れている曲の素のタイトル（歌詞検索用）。音楽以外（環境音等）は None"""
@@ -4127,8 +4166,8 @@ class KaraokeMakeView(discord.ui.View):
             ly = await fetch_lyrics(self.title)
             text = ly["text"] if ly else None
         if not text:
-            await interaction.followup.send("⚠️ 全文歌詞がまだありません。先に📜→「📝 歌詞を自分で登録する」で歌詞を入れてから、もう一度どうぞ。",
-                                            view=LyricsAddView(self.title), ephemeral=True)
+            await interaction.followup.send("⚠️ 全文歌詞がまだありません。先に歌詞を登録してから、もう一度どうぞ。",
+                                            view=LyricsHubView((), self.title), ephemeral=True)
             return
         lines = [ln.strip() for ln in re.sub(r"\[[^\]]*\]", "", text).splitlines() if ln.strip()]
         if not lines:
@@ -4265,11 +4304,12 @@ class MusicPanelView(discord.ui.View):
 
     @discord.ui.button(label="歌詞", emoji="📜", style=discord.ButtonStyle.secondary, custom_id="sk_mu_lyrics", row=2)
     async def b_lyrics(self, interaction, button):
-        title = current_track_title()
-        if not title:
-            await interaction.response.send_message("いま歌詞を出せる曲が流れていません。", ephemeral=True)
-            return
         await interaction.response.defer(ephemeral=True)
+        title = current_track_title()
+        if not title:   # 曲が流れていなくても、キュー・最近の曲や自由入力で歌詞の登録はできる
+            await interaction.followup.send("いま曲は流れていませんが、歌詞の登録・修正はできます。",
+                                            view=LyricsHubView(await lyrics_candidate_titles()), ephemeral=True)
+            return
         local = await custom_lyrics_find(title)   # メンバー登録の歌詞があれば最優先
         if local:
             head, text, footer = f"📜 {local['title']}", local["text"], f"📝 メンバー登録の歌詞（{local['uname']}）"
@@ -4278,8 +4318,8 @@ class MusicPanelView(discord.ui.View):
             if not ly:
                 await interaction.followup.send(
                     f"📜 歌詞が見つかりませんでした（{clean_track_title(title)[:60]}）\n"
-                    "-# 歌詞DB（lrclib）に未登録の曲もあります。下のボタンから自分で登録できます（登録後は📜で出ます）",
-                    view=LyricsAddView(clean_track_title(title)), ephemeral=True)
+                    "-# 歌詞DB（lrclib）に未登録の曲もあります。下のボタンやセレクトから自分で登録できます（登録後は📜で出ます）",
+                    view=LyricsHubView(await lyrics_candidate_titles(), clean_track_title(title)), ephemeral=True)
                 return
             head, text, footer = f"📜 {ly['track']} ／ {ly['artist']}", ly["text"], ""
         text = text[:7800]   # embed説明文は4096字まで→長い曲は2枚に分割
@@ -4288,7 +4328,8 @@ class MusicPanelView(discord.ui.View):
         embeds[0].title = head[:256]
         if footer:
             embeds[-1].set_footer(text=footer)
-        await interaction.followup.send(embeds=embeds, ephemeral=True)
+        await interaction.followup.send(embeds=embeds, ephemeral=True,
+                                        view=LyricsHubView((), clean_track_title(title)))
 
     @discord.ui.button(label="歌詞を同期", emoji="🎤", style=discord.ButtonStyle.secondary, custom_id="sk_mu_karaoke", row=2)
     async def b_karaoke(self, interaction, button):

@@ -1244,6 +1244,19 @@ async def main():
     check("歌詞登録: 同語順でもヒット", _cl2 and _cl2["text"], "ららら歌詞")
     check("歌詞登録: 無関係な曲はヒットしない", await B.custom_lyrics_find("米津玄師 Lemon"), None)
 
+    # 📜 歌詞登録の候補曲（いまの曲→キュー→履歴・重複はキーで除去）
+    B._player["cur_item"] = {"type": "yt", "title": "アイドル YOASOBI MV"}
+    B._player["queue"] = [{"type": "yt_lazy", "title": "米津玄師 Lemon"}, {"type": "file", "path": "x.mp3"}]
+    await B.db.execute("INSERT INTO play_history(user_id,title,url,ts) VALUES('130','YOASOBI「アイドル」Official MV','',0)")
+    await B.db.execute("INSERT INTO play_history(user_id,title,url,ts) VALUES('130','ヨルシカ 晴る','',0)")
+    await B.db.commit()
+    _cand = await B.lyrics_candidate_titles()
+    check("歌詞候補: いまの曲が先頭", _cand[0], "アイドル YOASOBI MV")
+    check("歌詞候補: キューの曲入り・同曲の履歴は重複除去", ("米津玄師 Lemon" in _cand, "YOASOBI「アイドル」Official MV" not in _cand), (True, True))
+    check("歌詞候補: 履歴の曲入り", "ヨルシカ 晴る" in _cand, True)
+    B._player["cur_item"] = None
+    B._player["queue"] = []
+
     check("歌詞同期: 既定で自動ON", await B.karaoke_auto_enabled(), True)
     await B.meta_set("karaoke_auto", "0")
     check("歌詞同期: metaでOFFに切替", await B.karaoke_auto_enabled(), False)
