@@ -2686,7 +2686,7 @@ def _ytdlp_base_opts():
     return o
 
 async def _ytdlp_resolve(query):
-    """URLまたは検索語 → (ストリームURL, タイトル, 秒数orNone)。失敗で None"""
+    """URLまたは検索語 → (ストリームURL, タイトル, 秒数orNone, acodecorNone)。失敗で None"""
     try:
         import yt_dlp
     except Exception:
@@ -2695,14 +2695,15 @@ async def _ytdlp_resolve(query):
     q = query.strip()
     if not looks_like_url(q):
         q = f"ytsearch1:{q}"
-    opts = {**_ytdlp_base_opts(), "format": "bestaudio/best", "noplaylist": True}
+    # Opus音源を優先（パススルー再生＝再エンコードなしでCPU最小・音質劣化ゼロ）
+    opts = {**_ytdlp_base_opts(), "format": "bestaudio[acodec=opus]/bestaudio/best", "noplaylist": True}
 
     def _ex():
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(q, download=False)
             if "entries" in info:
                 info = info["entries"][0]
-            return info["url"], (info.get("title") or "？")[:80], info.get("duration")
+            return info["url"], (info.get("title") or "？")[:80], info.get("duration"), info.get("acodec")
     try:
         return await asyncio.to_thread(_ex)
     except Exception as e:
@@ -2937,13 +2938,22 @@ async def _play_next():
                     print(f"🎵 取得失敗につきスキップ: {item.get('title')}", flush=True)
                     return await _play_next()
                 item = {"type": "yt", "url": r[0], "title": item.get("title") or r[1], "by": by, "duration": r[2],
-                        "note": item.get("note")}
+                        "acodec": r[3], "note": item.get("note")}
             target, before = item["url"], "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
             _player["current"] = f"▶ {item['title']}" + (f"（{by}）" if by else "")
         _player["cur_item"] = item
         if abs(vol - 1.0) < 0.01:
             # 音量100%ならOpusパススルー：元がOpus（YouTube音声）なら再エンコードなしで転送＝CPU激減→速度ブレ対策
-            src = await discord.FFmpegOpusAudio.from_probe(target, executable=FFMPEG_PATH, before_options=before, method="fallback")
+            ac = item.get("acodec")
+            if item["type"] != "file" and ac:
+                # yt-dlpが教えてくれたコーデックをそのまま使う＝from_probeの「下見ffmpeg」1本
+                # （プロセス起動＋ストリーム先読みのネットワーク往復）を省いて出だしを速くする
+                if ac in ("opus", "libopus"):
+                    src = discord.FFmpegOpusAudio(target, executable=FFMPEG_PATH, before_options=before, codec="opus")
+                else:
+                    src = discord.FFmpegOpusAudio(target, executable=FFMPEG_PATH, before_options=before, bitrate=256)
+            else:   # ローカルファイルやコーデック不明は従来どおり下見してから
+                src = await discord.FFmpegOpusAudio.from_probe(target, executable=FFMPEG_PATH, before_options=before, method="fallback")
         else:
             pcm = discord.FFmpegPCMAudio(target, executable=FFMPEG_PATH, before_options=before)
             src = discord.PCMVolumeTransformer(pcm, volume=vol)
@@ -2966,7 +2976,7 @@ async def _prefetch_next():
             r = await _ytdlp_resolve(q[0]["query"])
             if r and q and q[0].get("type") == "yt_lazy":   # 解決中にキューが動いていないか確認
                 q[0] = {"type": "yt", "url": r[0], "title": q[0].get("title") or r[1], "by": q[0].get("by"), "duration": r[2],
-                        "note": q[0].get("note")}
+                        "acodec": r[3], "note": q[0].get("note")}
     except Exception as e:
         print(f"🎵 先読みエラー: {e!r}", flush=True)
 
@@ -3148,8 +3158,8 @@ async def do_play(interaction, kyoku, eph=False):
             note += f"（上限{PLAYLIST_MAX}曲で切りました）"
         note += sp_note
     else:
-        url, title, dur = single
-        _player["queue"].append({"type": "yt", "url": url, "title": title, "by": by, "duration": dur})
+        url, title, dur, ac = single
+        _player["queue"].append({"type": "yt", "url": url, "title": title, "by": by, "duration": dur, "acodec": ac})
         await db.execute("INSERT INTO play_history(user_id,title,url,ts) VALUES(?,?,?,?)",
                          (str(interaction.user.id), title, kyoku.strip() if looks_like_url(kyoku) else "", ts0))
         await db.commit()
