@@ -3650,6 +3650,46 @@ class ArtistPickSelect(discord.ui.Select):
                     "下のセレクトで曲を削除（登録者は全曲・ほかの人は自分が足した曲）。",
             view=ArtistManageView(rid, name, rows, self.owners[self.values[0]]))
 
+def _artist_track_note(rec, t):
+    """🎤アーティストの曲1つぶんの紹介ノート（曲の紹介文＞アーティストの紹介文＞名前のみ）"""
+    aname = (rec["title"] or rec["query"])[:40]
+    base = f"🎤 {rec['uname']}のおすすめ（{aname}）"
+    if t["comment"]:
+        return f"{base}：{_oneline(t['comment'])}"
+    return f"{base}：{_oneline(rec['comment'])}" if rec["comment"] else base
+
+class RecTrackPlaySelect(discord.ui.Select):
+    def __init__(self, rec, rows):
+        self.rec = rec
+        self.by_id = {str(t["id"]): t for t in rows}
+        opts = [discord.SelectOption(label=(t["title"] or t["query"])[:100], value=str(t["id"]),
+                                     description=(t["comment"] or "")[:100]) for t in rows]
+        super().__init__(placeholder="🎵 聴きたい曲を選ぶ（選ぶたびキューへ・好きな順でOK）", options=opts)
+
+    async def callback(self, interaction):
+        await interaction.response.defer()
+        t = self.by_id[self.values[0]]
+        note = await enqueue_lazy(interaction, [(t["query"], (t["title"] or t["query"])[:80], _artist_track_note(self.rec, t))])
+        aname = (self.rec["title"] or self.rec["query"])[:40]
+        await interaction.edit_original_response(
+            content=f"🎤 **{aname}**\n{note or '❌ VCに接続できませんでした。どこかのVCに入ってから選んでね。'}"
+                    "\n-# 続けて選ぶと好きな順でキューに積めます", view=self.view)
+
+class ArtistPlayView(discord.ui.View):
+    def __init__(self, rec, rows):
+        super().__init__(timeout=600)
+        self.rec, self.rows = rec, rows
+        self.add_item(RecTrackPlaySelect(rec, rows))
+
+    @discord.ui.button(label="▶ ぜんぶ流す（登録順）", style=discord.ButtonStyle.primary, row=1)
+    async def b_all(self, interaction, button):
+        await interaction.response.defer()
+        r = self.rec
+        tracks = [(t["query"], (t["title"] or t["query"])[:80], _artist_track_note(r, t)) for t in self.rows]
+        note = await enqueue_lazy(interaction, tracks)
+        await interaction.edit_original_response(
+            content=note or "❌ VCに接続できませんでした。どこかのVCに入ってから選んでね。", view=None)
+
 class RecPlaySelect(discord.ui.Select):
     def __init__(self, rows):
         self.meta = {str(r["id"]): r for r in rows}
@@ -3662,24 +3702,19 @@ class RecPlaySelect(discord.ui.Select):
         r = self.meta[self.values[0]]
         mark = "🎤" if r["kind"] == "artist" else "⭐"
         extra = sub_text(f"{mark} {r['uname']}のおすすめ：{_oneline(r['comment'])}") if r["comment"] else ""
-        if r["kind"] == "artist":   # アーティスト：手動で登録された曲をまとめて流す
+        if r["kind"] == "artist":   # アーティスト：曲を選んで聴くか、ぜんぶ流すかを選べる画面へ
             rows = await rec_tracks(r["id"])
             if not rows:
                 await interaction.followup.send(f"🎤 「{r['title'] or r['query']}」にはまだ曲が登録されていません。"
                                                 "（「🎵 アーティストの曲を追加・編集」からだれでも追加できます）", ephemeral=True)
                 return
             aname = (r["title"] or r["query"])[:40]
-            base = f"🎤 {r['uname']}のおすすめ（{aname}）"
-            tracks = [(t["query"], (t["title"] or t["query"])[:80],
-                       f"{base}：{t['comment']}" if t["comment"] else (f"{base}：{r['comment']}" if r["comment"] else base))
-                      for t in rows]
-            comments = [f"・{(t['title'] or t['query'])[:40]} — {_oneline(t['comment'])}" for t in rows if t["comment"]]
-            if comments:
-                extra += "".join(sub_text(c) for c in comments[:10])
-        else:
-            note = f"⭐ {r['uname']}のおすすめ：{r['comment']}" if r["comment"] else None
-            tracks = [(r["query"], (r["title"] or r["query"])[:80], note)]
-        note = await enqueue_lazy(interaction, tracks)
+            await interaction.followup.send(f"🎤 **{aname}**（{r['uname']}・{len(rows)}曲）{extra}"
+                                            "\n曲を選ぶと1曲ずつ・好きな順でキューへ。▶でぜんぶ流せます。",
+                                            view=ArtistPlayView(r, rows), ephemeral=True)
+            return
+        note_txt = f"⭐ {r['uname']}のおすすめ：{_oneline(r['comment'])}" if r["comment"] else None
+        note = await enqueue_lazy(interaction, [(r["query"], (r["title"] or r["query"])[:80], note_txt)])
         await interaction.followup.send((note or "❌ VCに接続できませんでした。どこかのVCに入ってから選んでね。") + extra, ephemeral=True)
 
 class RecDelSelect(discord.ui.Select):
@@ -3856,6 +3891,13 @@ async def lyrics_candidate_titles():
     for it in _player["queue"]:
         if it.get("type") in ("yt", "yt_lazy"):
             add(it.get("title"))
+    # まだ流していなくても、おすすめ・アーティスト登録曲・プレイリストの曲には歌詞を付けられるように
+    for sql in ("SELECT title, query FROM member_recs WHERE kind='song' ORDER BY id DESC LIMIT 40",
+                "SELECT title, query FROM member_rec_tracks ORDER BY id DESC LIMIT 40",
+                "SELECT title, query FROM member_playlist_tracks ORDER BY id DESC LIMIT 40"):
+        async with db.execute(sql) as c:
+            for r in await c.fetchall():
+                add(r["title"] or r["query"])
     async with db.execute("SELECT title FROM play_history ORDER BY id DESC LIMIT 60") as c:
         for r in await c.fetchall():
             add(r["title"])
