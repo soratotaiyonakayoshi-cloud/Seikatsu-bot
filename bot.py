@@ -229,6 +229,10 @@ CREATE TABLE IF NOT EXISTS member_recs(
 CREATE TABLE IF NOT EXISTS member_rec_tracks(
   id INTEGER PRIMARY KEY AUTOINCREMENT, rec_id INTEGER NOT NULL, query TEXT NOT NULL, title TEXT, comment TEXT, ts INTEGER
 );
+CREATE TABLE IF NOT EXISTS custom_lyrics(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, norm_key TEXT NOT NULL, title TEXT NOT NULL, text TEXT NOT NULL,
+  user_id TEXT, ts INTEGER
+);
 CREATE INDEX IF NOT EXISTS idx_work_user_day ON work_sessions(user_id, day);
 """
 db = None
@@ -3736,6 +3740,63 @@ async def fetch_lyrics(title):
             return {"track": d.get("trackName") or "？", "artist": d.get("artistName") or "？", "text": txt}
     return None
 
+def lyrics_norm(s):
+    """歌詞登録の照合キー（ノイズ除去→空白除去→小文字化）"""
+    return re.sub(r"\s+", "", clean_track_title(s)).casefold()
+
+async def custom_lyrics_find(title):
+    """メンバー登録の歌詞から、いまの曲タイトルに合うものを探す。
+    キーの双方向部分一致に加え、語順違い対策で「登録タイトルの各語がすべて含まれる」でもヒット"""
+    k = lyrics_norm(title)
+    if not k:
+        return None
+    async with db.execute("SELECT c.norm_key, c.title, c.text, COALESCE(u.name,'?') AS uname "
+                          "FROM custom_lyrics c LEFT JOIN users u ON u.id=c.user_id") as c:
+        rows = await c.fetchall()
+    for r in rows:
+        rk = r["norm_key"] or ""
+        if rk and (rk in k or k in rk):
+            return r
+        toks = [w.casefold() for w in clean_track_title(r["title"]).split() if w]
+        if toks and all(t in k for t in toks):
+            return r
+    return None
+
+class LyricsAddModal(discord.ui.Modal, title="📝 歌詞を登録"):
+    t_in = discord.ui.TextInput(label="曲名（アーティスト名も入れると確実）", max_length=120)
+    x_in = discord.ui.TextInput(label="歌詞", style=discord.TextStyle.paragraph, max_length=4000,
+                                placeholder="歌詞をまるごと貼り付け（4000字まで）")
+
+    def __init__(self, default_title=""):
+        super().__init__()
+        if default_title:
+            self.t_in.default = default_title[:120]
+
+    async def on_submit(self, interaction):
+        title = str(self.t_in.value).strip()
+        key = lyrics_norm(title)
+        if not key:
+            await interaction.response.send_message("⚠️ 曲名が読めませんでした。", ephemeral=True)
+            return
+        text = str(self.x_in.value).strip()
+        uid, ts0 = str(interaction.user.id), int(now_jst().timestamp())
+        cur = await db.execute("UPDATE custom_lyrics SET title=?, text=?, user_id=?, ts=? WHERE norm_key=?",
+                               (title[:120], text, uid, ts0, key))   # 同じ曲名なら上書き（修正もこの手順で）
+        if cur.rowcount == 0:
+            await db.execute("INSERT INTO custom_lyrics(norm_key,title,text,user_id,ts) VALUES(?,?,?,?,?)",
+                             (key, title[:120], text, uid, ts0))
+        await db.commit()
+        await interaction.response.send_message(f"📝 「**{title}**」の歌詞を登録しました！その曲の再生中に📜で出ます。", ephemeral=True)
+
+class LyricsAddView(discord.ui.View):
+    def __init__(self, default_title=""):
+        super().__init__(timeout=600)
+        self.default_title = default_title
+
+    @discord.ui.button(label="📝 歌詞を自分で登録する", style=discord.ButtonStyle.primary)
+    async def b_add(self, interaction, button):
+        await interaction.response.send_modal(LyricsAddModal(self.default_title))
+
 def current_track_title():
     """いま流れている曲の素のタイトル（歌詞検索用）。音楽以外（環境音等）は None"""
     it = _player.get("cur_item") or {}
@@ -3834,15 +3895,24 @@ class MusicPanelView(discord.ui.View):
             await interaction.response.send_message("いま歌詞を出せる曲が流れていません。", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
-        ly = await fetch_lyrics(title)
-        if not ly:
-            await interaction.followup.send(f"📜 歌詞が見つかりませんでした（{clean_track_title(title)[:60]}）\n"
-                                            "-# 歌詞DB（lrclib）に未登録の曲もあります", ephemeral=True)
-            return
-        text = ly["text"][:7800]   # embed説明文は4096字まで→長い曲は2枚に分割
+        local = await custom_lyrics_find(title)   # メンバー登録の歌詞があれば最優先
+        if local:
+            head, text, footer = f"📜 {local['title']}", local["text"], f"📝 メンバー登録の歌詞（{local['uname']}）"
+        else:
+            ly = await fetch_lyrics(title)
+            if not ly:
+                await interaction.followup.send(
+                    f"📜 歌詞が見つかりませんでした（{clean_track_title(title)[:60]}）\n"
+                    "-# 歌詞DB（lrclib）に未登録の曲もあります。下のボタンから自分で登録できます（登録後は📜で出ます）",
+                    view=LyricsAddView(clean_track_title(title)), ephemeral=True)
+                return
+            head, text, footer = f"📜 {ly['track']} ／ {ly['artist']}", ly["text"], ""
+        text = text[:7800]   # embed説明文は4096字まで→長い曲は2枚に分割
         chunks = [text[i:i + 3900] for i in range(0, len(text), 3900)]
         embeds = [discord.Embed(description=c, color=discord.Color.gold()) for c in chunks]
-        embeds[0].title = f"📜 {ly['track']} ／ {ly['artist']}"[:256]
+        embeds[0].title = head[:256]
+        if footer:
+            embeds[-1].set_footer(text=footer)
         await interaction.followup.send(embeds=embeds, ephemeral=True)
 
 VIEW_FACTORY["worklog"] = MusicPanelView

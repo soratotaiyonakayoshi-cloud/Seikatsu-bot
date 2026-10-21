@@ -54,6 +54,7 @@ check("音楽パネルは11ボタン", {i.custom_id for i in B.MusicPanelView().
 check("歌詞: タイトル掃除（MV括弧・公式語）", B.clean_track_title("YOASOBI「アイドル」Official Music Video"), "YOASOBI アイドル")
 check("歌詞: 【MV】は落とし曲名括弧は残す", B.clean_track_title("【MV】米津玄師 - Lemon（弾き語り）"), "米津玄師 - Lemon 弾き語り")
 check("歌詞: 全角ノイズ括弧", B.clean_track_title("Ado 唱【公式】"), "Ado 唱")
+check("歌詞: 照合キー正規化", B.lyrics_norm("YOASOBI「アイドル」Official MV"), "yoasobiアイドル")
 check("曲リスト入力: 箇条書き剥がしと空行除去", B.parse_track_lines("・夜に駆ける\n\n- https://youtu.be/x\n米津玄師 Lemon"),
       ["夜に駆ける", "https://youtu.be/x", "米津玄師 Lemon"])
 check("おすすめ: 1人20曲まで", B.REC_MAX, 20)
@@ -1224,6 +1225,15 @@ async def main():
           [("夜に駆ける", "初見はこれ")])
     art = next((r for r in await B.rec_all() if r["kind"] == "artist"), None)
     check("おすすめ: 表示に曲数反映", B.rec_label(art), "🎤 YOASOBI（せっちゃん・1曲）")
+    # 📝 メンバー登録の歌詞（キーの双方向部分一致で曲タイトルと照合）
+    await B.db.execute("INSERT INTO custom_lyrics(norm_key,title,text,user_id,ts) VALUES(?,?,?,?,0)",
+                       (B.lyrics_norm("アイドル YOASOBI"), "アイドル YOASOBI", "ららら歌詞", "130")); await B.db.commit()
+    _cl = await B.custom_lyrics_find("YOASOBI「アイドル」Official Music Video")
+    check("歌詞登録: 語順が違ってもヒット", _cl and _cl["text"], "ららら歌詞")
+    _cl2 = await B.custom_lyrics_find("アイドル YOASOBI MV")
+    check("歌詞登録: 同語順でもヒット", _cl2 and _cl2["text"], "ららら歌詞")
+    check("歌詞登録: 無関係な曲はヒットしない", await B.custom_lyrics_find("米津玄師 Lemon"), None)
+
     B._player["bgm"] = True
     _msg = B._bgm_mode_off()
     check("BGM: リクエストでモードオフ＋案内", (B._player["bgm"], "オフ" in _msg), (False, True))
