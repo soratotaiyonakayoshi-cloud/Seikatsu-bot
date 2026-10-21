@@ -2965,31 +2965,49 @@ async def _announce_now_playing():
     try:
         if it.get("type") in ("yt", "file"):   # 曲はサムネ・リンク付きのカードで（Jockie風）
             title = it.get("title") or os.path.splitext(os.path.basename(it.get("path", "")))[0] or cur
-            e = discord.Embed(title=title[:256], url=it.get("page") or None,
-                              description=note or None, color=discord.Color.gold())
+            e = discord.Embed(title=title[:256], url=it.get("page") or None, color=discord.Color.gold())
             e.set_author(name="♪ 再生中")
             if it.get("thumb"):
                 e.set_thumbnail(url=it["thumb"])
-            foot = []
+            line2 = []
             if it.get("duration"):
-                foot.append(fmt_dur_sec(it["duration"]))
+                line2.append(fmt_dur_sec(it["duration"]))
             if it.get("by"):
-                foot.append(f"リクエスト：{it['by']}")
-            if foot:
-                e.set_footer(text="　".join(foot))
+                line2.append(f"リクエスト：{it['by']}")
+            # 紹介文はフッター（小さいグレー字）＝控えめに
+            foot = (_oneline(note) + "\n" if note else "") + "　".join(line2)
+            if foot.strip():
+                e.set_footer(text=foot[:2000])
             await vc.channel.send(embed=e, silent=True)
         else:   # 環境音などはテキストのまま
             await vc.channel.send(cur, silent=True)
     except Exception as e:
         print(f"🎵 再生告知失敗: {e!r}", flush=True)
 
+def _schedule_leave_check():
+    """無人かも？のとき、即退出せず60秒後に再確認してから退出する
+    （チャンネル移動直後の人数情報ずれや、聴いている人の一瞬の出入りで切れないように）"""
+    if _player.get("leaving"):
+        return
+    _player["leaving"] = True
+
+    async def _t():
+        try:
+            await asyncio.sleep(60)
+            vc = _player.get("vc")
+            if vc and vc.is_connected() and not any(not m.bot for m in vc.channel.members):
+                print("🎵 無人が続いたのでVCから退出", flush=True)
+                await stop_player()
+        finally:
+            _player["leaving"] = False
+    asyncio.create_task(_t())
+
 async def _play_next():
     vc = _player.get("vc")
     if not vc or not vc.is_connected():
         return
-    if not any(not m.bot for m in vc.channel.members):   # 無人になったら撤収
-        await stop_player()
-        return
+    if not any(not m.bot for m in vc.channel.members):   # 無人っぽい→60秒猶予してから撤収（再生は続ける）
+        _schedule_leave_check()
     item = None
     skip_once = _player.pop("skip_once", False)
     cur = _player.get("cur_item")
@@ -8008,10 +8026,10 @@ async def on_voice_state_update(member, before, after):
             await auto_wake(member, "VC入室")   # ラジオ体操・作業部屋への入室も起きている証拠
         except Exception as e:
             print(f"自動起床エラー: {e!r}", flush=True)
-    try:   # 🎵 待機中のプレイヤーVCが無人になったら退出（曲間チェックでは拾えない待機中の離脱用）
+    try:   # 🎵 プレイヤーVCが無人になったら、60秒の猶予つきで退出（一瞬の出入りでは切れない）
         vc = _player.get("vc")
         if vc and vc.is_connected() and not any(not m.bot for m in vc.channel.members):
-            await stop_player()
+            _schedule_leave_check()
     except Exception as e:
         print(f"プレイヤー退出エラー: {e!r}", flush=True)
     wid = await meta_get("ch_workvc")
