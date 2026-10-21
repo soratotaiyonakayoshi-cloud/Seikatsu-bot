@@ -83,7 +83,7 @@ CH = {
     "worklog": ("作業ログ🖥", f"🔊{WORK_VC_NAME} に入ると計測開始・出ると終了。入室中に ✍ ボタンで「何をやるか」をひとこと宣言できます。\n"
                 "10分未満のセッションはログに残りません（時間は記録）。`/kiroku` に今週の作業時間、通信簿に🖥もくもく賞。\n"
                 "🎶 音楽はこのパネルから：リクエスト（URL・検索語・プレイリスト）／🎵BGM／🌿環境音／⏯⏭⏹。\n"
-                "📂 みんなのプレイリスト＝サーバー共有の選曲リスト（作る・流す・自分のは編集）／⭐ おすすめ曲・🎤おすすめアーティスト＝紹介文つきで登録（1人20件まで）。\n"
+                "📂 みんなのプレイリスト＝サーバー共有の選曲リスト（作る・流す・自分のは編集）／⭐ おすすめ曲・🎤おすすめアーティスト＝紹介文つきで登録（1人20件まで）／📜 いま流れている曲の歌詞（自分にだけ表示）。\n"
                 "-# 細かい操作はコマンドで：`/volume` `/loop` `/shuffle`。音源の追加は音声ファイルを投稿→右クリック→アプリ→「BGMに追加」"),
     "animal": ("どうぶつ🐄", "犬・猫・鳥・道端のなんか・ミニホース…癒しの写真や動画をどうぞ（判定なし・ただの癒し）。\n"
                "写真にはBotが🐾を付けます。1週間でいちばんリアクションを集めた写真の人は、通信簿で🐾癒し賞に。"),
@@ -3617,6 +3617,59 @@ class RecHubView(discord.ui.View):
         await interaction.response.send_message("🗑 どれを消す？", view=v, ephemeral=True)
 
 # ------------------------------------------------------------
+#  📜 歌詞（lrclib.net＝無料・キー不要のコミュニティ歌詞DB。本人だけに表示）
+# ------------------------------------------------------------
+_TITLE_NOISE = r"(?:official|music\s*video|lyric\s*video|lyrics?|audio|visualizer|mv|pv|full|short\s*ver\.?|ver\.?|映像|歌詞付き|歌詞|公式|ミュージックビデオ|リリックビデオ)"
+
+def clean_track_title(t):
+    """YouTube動画タイトル → 歌詞検索用のきれいな「アーティスト 曲名」っぽい文字列"""
+    t = t or ""
+    # 【MV】(Official Video) みたいなノイズ括弧は丸ごと落とす（曲名が入った括弧は残す）
+    t = re.sub(r"[\(\[（【][^)\]）】]*[\)\]）】]",
+               lambda m: " " if re.search(_TITLE_NOISE, m.group(0), re.I) else m.group(0), t)
+    t = re.sub(_TITLE_NOISE, " ", t, flags=re.I)
+    for ch in "「」『』[]【】()（）|｜/":
+        t = t.replace(ch, " ")
+    return re.sub(r"\s+", " ", t).strip()
+
+async def fetch_lyrics(title):
+    """曲タイトル → {track, artist, text} または None（lrclibのsearch APIで最初の歌詞あり候補）"""
+    import aiohttp
+    import urllib.parse
+    q = clean_track_title(title)
+    if not q:
+        return None
+    url = "https://lrclib.net/api/search?q=" + urllib.parse.quote(q)
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10),
+                                         headers={"User-Agent": "seikatsu-bot (private Discord circle bot)"}) as sess:
+            async with sess.get(url) as r:
+                if r.status != 200:
+                    return None
+                arr = await r.json()
+    except Exception as e:
+        print(f"歌詞取得失敗: {e!r}", flush=True)
+        return None
+    for d in arr or []:
+        if d.get("instrumental"):
+            continue
+        if re.search(r"(?i)\(?\b(inst(rumental)?|off vocal|karaoke)\b|\(inst", d.get("trackName") or ""):
+            continue   # インスト・カラオケ版はスキップ（歌詞DB上は歌詞付きで登録されていることがある）
+        txt = (d.get("plainLyrics") or "").strip()
+        if txt:
+            return {"track": d.get("trackName") or "？", "artist": d.get("artistName") or "？", "text": txt}
+    return None
+
+def current_track_title():
+    """いま流れている曲の素のタイトル（歌詞検索用）。音楽以外（環境音等）は None"""
+    it = _player.get("cur_item") or {}
+    if it.get("type") in ("yt", "yt_lazy"):
+        return it.get("title") or None
+    if it.get("type") == "file":
+        return os.path.splitext(os.path.basename(it.get("path", "")))[0] or None
+    return None
+
+# ------------------------------------------------------------
 #  🎶 音楽パネル（#作業ログ🖥に常駐・よく使う操作をボタン化。返事は本人だけ＝チャンネルを汚さない）
 # ------------------------------------------------------------
 class PlayModal(discord.ui.Modal, title="🎶 曲をリクエスト"):
@@ -3697,6 +3750,24 @@ class MusicPanelView(discord.ui.View):
     async def b_recs(self, interaction, button):
         rows = await rec_all()
         await interaction.response.send_message(rec_head(rows), view=RecHubView(rows), ephemeral=True)
+
+    @discord.ui.button(label="歌詞", emoji="📜", style=discord.ButtonStyle.secondary, custom_id="sk_mu_lyrics", row=2)
+    async def b_lyrics(self, interaction, button):
+        title = current_track_title()
+        if not title:
+            await interaction.response.send_message("いま歌詞を出せる曲が流れていません。", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        ly = await fetch_lyrics(title)
+        if not ly:
+            await interaction.followup.send(f"📜 歌詞が見つかりませんでした（{clean_track_title(title)[:60]}）\n"
+                                            "-# 歌詞DB（lrclib）に未登録の曲もあります", ephemeral=True)
+            return
+        text = ly["text"][:7800]   # embed説明文は4096字まで→長い曲は2枚に分割
+        chunks = [text[i:i + 3900] for i in range(0, len(text), 3900)]
+        embeds = [discord.Embed(description=c, color=discord.Color.gold()) for c in chunks]
+        embeds[0].title = f"📜 {ly['track']} ／ {ly['artist']}"[:256]
+        await interaction.followup.send(embeds=embeds, ephemeral=True)
 
 VIEW_FACTORY["worklog"] = MusicPanelView
 

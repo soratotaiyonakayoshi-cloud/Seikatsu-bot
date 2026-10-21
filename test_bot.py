@@ -48,9 +48,12 @@ check("設定パネル: 項目セレクトは14項目", len(B.SaiteiSelect().opt
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView, B.KadaiPanelView, B.GoodsPanelView, B.MusicPanelView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー7種 登録OK", True, True)
-check("音楽パネルは10ボタン", {i.custom_id for i in B.MusicPanelView().children},
+check("音楽パネルは11ボタン", {i.custom_id for i in B.MusicPanelView().children},
       {"sk_mu_play", "sk_mu_bgm", "sk_mu_amb", "sk_mu_join", "sk_mu_pause", "sk_mu_skip", "sk_mu_queue", "sk_mu_stop",
-       "sk_mu_lists", "sk_mu_recs"})
+       "sk_mu_lists", "sk_mu_recs", "sk_mu_lyrics"})
+check("歌詞: タイトル掃除（MV括弧・公式語）", B.clean_track_title("YOASOBI「アイドル」Official Music Video"), "YOASOBI アイドル")
+check("歌詞: 【MV】は落とし曲名括弧は残す", B.clean_track_title("【MV】米津玄師 - Lemon（弾き語り）"), "米津玄師 - Lemon 弾き語り")
+check("歌詞: 全角ノイズ括弧", B.clean_track_title("Ado 唱【公式】"), "Ado 唱")
 check("曲リスト入力: 箇条書き剥がしと空行除去", B.parse_track_lines("・夜に駆ける\n\n- https://youtu.be/x\n米津玄師 Lemon"),
       ["夜に駆ける", "https://youtu.be/x", "米津玄師 Lemon"])
 check("おすすめ: 1人20曲まで", B.REC_MAX, 20)
