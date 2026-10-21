@@ -57,6 +57,10 @@ check("LRC: 空行は間奏として残る", B.parse_lrc("[00:01]歌\n[00:30]\n[
 check("LRC: タイムスタンプなしは空", B.parse_lrc("ただの歌詞\n2行目"), [])
 check("LRC: 打ち込みの書き出し形式", B.lrc_format([(5.25, "あ"), (65.5, "い")]), "[00:05.25]あ\n[01:05.50]い")
 check("LRC: 書き出し→パースの往復一致", B.parse_lrc(B.lrc_format([(12.3, "歌"), (72.0, "詞")])), [(12.3, "歌"), (72.0, "詞")])
+_kl = [(1.0, "1行目"), (5.0, "2行目"), (9.0, ""), (13.0, "4行目")]
+check("歌詞窓: 開始前は次の2行", B.karaoke_board(_kl, None), "**▶ ♪〜**\n-# 1行目\n-# 2行目")
+check("歌詞窓: 現在行が太字・前後に小さい行", B.karaoke_board(_kl, 1), "-# 1行目\n**▶ 2行目**\n-# ♪〜\n-# 4行目")
+check("歌詞窓: 最終行", B.karaoke_board(_kl, 3), "-# ♪〜\n**▶ 4行目**")
 check("歌詞: タイトル掃除（MV括弧・公式語）", B.clean_track_title("YOASOBI「アイドル」Official Music Video"), "YOASOBI アイドル")
 check("歌詞: 【MV】は落とし曲名括弧は残す", B.clean_track_title("【MV】米津玄師 - Lemon（弾き語り）"), "米津玄師 - Lemon 弾き語り")
 check("歌詞: 全角ノイズ括弧", B.clean_track_title("Ado 唱【公式】"), "Ado 唱")

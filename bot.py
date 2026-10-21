@@ -3899,10 +3899,38 @@ def track_pos():
         pass
     return None
 
+def karaoke_board(lines, idx):
+    """歌詞ウィンドウの本文：前の行（小）／▶いまの行（太字）／次の2行（小）"""
+    def line(j):
+        return (lines[j][1] or "♪〜") if 0 <= j < len(lines) else None
+    parts = []
+    if idx is None:   # まだ最初の行の前
+        parts.append("**▶ ♪〜**")
+        nxt = [line(0), line(1)]
+    else:
+        prev = line(idx - 1)
+        if prev:
+            parts.append(f"-# {prev}")
+        parts.append(f"**▶ {line(idx)}**")
+        nxt = [line(idx + 1), line(idx + 2)]
+    parts += [f"-# {t}" for t in nxt if t]
+    return "\n".join(parts)
+
 async def karaoke_task():
-    """1秒ごとに現在の歌詞行を計算してVCサブタイトルへ（行が変わったときだけAPIを叩く）"""
+    """1秒ごとに現在の歌詞行を計算して、VCチャットの歌詞ウィンドウ（1メッセージを編集）と
+    VCサブタイトルの両方に出す（どちらも変化があったときだけAPIを叩く）"""
     base_item = _player.get("cur_item")
-    last = None
+    title = (current_track_title() or "")[:60]
+    msg, vc = None, _player.get("vc")
+    if vc and vc.is_connected():
+        try:   # 歌詞ウィンドウ＝VCチャットに1通だけ投稿して編集し続ける（新着は増えない）
+            msg = await vc.channel.send(f"🎤 **{title}**\n-# 歌詞を同期中…", silent=True)
+            k0 = _player.get("karaoke")
+            if k0 is not None:
+                k0["msg"] = msg
+        except Exception:
+            msg = None
+    last_status, last_idx = None, -2
     try:
         while True:
             k = _player.get("karaoke")
@@ -3912,25 +3940,37 @@ async def karaoke_task():
             pos = track_pos()
             if pos is not None:
                 t = pos + k.get("offset", 0.0)
-                line = None
-                for sec, txt in k["lines"]:
+                idx = None
+                for n, (sec, _txt) in enumerate(k["lines"]):
                     if sec <= t:
-                        line = txt
+                        idx = n
                     else:
                         break
-                show = f"🎤 {line}"[:480] if line else "🎤 ♪〜"
-                if show != last:
+                cur_line = k["lines"][idx][1] if idx is not None else ""
+                show = f"🎤 {cur_line}"[:480] if cur_line else "🎤 ♪〜"
+                if show != last_status:
                     try:
                         await vc.channel.edit(status=show)
-                        _vc_status_cache["v"] = show   # キャッシュも更新（カラオケ後の復帰が飛ばされないように）
-                        last = show
+                        _vc_status_cache["v"] = show   # キャッシュも更新（終了後の復帰が飛ばされないように）
+                        last_status = show
                     except Exception as e:
-                        print(f"🎤 カラオケ表示エラー: {e!r}", flush=True)
+                        print(f"🎤 歌詞同期表示エラー: {e!r}", flush=True)
+                if msg and idx != last_idx:
+                    try:
+                        await msg.edit(content=f"🎤 **{title}**\n{karaoke_board(k['lines'], idx)}")
+                        last_idx = idx
+                    except Exception:
+                        msg = None   # ウィンドウが消された等→以後はサブタイトルのみで続行
             await asyncio.sleep(1.0)
     finally:
         k = _player.get("karaoke")
         if k and k.get("task") is asyncio.current_task():
             _player["karaoke"] = None
+        if msg:
+            try:   # 終わったら小さな1行にたたむ（チャットを占領しない）
+                await msg.edit(content=f"-# 🎤 歌詞同期おわり：{title}")
+            except Exception:
+                pass
         try:
             asyncio.create_task(update_work_vc_status())   # 通常のサブタイトルへ復帰
         except Exception:
