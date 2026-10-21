@@ -55,6 +55,8 @@ check("LRC: 基本パース", B.parse_lrc("[00:12.50]こんにちは\n[01:02]さ
 check("LRC: 1行複数タイムスタンプ＋時刻順", B.parse_lrc("[01:00][00:10]サビ\n[00:05]Aメロ"), [(5.0, "Aメロ"), (10.0, "サビ"), (60.0, "サビ")])
 check("LRC: 空行は間奏として残る", B.parse_lrc("[00:01]歌\n[00:30]\n[00:40]歌2")[1], (30.0, ""))
 check("LRC: タイムスタンプなしは空", B.parse_lrc("ただの歌詞\n2行目"), [])
+check("LRC: 打ち込みの書き出し形式", B.lrc_format([(5.25, "あ"), (65.5, "い")]), "[00:05.25]あ\n[01:05.50]い")
+check("LRC: 書き出し→パースの往復一致", B.parse_lrc(B.lrc_format([(12.3, "歌"), (72.0, "詞")])), [(12.3, "歌"), (72.0, "詞")])
 check("歌詞: タイトル掃除（MV括弧・公式語）", B.clean_track_title("YOASOBI「アイドル」Official Music Video"), "YOASOBI アイドル")
 check("歌詞: 【MV】は落とし曲名括弧は残す", B.clean_track_title("【MV】米津玄師 - Lemon（弾き語り）"), "米津玄師 - Lemon 弾き語り")
 check("歌詞: 全角ノイズ括弧", B.clean_track_title("Ado 唱【公式】"), "Ado 唱")

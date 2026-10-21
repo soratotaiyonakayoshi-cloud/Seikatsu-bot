@@ -3789,19 +3789,24 @@ class LyricsAddModal(discord.ui.Modal, title="📝 歌詞を登録"):
 
     async def on_submit(self, interaction):
         title = str(self.t_in.value).strip()
-        key = lyrics_norm(title)
-        if not key:
+        if not await save_custom_lyrics(title, str(self.x_in.value).strip(), interaction.user.id):
             await interaction.response.send_message("⚠️ 曲名が読めませんでした。", ephemeral=True)
             return
-        text = str(self.x_in.value).strip()
-        uid, ts0 = str(interaction.user.id), int(now_jst().timestamp())
-        cur = await db.execute("UPDATE custom_lyrics SET title=?, text=?, user_id=?, ts=? WHERE norm_key=?",
-                               (title[:120], text, uid, ts0, key))   # 同じ曲名なら上書き（修正もこの手順で）
-        if cur.rowcount == 0:
-            await db.execute("INSERT INTO custom_lyrics(norm_key,title,text,user_id,ts) VALUES(?,?,?,?,?)",
-                             (key, title[:120], text, uid, ts0))
-        await db.commit()
         await interaction.response.send_message(f"📝 「**{title}**」の歌詞を登録しました！その曲の再生中に📜で出ます。", ephemeral=True)
+
+async def save_custom_lyrics(title, text, uid):
+    """メンバー歌詞を保存（同じ曲名なら上書き＝修正もこの手順で）。曲名が読めなければ False"""
+    key = lyrics_norm(title)
+    if not key:
+        return False
+    uid, ts0 = str(uid), int(now_jst().timestamp())
+    cur = await db.execute("UPDATE custom_lyrics SET title=?, text=?, user_id=?, ts=? WHERE norm_key=?",
+                           (title[:120], text, uid, ts0, key))
+    if cur.rowcount == 0:
+        await db.execute("INSERT INTO custom_lyrics(norm_key,title,text,user_id,ts) VALUES(?,?,?,?,?)",
+                         (key, title[:120], text, uid, ts0))
+    await db.commit()
+    return True
 
 class LyricsAddView(discord.ui.View):
     def __init__(self, default_title=""):
@@ -3917,6 +3922,108 @@ async def karaoke_task():
             asyncio.create_task(update_work_vc_status())   # 通常のサブタイトルへ復帰
         except Exception:
             pass
+
+TAP_LEAD = 0.3   # ⏺打ち込みの反応遅れ補正（押した瞬間より少し手前に刻む）
+
+def lrc_format(stamps):
+    """[(秒, 行), ...] → LRCテキスト"""
+    return "\n".join(f"[{int(s // 60):02d}:{s % 60:05.2f}]{ln}" for s, ln in stamps)
+
+class LrcTapView(discord.ui.View):
+    """⏺ LRC打ち込みモード：曲を聴きながら、行が歌われた瞬間に⏺を押してタイムスタンプを刻む"""
+
+    def __init__(self, title, lines):
+        super().__init__(timeout=1800)
+        self.title = title            # 保存時の曲名
+        self.lines = lines            # 全行（空行除去済み）
+        self.stamps = []              # 刻んだ [(秒, 行), ...]
+        self.idx = 0                  # 次に刻む行
+        self.base_item = _player.get("cur_item")
+
+    def board(self):
+        prev_line = f"-# 前: {self.stamps[-1][1][:40]}\n" if self.stamps else ""
+        cur = self.lines[self.idx] if self.idx < len(self.lines) else "（全行おわり！💾 で保存してね）"
+        nxt = f"\n-# 次: {self.lines[self.idx + 1][:40]}" if self.idx + 1 < len(self.lines) else ""
+        return (f"⏺ **LRC打ち込みモード**（{len(self.stamps)}/{len(self.lines)} 行）\n"
+                f"{prev_line}▶ **{cur}**{nxt}\n"
+                "-# この行が歌われた瞬間に ⏺ を押す（反応遅れ0.3秒は自動補正・押し間違いは↩）")
+
+    async def _refresh(self, interaction, note=""):
+        await interaction.response.edit_message(content=(note + "\n" if note else "") + self.board(), view=self)
+
+    @discord.ui.button(label="⏺ いま！", style=discord.ButtonStyle.danger)
+    async def b_tap(self, interaction, button):
+        if _player.get("cur_item") is not self.base_item:
+            await interaction.response.edit_message(content="⚠️ 曲が変わったので打ち込みを中止しました（刻んだ分は保存されていません）。", view=None)
+            return
+        pos = track_pos()
+        if pos is None:
+            await interaction.response.edit_message(content="⚠️ 再生位置が取れませんでした（再生中に使ってね）。", view=None)
+            return
+        if self.idx >= len(self.lines):
+            await self._refresh(interaction, "もう全行刻み終わっています。💾 で保存！")
+            return
+        t = max(0.0, pos - TAP_LEAD)
+        if self.stamps and t <= self.stamps[-1][0]:
+            t = self.stamps[-1][0] + 0.1   # 連打しても時刻が逆転しないように
+        self.stamps.append((t, self.lines[self.idx]))
+        self.idx += 1
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="↩ 1行もどる", style=discord.ButtonStyle.secondary)
+    async def b_undo(self, interaction, button):
+        if self.stamps:
+            self.stamps.pop()
+            self.idx = max(0, self.idx - 1)
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="⏭ この行をとばす", style=discord.ButtonStyle.secondary)
+    async def b_skip(self, interaction, button):
+        if self.idx < len(self.lines):
+            self.idx += 1   # 刻まずに次へ（この行はLRCに入らない）
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="💾 保存", style=discord.ButtonStyle.success)
+    async def b_save(self, interaction, button):
+        if not self.stamps:
+            await self._refresh(interaction, "⚠️ まだ1行も刻んでいません。")
+            return
+        await save_custom_lyrics(self.title, lrc_format(self.stamps), interaction.user.id)
+        await interaction.response.edit_message(
+            content=f"💾 「**{self.title}**」のLRC（{len(self.stamps)}行）を保存しました！\n"
+                    "この曲の再生中に 🎤 を押すとカラオケ表示されます（ズレは🎤の±2秒ボタンで微調整）。", view=None)
+
+    @discord.ui.button(label="❌ 中止", style=discord.ButtonStyle.secondary)
+    async def b_cancel(self, interaction, button):
+        await interaction.response.edit_message(content="❌ 打ち込みを中止しました（保存していません）。", view=None)
+
+class KaraokeMakeView(discord.ui.View):
+    """🎤で同期歌詞が無かったときの「⏺打ち込みでカラオケ化」入口"""
+
+    def __init__(self, title):
+        super().__init__(timeout=600)
+        self.title = title   # clean済みタイトル
+
+    @discord.ui.button(label="⏺ 打ち込みでカラオケ化する", style=discord.ButtonStyle.primary)
+    async def b_start(self, interaction, button):
+        await interaction.response.defer(ephemeral=True)
+        local = await custom_lyrics_find(self.title)
+        text = local["text"] if local else None
+        if not text:
+            ly = await fetch_lyrics(self.title)
+            text = ly["text"] if ly else None
+        if not text:
+            await interaction.followup.send("⚠️ 全文歌詞がまだありません。先に📜→「📝 歌詞を自分で登録する」で歌詞を入れてから、もう一度どうぞ。",
+                                            view=LyricsAddView(self.title), ephemeral=True)
+            return
+        lines = [ln.strip() for ln in re.sub(r"\[[^\]]*\]", "", text).splitlines() if ln.strip()]
+        if not lines:
+            await interaction.followup.send("⚠️ 歌詞が読めませんでした。", ephemeral=True)
+            return
+        v = LrcTapView(self.title, lines)
+        await interaction.followup.send(
+            "🎧 **打ち込みのコツ**：曲を頭から流し直した直後に始めるときれいに刻めます（もう一度リクエストすればOK）。\n" + v.board(),
+            view=v, ephemeral=True)
 
 class KaraokeCtlView(discord.ui.View):
     def __init__(self):
@@ -4077,8 +4184,10 @@ class MusicPanelView(discord.ui.View):
         if not lines:
             got = await fetch_synced_lyrics(title, it.get("duration"))
             if not got:
-                await interaction.followup.send("🎤 タイムスタンプ付きの歌詞が見つかりませんでした（📜の全文表示なら出るかも）。\n"
-                                                "-# 📝で歌詞をLRC形式（[01:23.45]行）で登録するとカラオケ対応になります", ephemeral=True)
+                await interaction.followup.send(
+                    "🎤 タイムスタンプ付きの歌詞が見つかりませんでした（📜の全文表示なら出るかも）。\n"
+                    "-# 下の⏺＝曲を聴きながらボタンを押してタイムスタンプを刻む打ち込みモード。全文歌詞（📝登録かlrclib）があれば使えます",
+                    view=KaraokeMakeView(clean_track_title(title)), ephemeral=True)
                 return
             lines, diff = got
         _player["karaoke"] = {"lines": lines, "offset": 0.0}
