@@ -2875,8 +2875,10 @@ async def _announce_now_playing():
     _player["announced"] = cur
     msg = cur
     note = (_player.get("cur_item") or {}).get("note")
-    if note:   # ⭐おすすめの紹介文はサブテキストで薄く添える
-        msg += f"\n-# {note[:150]}"
+    if note:   # ⭐おすすめの紹介文はサブテキストで薄く添える（-#は行頭にしか効かないので全行に付ける）
+        for ln in note[:150].splitlines():
+            if ln.strip():
+                msg += f"\n-# {ln.strip()}"
     try:
         await vc.channel.send(msg, silent=True)
     except Exception as e:
