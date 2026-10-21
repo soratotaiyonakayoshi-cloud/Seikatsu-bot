@@ -53,6 +53,9 @@ check("音楽パネルは10ボタン", {i.custom_id for i in B.MusicPanelView().
        "sk_mu_lists", "sk_mu_recs"})
 check("曲リスト入力: 箇条書き剥がしと空行除去", B.parse_track_lines("・夜に駆ける\n\n- https://youtu.be/x\n米津玄師 Lemon"),
       ["夜に駆ける", "https://youtu.be/x", "米津玄師 Lemon"])
+check("おすすめ: 1人20曲まで", B.REC_MAX, 20)
+check("おすすめ: 26曲で2ページ表記", "2ページ" in B.rec_head([{}] * 26, 0), True)
+check("おすすめ: 25曲以下はページ表記なし", "ページ" in B.rec_head([{}] * 25, 0), False)
 check("音楽パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("worklog") is B.MusicPanelView, True)
 check("ごはんパネルに🧊 2ボタン", {"sk_fridge_add", "sk_fridge_list"} <= {i.custom_id for i in B.MealView().children}, True)
 check("🧊は2段目・ごはんは1段目", sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_fridge")}) == [1]

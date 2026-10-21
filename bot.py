@@ -83,7 +83,7 @@ CH = {
     "worklog": ("作業ログ🖥", f"🔊{WORK_VC_NAME} に入ると計測開始・出ると終了。入室中に ✍ ボタンで「何をやるか」をひとこと宣言できます。\n"
                 "10分未満のセッションはログに残りません（時間は記録）。`/kiroku` に今週の作業時間、通信簿に🖥もくもく賞。\n"
                 "🎶 音楽はこのパネルから：リクエスト（URL・検索語・プレイリスト）／🎵BGM／🌿環境音／⏯⏭⏹。\n"
-                "📂 みんなのプレイリスト＝サーバー共有の選曲リスト（作る・流す・自分のは編集）／⭐ おすすめ曲＝1人3曲まで紹介文つきで登録。\n"
+                "📂 みんなのプレイリスト＝サーバー共有の選曲リスト（作る・流す・自分のは編集）／⭐ おすすめ曲＝紹介文つきで登録（1人20曲まで）。\n"
                 "-# 細かい操作はコマンドで：`/volume` `/loop` `/shuffle`。音源の追加は音声ファイルを投稿→右クリック→アプリ→「BGMに追加」"),
     "animal": ("どうぶつ🐄", "犬・猫・鳥・道端のなんか・ミニホース…癒しの写真や動画をどうぞ（判定なし・ただの癒し）。\n"
                "写真にはBotが🐾を付けます。1週間でいちばんリアクションを集めた写真の人は、通信簿で🐾癒し賞に。"),
@@ -3273,7 +3273,8 @@ async def stop_command(interaction):
 # ------------------------------------------------------------
 #  📂 みんなのプレイリスト＆⭐おすすめ曲（サーバー内プリセット＝URLの自動入力）
 # ------------------------------------------------------------
-REC_MAX = 3   # おすすめ曲は1人3つまで（セレクト25枠に収める）
+REC_MAX = 20    # おすすめ曲の1人あたり上限（自分の削除セレクト25枠に収まる範囲）
+REC_PAGE = 25   # 一覧セレクトの1ページあたり（Discordの上限25択→ページ送りで全曲見せる）
 
 def parse_track_lines(text, limit=PLAYLIST_MAX):
     """モーダルの複数行入力 → 曲リスト（1行1曲・箇条書き記号は剥がす）"""
@@ -3329,8 +3330,18 @@ async def pl_tracks(pid):
 async def rec_all():
     async with db.execute(
         "SELECT r.id, r.query, r.title, r.comment, r.user_id, COALESCE(u.name,'?') AS uname "
-        "FROM member_recs r LEFT JOIN users u ON u.id=r.user_id ORDER BY r.id DESC LIMIT 25") as c:
+        "FROM member_recs r LEFT JOIN users u ON u.id=r.user_id ORDER BY r.id DESC LIMIT 500") as c:
         return await c.fetchall()
+
+def rec_head(rows, page=0):
+    """⭐一覧のヘッダー文（曲数とページ表示つき）"""
+    base = "⭐ **みんなのおすすめ曲**（紹介文つき・選ぶと流れます）"
+    if not rows:
+        return base + "\nまだありません。最初の1曲をどうぞ！"
+    pages = max(1, -(-len(rows) // REC_PAGE))
+    if pages > 1:
+        base += f"\n-# ぜんぶで{len(rows)}曲・{page + 1}/{pages}ページ（新しい順）"
+    return base
 
 async def enqueue_lazy(interaction, tracks):
     """[(query, title), ...] をキューに積み、止まっていれば再生開始。成功メッセージ or None（VC接続失敗）"""
@@ -3509,10 +3520,25 @@ class RecDelSelect(discord.ui.Select):
         await interaction.response.edit_message(content=f"🗑 おすすめを {len(ids)} 件消しました。", view=None)
 
 class RecHubView(discord.ui.View):
-    def __init__(self, rows):
+    def __init__(self, rows, page=0):
         super().__init__(timeout=600)
-        if rows:
-            self.add_item(RecPlaySelect(rows))
+        pages = max(1, -(-len(rows) // REC_PAGE))
+        self.rows, self.page = rows, max(0, min(page, pages - 1))
+        chunk = rows[self.page * REC_PAGE:(self.page + 1) * REC_PAGE]
+        if chunk:
+            self.add_item(RecPlaySelect(chunk))
+        if pages > 1:   # 25曲を超えたらページ送り
+            for lbl, d in (("◀ 前の25曲", -1), ("次の25曲 ▶", +1)):
+                b = discord.ui.Button(label=lbl, style=discord.ButtonStyle.secondary, row=2,
+                                      disabled=not (0 <= self.page + d < pages))
+                b.callback = self._mk_flip(d)
+                self.add_item(b)
+
+    def _mk_flip(self, d):
+        async def flip(interaction):
+            p = self.page + d
+            await interaction.response.edit_message(content=rec_head(self.rows, p), view=RecHubView(self.rows, p))
+        return flip
 
     @discord.ui.button(label="⭐ 自分のおすすめを登録", style=discord.ButtonStyle.primary, row=1)
     async def b_set(self, interaction, button):
@@ -3520,7 +3546,7 @@ class RecHubView(discord.ui.View):
 
     @discord.ui.button(label="🗑 自分のを消す", style=discord.ButtonStyle.secondary, row=1)
     async def b_del(self, interaction, button):
-        mine = [r for r in await rec_all() if r["user_id"] == str(interaction.user.id)]
+        mine = [r for r in await rec_all() if r["user_id"] == str(interaction.user.id)][:25]
         if not mine:
             await interaction.response.send_message("自分のおすすめはまだありません。", ephemeral=True)
             return
@@ -3608,9 +3634,7 @@ class MusicPanelView(discord.ui.View):
     @discord.ui.button(label="おすすめ曲", emoji="⭐", style=discord.ButtonStyle.secondary, custom_id="sk_mu_recs", row=2)
     async def b_recs(self, interaction, button):
         rows = await rec_all()
-        head = "⭐ **みんなのおすすめ曲**（紹介文つき・選ぶと流れます）" if rows else \
-               "⭐ **みんなのおすすめ曲**\nまだありません。最初の1曲をどうぞ！"
-        await interaction.response.send_message(head, view=RecHubView(rows), ephemeral=True)
+        await interaction.response.send_message(rec_head(rows), view=RecHubView(rows), ephemeral=True)
 
 VIEW_FACTORY["worklog"] = MusicPanelView
 
