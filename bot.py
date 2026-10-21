@@ -2873,8 +2873,12 @@ async def _announce_now_playing():
     if _player.get("announced") == cur:   # 1曲リピート等で同じ曲が続くときは繰り返さない
         return
     _player["announced"] = cur
+    msg = cur
+    note = (_player.get("cur_item") or {}).get("note")
+    if note:   # ⭐おすすめの紹介文はサブテキストで薄く添える
+        msg += f"\n-# {note[:150]}"
     try:
-        await vc.channel.send(cur, silent=True)
+        await vc.channel.send(msg, silent=True)
     except Exception as e:
         print(f"🎵 再生告知失敗: {e!r}", flush=True)
 
@@ -2930,7 +2934,8 @@ async def _play_next():
                 if not r:
                     print(f"🎵 取得失敗につきスキップ: {item.get('title')}", flush=True)
                     return await _play_next()
-                item = {"type": "yt", "url": r[0], "title": item.get("title") or r[1], "by": by, "duration": r[2]}
+                item = {"type": "yt", "url": r[0], "title": item.get("title") or r[1], "by": by, "duration": r[2],
+                        "note": item.get("note")}
             target, before = item["url"], "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
             _player["current"] = f"▶ {item['title']}" + (f"（{by}）" if by else "")
         _player["cur_item"] = item
@@ -2957,7 +2962,8 @@ async def _prefetch_next():
         if q and q[0].get("type") == "yt_lazy":
             r = await _ytdlp_resolve(q[0]["query"])
             if r and q and q[0].get("type") == "yt_lazy":   # 解決中にキューが動いていないか確認
-                q[0] = {"type": "yt", "url": r[0], "title": q[0].get("title") or r[1], "by": q[0].get("by"), "duration": r[2]}
+                q[0] = {"type": "yt", "url": r[0], "title": q[0].get("title") or r[1], "by": q[0].get("by"), "duration": r[2],
+                        "note": q[0].get("note")}
     except Exception as e:
         print(f"🎵 先読みエラー: {e!r}", flush=True)
 
@@ -3382,8 +3388,10 @@ async def enqueue_lazy(interaction, tracks):
     _player["vc"] = vc
     by = interaction.user.display_name
     ts0 = int(now_jst().timestamp())
-    for q, t in tracks:
-        _player["queue"].append({"type": "yt_lazy", "query": q, "title": t, "by": by})
+    for tr in tracks:
+        q, t = tr[0], tr[1]
+        note_txt = tr[2] if len(tr) > 2 else None   # ⭐おすすめの紹介文（再生告知に小さく添える）
+        _player["queue"].append({"type": "yt_lazy", "query": q, "title": t, "by": by, "note": note_txt})
         await db.execute("INSERT INTO play_history(user_id,title,url,ts) VALUES(?,?,?,?)",
                          (str(interaction.user.id), t, q if looks_like_url(q) else "", ts0))
     await db.commit()
@@ -3637,14 +3645,19 @@ class RecPlaySelect(discord.ui.Select):
             rows = await rec_tracks(r["id"])
             if not rows:
                 await interaction.followup.send(f"🎤 「{r['title'] or r['query']}」にはまだ曲が登録されていません。"
-                                                "（登録した人は「🎵 アーティストの曲を編集」から追加できます）", ephemeral=True)
+                                                "（「🎵 アーティストの曲を追加・編集」からだれでも追加できます）", ephemeral=True)
                 return
-            tracks = [(t["query"], (t["title"] or t["query"])[:80]) for t in rows]
+            aname = (r["title"] or r["query"])[:40]
+            base = f"🎤 {r['uname']}のおすすめ（{aname}）"
+            tracks = [(t["query"], (t["title"] or t["query"])[:80],
+                       f"{base}：{t['comment']}" if t["comment"] else (f"{base}：{r['comment']}" if r["comment"] else base))
+                      for t in rows]
             comments = [f"・{(t['title'] or t['query'])[:40]} — {t['comment']}" for t in rows if t["comment"]]
             if comments:
                 extra += "\n" + "\n".join(comments[:10])
         else:
-            tracks = [(r["query"], (r["title"] or r["query"])[:80])]
+            note = f"⭐ {r['uname']}のおすすめ：{r['comment']}" if r["comment"] else None
+            tracks = [(r["query"], (r["title"] or r["query"])[:80], note)]
         note = await enqueue_lazy(interaction, tracks)
         await interaction.followup.send((note or "❌ VCに接続できませんでした。どこかのVCに入ってから選んでね。") + extra, ephemeral=True)
 
