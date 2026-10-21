@@ -83,7 +83,7 @@ CH = {
     "worklog": ("作業ログ🖥", f"🔊{WORK_VC_NAME} に入ると計測開始・出ると終了。入室中に ✍ ボタンで「何をやるか」をひとこと宣言できます。\n"
                 "10分未満のセッションはログに残りません（時間は記録）。`/kiroku` に今週の作業時間、通信簿に🖥もくもく賞。\n"
                 "🎶 音楽はこのパネルから：リクエスト（URL・検索語・プレイリスト）／🎵BGM／🌿環境音／⏯⏭⏹。\n"
-                "📂 みんなのプレイリスト＝サーバー共有の選曲リスト（作る・流す・自分のは編集）／⭐ おすすめ曲・🎤おすすめアーティスト＝紹介文つきで登録（1人20件まで）／📜 いま流れている曲の歌詞（自分にだけ表示）／🎤 歌詞をVCのサブタイトルにカラオケ風表示。\n"
+                "📂 みんなのプレイリスト＝サーバー共有の選曲リスト（作る・流す・自分のは編集）／⭐ おすすめ曲・🎤おすすめアーティスト＝紹介文つきで登録（1人20件まで）／📜 いま流れている曲の歌詞（自分にだけ表示）／🎤 歌詞をVCのサブタイトルに曲へ同期させて1行ずつ表示。\n"
                 "-# 細かい操作はコマンドで：`/volume` `/loop` `/shuffle`。音源の追加は音声ファイルを投稿→右クリック→アプリ→「BGMに追加」"),
     "animal": ("どうぶつ🐄", "犬・猫・鳥・道端のなんか・ミニホース…癒しの写真や動画をどうぞ（判定なし・ただの癒し）。\n"
                "写真にはBotが🐾を付けます。1週間でいちばんリアクションを集めた写真の人は、通信簿で🐾癒し賞に。"),
@@ -3780,7 +3780,7 @@ async def custom_lyrics_find(title):
 class LyricsAddModal(discord.ui.Modal, title="📝 歌詞を登録"):
     t_in = discord.ui.TextInput(label="曲名（アーティスト名も入れると確実）", max_length=120)
     x_in = discord.ui.TextInput(label="歌詞", style=discord.TextStyle.paragraph, max_length=4000,
-                                placeholder="歌詞を貼り付け（4000字まで）。[01:23.45]歌詞 の形式なら🎤カラオケ対応に")
+                                placeholder="歌詞を貼り付け（4000字まで）。[01:23.45]歌詞 の形式なら🎤歌詞同期に対応")
 
     def __init__(self, default_title=""):
         super().__init__()
@@ -3991,7 +3991,7 @@ class LrcTapView(discord.ui.View):
         await save_custom_lyrics(self.title, lrc_format(self.stamps), interaction.user.id)
         await interaction.response.edit_message(
             content=f"💾 「**{self.title}**」のLRC（{len(self.stamps)}行）を保存しました！\n"
-                    "この曲の再生中に 🎤 を押すとカラオケ表示されます（ズレは🎤の±2秒ボタンで微調整）。", view=None)
+                    "この曲の再生中に 🎤 を押すと歌詞が同期表示されます（ズレは🎤の±2秒ボタンで微調整）。", view=None)
 
     @discord.ui.button(label="❌ 中止", style=discord.ButtonStyle.secondary)
     async def b_cancel(self, interaction, button):
@@ -4004,7 +4004,7 @@ class KaraokeMakeView(discord.ui.View):
         super().__init__(timeout=600)
         self.title = title   # clean済みタイトル
 
-    @discord.ui.button(label="⏺ 打ち込みでカラオケ化する", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="⏺ 打ち込みで同期歌詞を作る", style=discord.ButtonStyle.primary)
     async def b_start(self, interaction, button):
         await interaction.response.defer(ephemeral=True)
         local = await custom_lyrics_find(self.title)
@@ -4032,11 +4032,11 @@ class KaraokeCtlView(discord.ui.View):
     async def _nudge(self, interaction, d):
         k = _player.get("karaoke")
         if not k:
-            await interaction.response.edit_message(content="🎤 カラオケは終了しています。", view=None)
+            await interaction.response.edit_message(content="🎤 歌詞同期は終了しています。", view=None)
             return
         k["offset"] = k.get("offset", 0.0) + d
         await interaction.response.edit_message(
-            content=f"🎤 カラオケ中（ずれ補正：歌詞を {k['offset']:+.0f} 秒）\n-# 歌詞が遅れて見えるなら「はやく」、先走るなら「おそく」")
+            content=f"🎤 歌詞同期中（ずれ補正：歌詞を {k['offset']:+.0f} 秒）\n-# 歌詞が遅れて見えるなら「はやく」、先走るなら「おそく」")
 
     @discord.ui.button(label="⏪ 歌詞を2秒はやく", style=discord.ButtonStyle.secondary)
     async def b_fast(self, interaction, button):
@@ -4046,10 +4046,10 @@ class KaraokeCtlView(discord.ui.View):
     async def b_slow(self, interaction, button):
         await self._nudge(interaction, -2.0)
 
-    @discord.ui.button(label="⏹ カラオケOFF", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="⏹ 同期表示OFF", style=discord.ButtonStyle.danger)
     async def b_off(self, interaction, button):
         _player["karaoke"] = None   # タスクが次のtickで気づいて通常表示に戻す
-        await interaction.response.edit_message(content="🎤 カラオケ表示をやめました。", view=None)
+        await interaction.response.edit_message(content="🎤 歌詞の同期表示をやめました。", view=None)
 
 # ------------------------------------------------------------
 #  🎶 音楽パネル（#作業ログ🖥に常駐・よく使う操作をボタン化。返事は本人だけ＝チャンネルを汚さない）
@@ -4160,19 +4160,19 @@ class MusicPanelView(discord.ui.View):
             embeds[-1].set_footer(text=footer)
         await interaction.followup.send(embeds=embeds, ephemeral=True)
 
-    @discord.ui.button(label="カラオケ", emoji="🎤", style=discord.ButtonStyle.secondary, custom_id="sk_mu_karaoke", row=2)
+    @discord.ui.button(label="歌詞を同期", emoji="🎤", style=discord.ButtonStyle.secondary, custom_id="sk_mu_karaoke", row=2)
     async def b_karaoke(self, interaction, button):
         """いまの曲の歌詞をVCサブタイトルに1行ずつ流す（曲ごとにオン・曲が終わると自動オフ）"""
         if _player.get("karaoke"):   # すでにオン→補正・OFFのコントロールを出す
             k = _player["karaoke"]
-            await interaction.response.send_message(f"🎤 カラオケ中（ずれ補正：歌詞を {k.get('offset', 0.0):+.0f} 秒）",
+            await interaction.response.send_message(f"🎤 歌詞同期中（ずれ補正：歌詞を {k.get('offset', 0.0):+.0f} 秒）",
                                                     view=KaraokeCtlView(), ephemeral=True)
             return
         it = _player.get("cur_item") or {}
         title = current_track_title()
         vc = _player.get("vc")
         if not title or not vc or not (vc.is_playing() or vc.is_paused()):
-            await interaction.response.send_message("いまカラオケにできる曲が流れていません。", ephemeral=True)
+            await interaction.response.send_message("いま歌詞を同期できる曲が流れていません。", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
         lines, diff, src = [], None, "lrclib"
@@ -4197,7 +4197,7 @@ class MusicPanelView(discord.ui.View):
             warn = f"\n⚠️ 歌詞の元音源と動画の長さが {diff:.0f} 秒違います（MVのイントロ等）。ずれたら下のボタンで補正してね"
         elif diff is None and src == "lrclib":
             warn = "\n-# 動画の長さと照合できませんでした。ずれたら下のボタンで補正してね"
-        await interaction.followup.send(f"🎤 カラオケ表示をはじめました（歌詞: {src}・曲が終わると自動で戻ります）{warn}",
+        await interaction.followup.send(f"🎤 歌詞の同期表示をはじめました（歌詞: {src}・曲が終わると自動で戻ります）{warn}",
                                         view=KaraokeCtlView(), ephemeral=True)
 
 VIEW_FACTORY["worklog"] = MusicPanelView
