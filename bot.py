@@ -2792,6 +2792,8 @@ async def spotify_tracks(kind, sid):
             # playlist（※Spotify公式編集のプレイリストは2024年からAPI非公開＝404になる。ユーザー作成の公開プレイリストはOK）
             async with sess.get(f"https://api.spotify.com/v1/playlists/{sid}?market=JP&fields=name", headers=H) as r:
                 if r.status != 200:
+                    # 403「Active premium subscription required」=アプリ所有者が無料アカウント（2025年からPremium必須）
+                    print(f"Spotify API {r.status}: {(await r.text())[:200]}", flush=True)
                     return None
                 title = ((await r.json()).get("name") or "プレイリスト")[:60]
             url = (f"https://api.spotify.com/v1/playlists/{sid}/tracks?market=JP&limit=100"
