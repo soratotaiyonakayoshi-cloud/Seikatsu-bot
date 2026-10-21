@@ -2721,6 +2721,96 @@ async def _ytdlp_playlist(query):
         print(f"yt-dlpプレイリスト失敗: {e!r}", flush=True)
         return None
 
+# ------------------------------------------------------------
+#  🟢 Spotify連携：音声はDRMで取れないので「曲名一覧」だけAPIでもらい、
+#  1曲ずつYouTube検索（既存のyt_lazy）で再生する＝外部音楽Botと同じ方式。
+#  要 .env: SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET（developer.spotify.comで無料発行）
+# ------------------------------------------------------------
+SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID", "")
+SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "")
+_spotify_token = {"val": None, "exp": 0.0}
+
+def spotify_url_parts(s):
+    """SpotifyのURL → ('playlist'|'album'|'track', id)。違うURLなら None"""
+    m = re.match(r"https?://open\.spotify\.com/(?:intl-[a-z-]+/)?(playlist|album|track)/([A-Za-z0-9]+)", (s or "").strip())
+    return (m.group(1), m.group(2)) if m else None
+
+async def _spotify_token_get():
+    import time as _t
+    import base64
+    import aiohttp
+    if _spotify_token["val"] and _t.time() < _spotify_token["exp"] - 60:
+        return _spotify_token["val"]
+    if not (SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET):
+        return None
+    auth = base64.b64encode(f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}".encode()).decode()
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as sess:
+            async with sess.post("https://accounts.spotify.com/api/token", data={"grant_type": "client_credentials"},
+                                 headers={"Authorization": f"Basic {auth}"}) as r:
+                if r.status != 200:
+                    print(f"Spotifyトークン失敗: HTTP {r.status}", flush=True)
+                    return None
+                d = await r.json()
+    except Exception as e:
+        print(f"Spotifyトークン失敗: {e!r}", flush=True)
+        return None
+    _spotify_token["val"] = d.get("access_token")
+    _spotify_token["exp"] = _t.time() + int(d.get("expires_in", 3600))
+    return _spotify_token["val"]
+
+def _sp_entry(t):
+    """Spotifyのtrackオブジェクト → (YouTube検索語, 表示名)"""
+    arts = "、".join(a["name"] for a in (t.get("artists") or [])[:2])
+    return (f"{arts} {t['name']}", f"{t['name']}／{arts}"[:80])
+
+async def spotify_tracks(kind, sid):
+    """playlist/album/track → (タイトル, [(検索語, 表示名), ...])。失敗は None"""
+    import aiohttp
+    tok = await _spotify_token_get()
+    if not tok:
+        return None
+    H = {"Authorization": f"Bearer {tok}"}
+    out = []
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as sess:
+            if kind == "track":
+                async with sess.get(f"https://api.spotify.com/v1/tracks/{sid}?market=JP", headers=H) as r:
+                    if r.status != 200:
+                        return None
+                    t = await r.json()
+                return ((t.get("name") or "曲")[:60], [_sp_entry(t)])
+            if kind == "album":
+                async with sess.get(f"https://api.spotify.com/v1/albums/{sid}?market=JP", headers=H) as r:
+                    if r.status != 200:
+                        return None
+                    d = await r.json()
+                for t in ((d.get("tracks") or {}).get("items") or [])[:PLAYLIST_MAX]:
+                    if t.get("name"):
+                        out.append(_sp_entry(t))
+                return ((d.get("name") or "アルバム")[:60], out) if out else None
+            # playlist（※Spotify公式編集のプレイリストは2024年からAPI非公開＝404になる。ユーザー作成の公開プレイリストはOK）
+            async with sess.get(f"https://api.spotify.com/v1/playlists/{sid}?market=JP&fields=name", headers=H) as r:
+                if r.status != 200:
+                    return None
+                title = ((await r.json()).get("name") or "プレイリスト")[:60]
+            url = (f"https://api.spotify.com/v1/playlists/{sid}/tracks?market=JP&limit=100"
+                   "&fields=items(track(name,artists(name))),next")
+            while url and len(out) < PLAYLIST_MAX:
+                async with sess.get(url, headers=H) as r:
+                    if r.status != 200:
+                        break
+                    d = await r.json()
+                for it in d.get("items") or []:
+                    t = it.get("track") or {}
+                    if t.get("name"):
+                        out.append(_sp_entry(t))
+                url = d.get("next")
+            return (title, out[:PLAYLIST_MAX]) if out else None
+    except Exception as e:
+        print(f"Spotify取得失敗: {e!r}", flush=True)
+        return None
+
 async def _work_vc_channel():
     wid = await meta_get("ch_workvc")
     return bot.get_channel(int(wid)) if wid else None
@@ -2974,17 +3064,28 @@ async def bgm_remove(interaction):
 
 bot.tree.add_command(bgm_grp)
 
-@bot.tree.command(name="play", description="YouTube等のURL・プレイリスト・検索語をVCで再生（キューに追加）")
-@app_commands.describe(kyoku="URL／プレイリストURL／検索語（例 lofi hiphop）")
+@bot.tree.command(name="play", description="YouTube・Spotify等のURL・プレイリスト・検索語をVCで再生（キューに追加）")
+@app_commands.describe(kyoku="URL／プレイリストURL（Spotify可）／検索語（例 lofi hiphop）")
 async def play_command(interaction, kyoku: str):
     await interaction.response.defer()
     await do_play(interaction, kyoku)
 
 async def do_play(interaction, kyoku, eph=False):
     """/playとパネル🎶の共通処理（呼び出し側でdefer済みであること）"""
+    pl, sp_note = None, ""
+    sp = spotify_url_parts(kyoku)
+    if sp:   # 🟢 Spotify：曲名一覧をAPIで取り、1曲ずつYouTube検索で再生
+        if not (SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET):
+            await interaction.followup.send("⚠️ Spotify連携が未設定です（VMの.envに SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET が必要）", ephemeral=eph)
+            return
+        pl = await spotify_tracks(*sp)
+        if not pl:
+            await interaction.followup.send("⚠️ Spotifyから曲一覧を取得できませんでした。\n"
+                                            "-# 非公開プレイリストと、Spotify公式が編集したプレイリスト（Today's Top Hits等）はAPIで取れません。自分や他ユーザーが作った公開プレイリストならOK", ephemeral=eph)
+            return
+        sp_note = "\n-# Spotifyの曲は曲名でYouTubeを検索して再生します（たまに別バージョンが流れることがあります）"
     # プレイリストっぽいURLのときだけプレイリスト抽出を試す（単曲URLの余計な1往復を省いて高速化）
-    pl = None
-    if looks_like_url(kyoku) and re.search(r"list=|/playlist|/sets/|/album", kyoku):
+    if not pl and looks_like_url(kyoku) and re.search(r"list=|/playlist|/sets/|/album", kyoku):
         pl = await _ytdlp_playlist(kyoku)
     single = None
     if not pl:
@@ -3007,9 +3108,13 @@ async def do_play(interaction, kyoku, eph=False):
             await db.execute("INSERT INTO play_history(user_id,title,url,ts) VALUES(?,?,?,?)",
                              (str(interaction.user.id), t, u, ts0))
         await db.commit()
-        note = f"📃 プレイリスト「**{pl_title}**」から **{len(tracks)} 曲**をキューに追加"
+        if len(tracks) == 1:   # Spotifyの単曲リンクなど
+            note = f"⏭ キューに追加（{len(_player['queue'])} 曲待ち）：**{tracks[0][1]}**"
+        else:
+            note = f"📃 プレイリスト「**{pl_title}**」から **{len(tracks)} 曲**をキューに追加"
         if len(tracks) >= PLAYLIST_MAX:
             note += f"（上限{PLAYLIST_MAX}曲で切りました）"
+        note += sp_note
     else:
         url, title = single
         _player["queue"].append({"type": "yt", "url": url, "title": title, "by": by})
@@ -3157,7 +3262,7 @@ async def stop_command(interaction):
 #  🎶 音楽パネル（#作業ログ🖥に常駐・よく使う操作をボタン化。返事は本人だけ＝チャンネルを汚さない）
 # ------------------------------------------------------------
 class PlayModal(discord.ui.Modal, title="🎶 曲をリクエスト"):
-    kyoku = discord.ui.TextInput(label="URL または 検索語", placeholder="https://… か「lofi hiphop」など（プレイリストURLもOK）",
+    kyoku = discord.ui.TextInput(label="URL または 検索語", placeholder="https://… か「lofi hiphop」など（Spotify・プレイリストURLもOK）",
                                  max_length=300)
 
     async def on_submit(self, interaction):
