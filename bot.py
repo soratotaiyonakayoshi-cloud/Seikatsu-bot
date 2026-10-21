@@ -2493,6 +2493,14 @@ async def judge_loop():
         await wake_remind_check(now)   # ⏰起床リマインド（オプトインの人だけ）
     except Exception as e:
         print(f"起床リマインドエラー: {e!r}", flush=True)
+    try:   # 🌙 24時をまわっても作業部屋に人がいたら、VCチャットからそっと声かけ（1日1回）
+        if now.hour == 0 and await meta_get("oyasumi_nudge_day") != day:
+            await meta_set("oyasumi_nudge_day", day)
+            wch = await _work_vc_channel()
+            if wch and any(not m.bot for m in wch.members):
+                await wch.send("🌙 そろそろ寝てもいいんじゃない？")
+    except Exception as e:
+        print(f"おやすみ声かけエラー: {e!r}", flush=True)
     try:   # 📖ミニ勉強会：開始の合図と、終わりの参加発表（来なかった夜は何も言わない）
         # サーバーイベントはユーザーが「毎日繰り返し」で手動作成（Botは触らない。クライアントUIにはrecurrence設定がある）
         if BENKYOKAI_START >= 0:
@@ -6605,6 +6613,13 @@ async def on_voice_state_update(member, before, after):
         if a_id == wid and b_id != wid:
             await work_start(member)
             asyncio.create_task(warmup_player("作業部屋入室"))   # 入室＝そのうち/playしそうなので先に温める
+            try:   # 🎧 誰かが入った瞬間にBotも入室してスタンバイ（最初の/playやBGMがすぐ出る）
+                if not (_player.get("vc") and _player["vc"].is_connected()):
+                    vc = await ensure_player_vc(after.channel)
+                    if vc:
+                        _player["vc"] = vc
+            except Exception as e:
+                print(f"🎧 自動入室エラー: {e!r}", flush=True)
         elif b_id == wid and a_id != wid:
             await work_close(member.id, member.display_name)
     except Exception as e:
