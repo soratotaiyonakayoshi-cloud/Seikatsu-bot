@@ -94,7 +94,8 @@ CH = {
     "kora": ("叱責👹", "毎晩の判定で、最低限を守れなかった人が晒される場所。"),
     "tsushinbo": ("つうしんぼ📮", "毎週日曜の夜に、その週の通信簿（達成率ランキング・各賞）が届く場所。"),
     "kadai": ("課題📚", "🎓 で履修科目を登録 → 気づいた人が ➕ で課題を登録 → 同じ科目の履修者だけに通知＆リマインド（3日前・前日・当日）。\n"
-              "毎週出るプリントや出席フォームは 🔁 毎週課題に登録すれば自動で課題化。投稿の ✅ で完了。コマンド派は `/jikanwari` `/kadai` でも。"),
+              "毎週出るプリントや出席フォームは 🔁 毎週課題に登録すれば自動で課題化。投稿の ✅ で完了、選択式で出さない課題は 🚫 で外せます。\n"
+              "🗒 科目メモ＝教室変更・持ち物などを履修者で共有（授業の日の朝に表示）。コマンド派は `/jikanwari` `/kadai` でも。"),
     "settei": ("設定🔧", "🛠 ボタンから項目を選んで自分の最低限を設定（`/saitei` でまとめて設定も可）。毎週の定休日（曜日）もここで。\n"
                "`/kojin add` で自分だけの項目を追加し、📝ボタンで毎日チェック。`/oyasumi` で単発のお休み申告。"),
 }
@@ -229,6 +230,9 @@ CREATE TABLE IF NOT EXISTS member_recs(
 CREATE TABLE IF NOT EXISTS member_rec_tracks(
   id INTEGER PRIMARY KEY AUTOINCREMENT, rec_id INTEGER NOT NULL, query TEXT NOT NULL, title TEXT, comment TEXT, ts INTEGER,
   added_by TEXT
+);
+CREATE TABLE IF NOT EXISTS course_notes(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL, text TEXT NOT NULL, user_id TEXT, ts INTEGER
 );
 CREATE TABLE IF NOT EXISTS custom_lyrics(
   id INTEGER PRIMARY KEY AUTOINCREMENT, norm_key TEXT NOT NULL, title TEXT NOT NULL, text TEXT NOT NULL,
@@ -819,8 +823,37 @@ class MealModal(discord.ui.Modal):
         note = self.what.value.strip() or None
         await ensure_user(user)
         await add_event(user.id, "meal", self.sub, note=note)
-        await interaction.response.send_message(f"✅ {self.sub}ごはんを記録しました。📸 写真も残したいときは、このチャンネルに写真を投稿すると自動で記録されます。" + hitokoto_suffix(), ephemeral=True)
+        streak = asagohan_note(await asagohan_streak(user.id)) if self.sub == "朝" else ""
+        await interaction.response.send_message(f"✅ {self.sub}ごはんを記録しました。{streak}\n📸 写真も残したいときは、このチャンネルに写真を投稿すると自動で記録されます。" + hitokoto_suffix(), ephemeral=True)
         await post_log("meal", f"{MEAL_EMOJI[self.sub]} **{user.display_name}** {self.sub}ごはん" + (f"：{note}" if note else ""))
+
+async def asagohan_streak(uid, today=None):
+    """朝ごはんを食べた日が何日続いているか（今日まだなら昨日から数える＝朝のうちに途切れ扱いしない）。
+    お休み申告の日は切らずに飛ばす。判定には使わない（えらいを数えるだけ）"""
+    uid = str(uid)
+    today = date.fromisoformat(today or day_str(now_jst()))
+    since = (today - timedelta(days=400)).isoformat()
+    async with db.execute("SELECT DISTINCT day FROM events WHERE user_id=? AND kind='meal' AND sub='朝' AND day>=?", (uid, since)) as c:
+        ate = {r["day"] for r in await c.fetchall()}
+    async with db.execute("SELECT day FROM off_days WHERE user_id=? AND day>=?", (uid, since)) as c:
+        off = {r["day"] for r in await c.fetchall()}
+    d = today if today.isoformat() in ate else today - timedelta(days=1)
+    n = 0
+    for _ in range(400):
+        k = d.isoformat()
+        if k in ate:
+            n += 1
+        elif k not in off:
+            break
+        d -= timedelta(days=1)
+    return n
+
+def asagohan_note(n):
+    """朝ごはん記録の返事に添える一言（2日目から）"""
+    if n < 2:
+        return ""
+    cheer = "🎉 節目！" if n in (7, 14, 30, 50, 100) else ""
+    return f"\n🍳 朝ごはん **{n}日連続**！{cheer}"
 
 class MealButton(discord.ui.Button):
     def __init__(self, sub, emoji):
@@ -1027,7 +1060,8 @@ async def on_message(message):
     for s2, e2 in MEALS:
         view.add_item(MealFixButton(eid, message.author.id, s2, e2, current=sub))
     view.add_item(MealPraiseButton(eid, 0))
-    await message.reply(f"📸 {MEAL_EMOJI[sub]} **{sub}ごはん** として記録しました（違ったら下のボタンで選び直せます・本人のみ）",
+    streak = asagohan_note(await asagohan_streak(message.author.id)) if sub == "朝" else ""
+    await message.reply(f"📸 {MEAL_EMOJI[sub]} **{sub}ごはん** として記録しました（違ったら下のボタンで選び直せます・本人のみ）{streak}",
                         mention_author=False, view=view)
     await bump_panel("meal")
 
@@ -2779,12 +2813,23 @@ async def judge_loop():
                     await kadai_forecast(now)   # 来週の課題予報を #課題📚 へ
                 except Exception as e:
                     print(f"課題予報エラー: {e!r}", flush=True)
+                try:
+                    await post_heavy_rotation(now)   # 🎧 今週のヘビロテを #作業ログ🖥 へ
+                except Exception as e:
+                    print(f"ヘビロテエラー: {e!r}", flush=True)
             if (now + timedelta(days=1)).month != now.month:
                 await monthly_summary(g)
                 try:
                     await post_monthly_meal_album(now)   # 今月のベスト飯アルバムを #ごはん🍚 へ
                 except Exception as e:
                     print(f"ごはんアルバムエラー: {e!r}", flush=True)
+                try:   # 📖 個人の月間しおりは本人だけが受け取る形（数字を晒さない）。ここでは案内だけ
+                    tch = await get_ch("tsushinbo")
+                    if tch:
+                        await tch.send(f"📖 **{now.month}月の「生活のしおり」ができました！**\n"
+                                       "`/shiori` で自分だけの1枚（平均起床・睡眠・達成カレンダー）を受け取れます。SNSに貼るのも歓迎🌅")
+                except Exception as e:
+                    print(f"しおり案内エラー: {e!r}", flush=True)
         except Exception as e:
             print(f"judge error: {e!r}", flush=True)
     try:
@@ -6572,9 +6617,104 @@ class FreeSlotRemoveSelect(discord.ui.Select):
         await db.commit()
         await interaction.response.edit_message(content=f"🗑 {len(self.values)} 件消しました。", view=None)
 
+# ---- 🗒 科目メモ（履修者で共有：教室変更・持ち物・テスト範囲など。その授業の日の朝ダイジェストにも出る） ----
+COURSE_NOTE_MAX = 10   # 1科目あたり（古いものから消える）
+
+async def course_notes_for(code, limit=COURSE_NOTE_MAX):
+    async with db.execute("SELECT n.id, n.text, n.user_id, n.ts, COALESCE(u.name,'?') AS uname FROM course_notes n "
+                          "LEFT JOIN users u ON u.id=n.user_id WHERE n.code=? ORDER BY n.id DESC LIMIT ?", (code, limit)) as c:
+        return await c.fetchall()
+
+async def add_course_note(code, uid, text):
+    await db.execute("INSERT INTO course_notes(code,text,user_id,ts) VALUES(?,?,?,?)",
+                     (code, text[:200], str(uid), int(now_jst().timestamp())))
+    await db.execute("DELETE FROM course_notes WHERE code=? AND id NOT IN "
+                     "(SELECT id FROM course_notes WHERE code=? ORDER BY id DESC LIMIT ?)", (code, code, COURSE_NOTE_MAX))
+    await db.commit()
+
+def course_notes_text(cname, rows):
+    if not rows:
+        return f"🗒 **{cname}** のメモはまだありません。\n-# 教室変更・持ち物・テスト範囲など、履修者みんなに役立つことを書いておけます"
+    return f"🗒 **{cname}** のメモ（新しい順・履修者みんなで共有）\n" + "\n".join(
+        f"・{r['text']}（{r['uname']}・{datetime.fromtimestamp(r['ts'], JST).strftime('%m/%d')}）" for r in rows)
+
+class CourseNoteModal(discord.ui.Modal, title="🗒 科目メモを書く"):
+    t_in = discord.ui.TextInput(label="メモ（履修者みんなに見えます）", style=discord.TextStyle.paragraph, max_length=200,
+                                placeholder="来週は2-428で実施／電卓持参／小テストは第3回まで など")
+
+    def __init__(self, code, cname):
+        super().__init__()
+        self.code, self.cname = code, cname
+
+    async def on_submit(self, interaction):
+        await add_course_note(self.code, interaction.user.id, str(self.t_in.value).strip())
+        await interaction.response.send_message(
+            course_notes_text(self.cname, await course_notes_for(self.code)) + "\n-# ✅ 書きました。この授業がある日の☀️朝の予定にも出ます",
+            ephemeral=True)
+
+class CourseNoteDelSelect(discord.ui.Select):
+    def __init__(self, code, cname, rows):
+        self.code, self.cname = code, cname
+        opts = [discord.SelectOption(label=r["text"][:100], value=str(r["id"])) for r in rows[:25]]
+        super().__init__(placeholder="🗑 自分のメモを消す", options=opts, min_values=1, max_values=len(opts))
+
+    async def callback(self, interaction):
+        await db.executemany("DELETE FROM course_notes WHERE id=? AND user_id=?", [(int(v), str(interaction.user.id)) for v in self.values])
+        await db.commit()
+        await interaction.response.edit_message(content=course_notes_text(self.cname, await course_notes_for(self.code)), view=None)
+
+class CourseNoteView(discord.ui.View):
+    def __init__(self, code, cname, rows, uid):
+        super().__init__(timeout=600)
+        self.code, self.cname = code, cname
+        mine = [r for r in rows if r["user_id"] == str(uid)]
+        if mine:
+            self.add_item(CourseNoteDelSelect(code, cname, mine))
+
+    @discord.ui.button(label="✏️ メモを書く", style=discord.ButtonStyle.primary, row=1)
+    async def b_add(self, interaction, button):
+        await interaction.response.send_modal(CourseNoteModal(self.code, self.cname))
+
+class CourseNotePickSelect(discord.ui.Select):
+    def __init__(self, rows):
+        self.names = {r["code"]: r["name"] for r in rows}
+        opts = [discord.SelectOption(label=r["name"][:100], value=r["code"], description=(r["slots"] or "")[:100]) for r in rows[:25]]
+        super().__init__(placeholder="🗒 メモを見る・書く科目を選ぶ", options=opts)
+
+    async def callback(self, interaction):
+        code = self.values[0]
+        rows = await course_notes_for(code)
+        await interaction.response.edit_message(content=course_notes_text(self.names[code], rows),
+                                                view=CourseNoteView(code, self.names[code], rows, interaction.user.id))
+
+async def today_course_notes(codes, limit=3):
+    """今日の授業の科目メモ（各科目の最新1件・全体でlimit件まで）"""
+    out = []
+    for code in codes:
+        rows = await course_notes_for(code, 1)
+        if rows:
+            c = await get_course(code)
+            out.append(f"**{c['name'] if c else code}**：{rows[0]['text']}")
+        if len(out) >= limit:
+            break
+    return out
+
 class KadaiPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
+
+    @discord.ui.button(label="🗒 科目メモ", style=discord.ButtonStyle.secondary, custom_id="sk_cnote", row=2)
+    async def cnote_btn(self, interaction, button):
+        await ensure_user(interaction.user)
+        rows = await user_course_rows(interaction.user.id)
+        if not rows:
+            await interaction.response.send_message("先に 🎓 で履修科目を登録してください。", ephemeral=True)
+            return
+        v = discord.ui.View(timeout=600)
+        v.add_item(CourseNotePickSelect(list(rows)))
+        await interaction.response.send_message(
+            "🗒 **科目メモ**：履修者みんなで共有するメモ（教室変更・持ち物・テスト範囲など）。授業がある日の朝の予定にも出ます",
+            view=v, ephemeral=True)
 
     @discord.ui.button(label="🎓 履修科目を登録", style=discord.ButtonStyle.primary, custom_id="sk_jw_add", row=0)
     async def jw_add(self, interaction, button):
@@ -6779,6 +6919,13 @@ async def today_digest(uid, now, label="今日"):
                 labs.append(f"**{c['name']}**：{t}")
         if labs:
             lines.append(f"🧪 {label}の実験：" + "／".join(labs))
+    except Exception:
+        pass
+    try:   # 🗒 その日の授業の科目メモ（教室変更・持ち物など）
+        codes = list(dict.fromkeys(c["code"] for p in sorted(per) for c in per[p] if not str(c["code"]).startswith("_us_")))
+        notes = await today_course_notes(codes)
+        if notes:
+            lines.append("🗒 メモ：" + "／".join(notes))
     except Exception:
         pass
     try:   # 試験1週間前からは朝のダイジェストでそっとカウントダウン（本人にだけ見える）
@@ -9159,6 +9306,269 @@ def render_personal_chart(per_day, title):
     buf.seek(0)
     return buf
 
+# ---- 📖 月間 生活のしおり（個人リザルトカード・SNSに貼れる縦長1枚） ----
+def month_bounds(y, m):
+    first = date(y, m, 1)
+    last = (first + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    return first.isoformat(), last.isoformat()
+
+async def shiori_stats(uid, y, m):
+    """しおり用の月間集計（/watashiの集計＋ストリーク・拍手・作業時間・日ごとの達成）"""
+    uid = str(uid)
+    d1, d2 = month_bounds(y, m)
+    st = await personal_stats(uid, d1, d2)
+    async with db.execute("SELECT day, achieved FROM daily_results WHERE user_id=? AND day BETWEEN ? AND ?", (uid, d1, d2)) as c:
+        ach = {r["day"]: r["achieved"] for r in await c.fetchall()}
+    async with db.execute("SELECT day FROM off_days WHERE user_id=? AND day BETWEEN ? AND ?", (uid, d1, d2)) as c:
+        off = {r["day"] for r in await c.fetchall()}
+    best = run = 0
+    dd = date.fromisoformat(d1)
+    while dd.isoformat() <= d2:
+        k = dd.isoformat()
+        if k in off:
+            pass                     # お休みはストリークを切らない
+        elif ach.get(k):
+            run += 1
+            best = max(best, run)
+        elif k in ach:
+            run = 0
+        dd += timedelta(days=1)
+    async with db.execute("SELECT COUNT(*) AS n FROM meal_praise mp JOIN events e ON e.id=mp.event_id "
+                          "WHERE e.user_id=? AND mp.day BETWEEN ? AND ?", (uid, d1, d2)) as c:
+        claps = (await c.fetchone())["n"]
+    async with db.execute("SELECT COUNT(*) AS n FROM effort_praise ep JOIN efforts f ON f.id=ep.effort_id "
+                          "WHERE f.user_id=? AND ep.day BETWEEN ? AND ?", (uid, d1, d2)) as c:
+        claps += (await c.fetchone())["n"]
+    async with db.execute("SELECT COALESCE(SUM(end_ts-start_ts),0) AS s FROM work_sessions "
+                          "WHERE user_id=? AND day BETWEEN ? AND ? AND end_ts IS NOT NULL", (uid, d1, d2)) as c:
+        work_sec = (await c.fetchone())["s"] or 0
+    return {**st, "y": y, "m": m, "ach_map": ach, "off": off, "best_run": best, "claps": claps, "work_sec": work_sec}
+
+def render_shiori_card(name, st):
+    """月間しおりカード（PNG bytes）。PIL/日本語フォントが無ければ None"""
+    try:
+        from PIL import Image as PImage, ImageDraw, ImageFont
+    except Exception:
+        return None
+    f = _find_cjk_font()
+    if not f:
+        return None
+    fb = _find_cjk_font_bold() or f
+    ef = _find_emoji_font()
+    W, H, pad = 1080, 1350, 60
+    img = PImage.new("RGB", (W, H), CARD_CREAM)
+    d = ImageDraw.Draw(img)
+    F = lambda s, bold=False: ImageFont.truetype(fb if bold else f, s)
+    E = lambda s: ImageFont.truetype(ef, s) if ef else None
+    y, m = st["y"], st["m"]
+    # 見出し：手描き数字（あれば）＋「月の 生活のしおり」、右上にサークルロゴ
+    x = pad
+    digits = [_gohan_art(f"d{ch}") for ch in str(m)]
+    if all(digits):
+        for dg in digits:
+            x += _paste_art(img, dg, x, 54, 104) + 6
+        x += 8
+    else:
+        d.text((x, 62), f"{m}", font=F(96, True), fill=CARD_ORANGE)
+        x += d.textlength(f"{m}", font=F(96, True)) + 8
+    d.text((x, 92), "月の 生活のしおり", font=F(62, True), fill=CARD_INK)
+    logo = _gohan_art("logo")
+    if logo:
+        _paste_art(img, logo, W - pad - round(logo.width * 120 / logo.height), 36, 120)
+    spark = _gohan_art("sparkle")
+    if spark:
+        _paste_art(img, spark, int(x + d.textlength("月の 生活のしおり", font=F(62, True))) + 10, 60, 48)
+    d.text((pad, 196), f"{name} さん", font=F(40, True), fill=CARD_INK)
+    d.text((W - pad, 206), f"{y}年{m}月", font=F(28), fill=CARD_MUTED, anchor="ra")
+    # 数字タイル 3×2
+    def hm(sec):
+        return f"{int(sec // 3600)}h{int(sec % 3600 // 60):02d}m" if sec else "—"
+    tiles = [
+        ("☀", "平均起床", fmt_min(st["wake_avg"]) if st["wake_avg"] is not None else "—", ""),
+        ("🌙", "平均睡眠", fmt_hours(st["sleep_avg"]) if st["sleep_avg"] is not None else "—", ""),
+        ("◎", "達成率", f"{round(st['rate'])}%" if st["rate"] is not None else "—",
+         f"{st['achieved']}/{st['judged']}日" if st["judged"] else ""),
+        ("🔥", "最長連続", f"{st['best_run']}日", "お休みは切れない"),
+        ("🖥", "作業部屋", hm(st["work_sec"]), ""),
+        ("👏", "もらった拍手", f"{st['claps']}", "ごはん・えらい"),
+    ]
+    gap, ty, th = 24, 280, 170
+    tw = (W - pad * 2 - gap * 2) // 3
+    for i, (ic, lb, val, sub) in enumerate(tiles):
+        tx = pad + (i % 3) * (tw + gap)
+        yy = ty + (i // 3) * (th + gap)
+        d.rounded_rectangle([tx, yy, tx + tw, yy + th], radius=22, fill="#fffaf2", outline=CARD_LINE, width=2)
+        _draw_mixed(d, tx + 22, yy + 18, f"{ic} {lb}", F(26), E(26), CARD_MUTED)
+        vf = F(56 if len(val) <= 6 else 44, True)
+        d.text((tx + 22, yy + 62), val, font=vf, fill=CARD_ORANGE if i in (2, 3) else CARD_INK)
+        if sub:
+            d.text((tx + 22, yy + th - 38), sub, font=F(20), fill=CARD_MUTED)
+    # 達成カレンダー
+    cy = ty + th * 2 + gap + 46
+    _draw_mixed(d, pad, cy, "📅 達成カレンダー", F(30, True), E(30), CARD_INK)
+    legend = [("#d9701a", "達成"), ("#e8dfcf", "お休み"), ("#b9b2a6", "未達")]
+    lx = W - pad
+    for col, t in reversed(legend):
+        lx -= d.textlength(t, font=F(20)) + 4
+        d.text((lx, cy + 8), t, font=F(20), fill=CARD_MUTED)
+        lx -= 22
+        d.ellipse([lx, cy + 10, lx + 16, cy + 26], fill=col)
+        lx -= 18
+    gy = cy + 56
+    cw = (W - pad * 2) // 7
+    for i, wd in enumerate("月火水木金土日"):
+        d.text((pad + i * cw + cw // 2, gy), wd, font=F(22, True), fill=CARD_MUTED, anchor="ma")
+    first = date(y, m, 1)
+    d1, d2 = month_bounds(y, m)
+    ndays = date.fromisoformat(d2).day
+    rh = 76
+    for day in range(1, ndays + 1):
+        k = date(y, m, day).isoformat()
+        pos = first.weekday() + day - 1
+        cx = pad + (pos % 7) * cw + cw // 2
+        cyy = gy + 40 + (pos // 7) * rh + rh // 2
+        r = 28
+        if k in st["off"]:
+            d.ellipse([cx - r, cyy - r, cx + r, cyy + r], fill="#e8dfcf")
+            d.text((cx, cyy), str(day), font=F(24), fill=CARD_MUTED, anchor="mm")
+        elif st["ach_map"].get(k):
+            d.ellipse([cx - r, cyy - r, cx + r, cyy + r], fill=CARD_ORANGE)
+            d.text((cx, cyy), str(day), font=F(24, True), fill="#ffffff", anchor="mm")
+        elif k in st["ach_map"]:
+            d.ellipse([cx - 7, cyy + 16, cx + 7, cyy + 30], fill="#b9b2a6")
+            d.text((cx, cyy - 4), str(day), font=F(24), fill=CARD_MUTED, anchor="mm")
+        else:
+            d.text((cx, cyy), str(day), font=F(24), fill="#c9c1b3", anchor="mm")
+    # フッター
+    d.line([pad, H - 104, W - pad, H - 104], fill=CARD_LINE, width=2)
+    bowl = _gohan_art("bowl")
+    fx = pad
+    if bowl:
+        fx += _paste_art(img, bowl, pad, H - 92, 64) + 14
+    d.text((fx, H - 84), "最低限生活リズムサークル", font=F(30, True), fill=CARD_INK)
+    d.text((W - pad, H - 76), "比べる相手は、過去の自分だけ。", font=F(22), fill=CARD_MUTED, anchor="ra")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+@bot.tree.command(name="shiori", description="月間「生活のしおり」カードをもらう（SNSに貼れる1枚・自分にだけ表示）")
+@app_commands.describe(tsuki="何月のしおり？（省略=今月。月初3日までは先月）")
+async def shiori_command(interaction, tsuki: app_commands.Range[int, 1, 12] = None):
+    await interaction.response.defer(ephemeral=True)
+    now = now_jst()
+    if tsuki is None:
+        ref = now - timedelta(days=3) if now.day <= 3 else now
+        y, m = ref.year, ref.month
+    else:
+        m = tsuki
+        y = now.year if m <= now.month else now.year - 1
+    st = await shiori_stats(interaction.user.id, y, m)
+    if not st["per_day"]:
+        await interaction.followup.send(f"{y}年{m}月の記録がまだありません。", ephemeral=True)
+        return
+    buf = await asyncio.to_thread(render_shiori_card, interaction.user.display_name, st)
+    if not buf:
+        await interaction.followup.send("⚠️ カードを作れませんでした（VMに日本語フォントが必要）。", ephemeral=True)
+        return
+    await interaction.followup.send(
+        f"📖 {m}月の生活のしおりです。長押し（右クリック）で保存してSNSにもどうぞ！\n-# #最低限生活リズムサークル",
+        file=discord.File(buf, filename=f"shiori-{y}-{m:02d}.png"), ephemeral=True)
+
+# ---- 🎧 週間ヘビロテカード（作業部屋でよく流れた曲） ----
+async def heavy_rotation(d1, d2, top=5):
+    """期間内のリクエスト集計 → (曲[(表示名, 回数)], 人[(名前, 回数)], 総数)。
+    同じ人が同じ日に同じ曲を何度入れても1回（プレイリスト一括追加の水増し防止）"""
+    t1 = int(datetime.fromisoformat(d1).replace(tzinfo=JST).timestamp())
+    t2 = int((datetime.fromisoformat(d2).replace(tzinfo=JST) + timedelta(days=1)).timestamp())
+    async with db.execute("SELECT p.user_id, p.title, p.ts, COALESCE(u.name,'?') AS uname FROM play_history p "
+                          "LEFT JOIN users u ON u.id=p.user_id WHERE p.ts >= ? AND p.ts < ? AND p.title IS NOT NULL",
+                          (t1, t2)) as c:
+        rows = await c.fetchall()
+    seen, songs, people, disp = set(), {}, {}, {}
+    for r in rows:
+        k = re.sub(r"\s+", "", clean_track_title(r["title"])).casefold()
+        if not k:
+            continue
+        day = datetime.fromtimestamp(r["ts"], JST).date().isoformat()
+        sig = (r["user_id"], k, day)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        songs[k] = songs.get(k, 0) + 1
+        disp.setdefault(k, clean_track_title(r["title"]) or r["title"])
+        people[r["uname"]] = people.get(r["uname"], 0) + 1
+    rank = sorted(songs.items(), key=lambda x: -x[1])[:top]
+    return ([(disp[k], n) for k, n in rank], sorted(people.items(), key=lambda x: -x[1])[:3], len(seen))
+
+def render_heavy_rotation_card(songs, people, d1, d2):
+    """ヘビロテ1枚（PNG bytes）。描けなければ None"""
+    try:
+        from PIL import Image as PImage, ImageDraw, ImageFont
+    except Exception:
+        return None
+    f = _find_cjk_font()
+    if not f or not songs:
+        return None
+    fb = _find_cjk_font_bold() or f
+    ef = _find_emoji_font()
+    W, H, pad = 1080, 1080, 60
+    img = PImage.new("RGB", (W, H), CARD_CREAM)
+    d = ImageDraw.Draw(img)
+    F = lambda s, bold=False: ImageFont.truetype(fb if bold else f, s)
+    E = lambda s: ImageFont.truetype(ef, s) if ef else None
+    _draw_mixed(d, pad, 64, "🎧 今週のヘビロテ", F(64, True), E(64), CARD_INK)
+    d.text((pad + 4, 158), f"作業部屋でよく流れた曲　{d1[5:].replace('-', '/')}〜{d2[5:].replace('-', '/')}",
+           font=F(26), fill=CARD_MUTED)
+    logo = _gohan_art("logo")
+    if logo:
+        _paste_art(img, logo, W - pad - round(logo.width * 110 / logo.height), 40, 110)
+    top_n = songs[0][1]
+    y = 236
+    rowh = 128
+    for i, (title, n) in enumerate(songs):
+        col = (CARD_ORANGE, CARD_AMBER, "#e8c08a")[i] if i < 3 else CARD_LINE
+        d.ellipse([pad, y + 14, pad + 72, y + 86], fill=col)
+        d.text((pad + 36, y + 50), str(i + 1), font=F(40, True), fill="#ffffff" if i < 3 else CARD_MUTED, anchor="mm")
+        tf = F(36, True)
+        t = title
+        while d.textlength(t, font=tf) > W - pad * 2 - 120 and len(t) > 2:
+            t = t[:-2] + "…"
+        d.text((pad + 100, y + 10), t, font=tf, fill=CARD_INK)
+        bw = W - pad * 2 - 100 - 110
+        d.rounded_rectangle([pad + 100, y + 70, pad + 100 + bw, y + 90], radius=10, fill=CARD_TRACK)
+        d.rounded_rectangle([pad + 100, y + 70, pad + 100 + max(20, int(bw * n / top_n)), y + 90], radius=10, fill=col)
+        d.text((W - pad, y + 80), f"{n}回", font=F(28, True), fill=CARD_MUTED, anchor="rm")
+        y += rowh
+    if people:
+        _draw_mixed(d, pad, H - 190, "🙌 よく流してくれた人：" + "・".join(p for p, _ in people), F(30), E(30), CARD_INK)
+    d.line([pad, H - 120, W - pad, H - 120], fill=CARD_LINE, width=2)
+    d.text((pad, H - 96), "最低限生活リズムサークル", font=F(30, True), fill=CARD_INK)
+    d.text((W - pad, H - 88), "#作業部屋BGM", font=F(24), fill=CARD_MUTED, anchor="ra")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+async def post_heavy_rotation(now=None):
+    """日曜の通信簿のあと、#作業ログ🖥 に今週のヘビロテを投稿（リクエストが少ない週は何もしない）"""
+    now = now or now_jst()
+    d1, d2 = week_range(now)
+    songs, people, total = await heavy_rotation(d1, d2)
+    if total < 3 or not songs:
+        return None
+    ch = await get_ch("worklog")
+    if not ch:
+        return None
+    buf = await asyncio.to_thread(render_heavy_rotation_card, songs, people, d1, d2)
+    if buf:
+        await ch.send("🎧 **今週のヘビロテ**（作業部屋でよく流れた曲）",
+                      file=discord.File(buf, filename=f"heavy-rotation-{d2}.png"), silent=True)
+    else:
+        await ch.send("🎧 **今週のヘビロテ**\n" + "\n".join(f"{i}. {t}（{n}回）" for i, (t, n) in enumerate(songs, 1)), silent=True)
+    await bump_panel("worklog")
+    return True
+
 def build_personal_csv(evs, results):
     import csv
     buf = io.StringIO()
@@ -9439,7 +9849,8 @@ async def kiroku_command(interaction):
     today = [
         "☀️ 起床：" + (hhmm(datetime.fromtimestamp(w[0]["ts"], JST)) if w else "未報告"),
         "🌙 睡眠：" + (fmt_hours(sum(float(x["note"] or 0) for x in s)) if s else "未記録"),
-        "🍚 食事：" + ("、".join(f"{m['sub']}" + (f"({m['note']})" if m["note"] else "") for m in meals) if meals else "未報告"),
+        "🍚 食事：" + ("、".join(f"{m['sub']}" + (f"({m['note']})" if m["note"] else "") for m in meals) if meals else "未報告")
+        + (lambda n: f"　🍳 朝ごはん{n}日連続" if n >= 2 else "")(await asagohan_streak(user.id, day)),
         "🧹 家事：" + ("、".join(CHORE_LABEL[c["sub"]] for c in chores) if chores else "なし"),
         "🛁 入浴：" + ((f"済（{len(bath)}回）" if len(bath) >= 2 else "済") if bath else "未報告"),
         "🪥 歯磨き：" + (f"{len(await events_on(user.id, day, 'teeth'))} 回"),

@@ -79,10 +79,10 @@ check("起床パネルに🗓明日・📆今後", {"sk_tomorrow", "sk_upcoming"
 check("起床パネルの行割り: 明日は1段目・今後は2段目",
       ([i.row for i in B.WakeView().children if getattr(i, "custom_id", "") == "sk_tomorrow"],
        [i.row for i in B.WakeView().children if getattr(i, "custom_id", "") == "sk_upcoming"]), ([0], [1]))
-check("課題パネルは10ボタン", {i.custom_id for i in B.KadaiPanelView().children},
-      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki", "sk_exam", "sk_jw_free"})
+check("課題パネルは11ボタン", {i.custom_id for i in B.KadaiPanelView().children},
+      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki", "sk_exam", "sk_jw_free", "sk_cnote"})
 check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["BGMに追加", "album", "ambient", "bgm", "erai", "hantei", "help", "jikanwari", "jikoshokai", "join", "kadai", "kanri", "kesseki", "kigen", "kiroku", "kojin", "loop", "nakama", "oyasumi", "pause", "play", "queue", "rajio", "reizouko", "resume", "saitei", "setup", "shuffle", "skip", "stop", "suimin", "tips", "tsushinbo", "volume", "watashi", "レシピカードにする"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["BGMに追加", "album", "ambient", "bgm", "erai", "hantei", "help", "jikanwari", "jikoshokai", "join", "kadai", "kanri", "kesseki", "kigen", "kiroku", "kojin", "loop", "nakama", "oyasumi", "pause", "play", "queue", "rajio", "reizouko", "resume", "saitei", "setup", "shiori", "shuffle", "skip", "stop", "suimin", "tips", "tsushinbo", "volume", "watashi", "レシピカードにする"])
 check("音楽: URL判定", (B.looks_like_url("https://youtu.be/x"), B.looks_like_url("lofi hiphop")), (True, False))
 check("音楽: 音源なしなら空リスト", isinstance(B.bgm_files(), list), True)
 check("環境音: ファイル一覧はリスト", isinstance(B.ambient_files(), list), True)
@@ -748,6 +748,45 @@ async def main():
     await B.db.commit()
     check("祝福: 全員✅で祝う", await B.maybe_celebrate(cid), True)
     check("祝福: 二度目は鳴らない", await B.maybe_celebrate(cid), False)
+
+    # 🍳 朝ごはんストリーク（今日まだなら昨日から・お休みは飛ばす）
+    def _ts(dd, h):
+        return int(datetime(2026, 9, dd, h, 0, tzinfo=JST).timestamp())
+    for dd in (1, 2, 3, 5):   # 4日はお休み
+        await B.db.execute("INSERT INTO events(user_id,kind,sub,ts,day,note) VALUES('97','meal','朝',?,?, '')",
+                           (_ts(dd, 8), f"2026-09-{dd:02d}"))
+    await B.db.execute("INSERT INTO off_days(day,user_id,reason) VALUES('2026-09-04','97','帰省')")
+    await B.db.execute("INSERT INTO events(user_id,kind,sub,ts,day,note) VALUES('97','meal','昼',?, '2026-09-06', '')", (_ts(6, 12),))
+    await B.db.commit()
+    check("朝ごはん: お休みを挟んで4日連続", await B.asagohan_streak("97", "2026-09-05"), 4)
+    check("朝ごはん: 今日まだなら昨日までで数える", await B.asagohan_streak("97", "2026-09-06"), 4)
+    check("朝ごはん: 2日空いたら途切れる", await B.asagohan_streak("97", "2026-09-08"), 0)
+    check("朝ごはん: 返事の一言は2日目から", (B.asagohan_note(1), "7日連続" in B.asagohan_note(7)), ("", True))
+
+    # 🗒 科目メモ（共有・最新が先・上限で古いものから消える）
+    await B.add_course_note("tst003", "95", "来週は2-428")
+    await B.add_course_note("tst003", "96", "電卓持参")
+    _cn = await B.course_notes_for("tst003")
+    check("科目メモ: 新しい順・書いた人つき", [(r["text"], r["uname"]) for r in _cn], [("電卓持参", "ペリカン"), ("来週は2-428", "ゴリラ")])
+    check("科目メモ: 朝の予定用は最新1件", await B.today_course_notes(["tst003"]), ["**テスト祝福**：電卓持参"])
+    for i in range(B.COURSE_NOTE_MAX + 3):
+        await B.add_course_note("tst003", "95", f"メモ{i}")
+    check("科目メモ: 上限を超えたら古いものから消える", len(await B.course_notes_for("tst003", 100)), B.COURSE_NOTE_MAX)
+
+    # 🎧 ヘビロテ（同じ人・同じ日・同じ曲は1回）
+    hts = int(datetime(2026, 9, 2, 20, 0, tzinfo=JST).timestamp())
+    for uid_, t_ in (("95", "YOASOBI「アイドル」Official MV"), ("95", "YOASOBI アイドル"), ("96", "YOASOBI アイドル"), ("96", "米津玄師 Lemon")):
+        await B.db.execute("INSERT INTO play_history(user_id,title,url,ts) VALUES(?,?, '', ?)", (uid_, t_, hts))
+    await B.db.commit()
+    _songs, _people, _tot = await B.heavy_rotation("2026-08-31", "2026-09-06")
+    check("ヘビロテ: 1位はアイドル（同日同人の重複は1回）", (_songs[0][1], _tot), (2, 3))
+    check("ヘビロテ: カードPNG生成", B.render_heavy_rotation_card(_songs, _people, "2026-08-31", "2026-09-06") is not None, True)
+
+    # 📖 月間しおり
+    _sh = await B.shiori_stats("97", 2026, 9)
+    check("しおり: 月の範囲", B.month_bounds(2026, 2), ("2026-02-01", "2026-02-28"))
+    check("しおり: 集計にお休みが入る", "2026-09-04" in _sh["off"], True)
+    check("しおり: カードPNG生成", B.render_shiori_card("テスト", _sh) is not None, True)
 
     # 🚫 提出しない（選択式の課題など）
     cur = await B.db.execute("INSERT INTO assignments(code,title,due_ts,created_by,created_at) VALUES('tst003','選択課題A',?, '95', ?)",
