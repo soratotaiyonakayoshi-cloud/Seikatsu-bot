@@ -876,6 +876,9 @@ async def main():
     _kl = await B.kaji_due_lines("2026-10-24")
     check("家事リマインド: 3日に1回で3日ぶりなら対象", any("<@99>" in l and "洗濯" in l and "3日ぶり" in l for l in _kl), True)
     check("家事リマインド: まだ期限前なら対象外", any("<@99>" in l for l in await B.kaji_due_lines("2026-10-22")), False)
+    check("家事リマインド: 前日（10/23）に「明日やる日」として出る", any("<@99>" in l and "洗濯" in l for l in await B.kaji_tomorrow_lines("2026-10-23")), True)
+    check("家事リマインド: 2日前は出ない", any("<@99>" in l for l in await B.kaji_tomorrow_lines("2026-10-22")), False)
+    check("家事リマインド: 今日すでにやる日なら明日の欄には重ねない", any("<@99>" in l for l in await B.kaji_tomorrow_lines("2026-10-24")), False)
     await B.db.execute("INSERT INTO off_days(day,user_id,reason) VALUES('2026-10-24','99','帰省')"); await B.db.commit()
     check("家事リマインド: お休みの日は対象外", any("<@99>" in l for l in await B.kaji_due_lines("2026-10-24")), False)
 

@@ -78,7 +78,7 @@ CH = {
     "meal": ("ごはん🍚", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。\n"
              "🧊 冷蔵庫＝期限が近い食品のメモ。登録すると期限の前日・当日の朝にお知らせ（3日過ぎたら自動で消えます）。"),
     "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。\n"
-              "「n日に1回」の家事は、やる日なのにまだのとき、判定の3時間前（20時）にここでお知らせします。"),
+              "「n日に1回」の家事は毎晩20時にここでお知らせ：🗓 **明日やる日**の家事（前日のお知らせ）と、⚠️ 今日やる日なのにまだの家事。"),
     "erai": ("えらい🌟", "最低限とは別に、今日がんばったことを報告して褒め合う場所。🌟ボタン（または /erai）から。判定はされません。\n"
              "📌 やること宣言＝やることメモ（1行に1つ・まとめて宣言OK）。**期限**（例 `11/3`・`11/1-11/3`）をつけるとその日まで毎日残ります。"
              "空欄なら今日だけ。終わったら✅、期限の日の23時に引き継ぎ確認、放置なら翌朝ひっそり消えます（叱責なし）。"),
@@ -2951,18 +2951,40 @@ async def kaji_due_lines(day):
                 f"{st['emoji']}{st['label']}（{kaji_interval_text(st['n'])}・{st['gap']}日ぶり）" for st in due))
     return lines
 
+async def kaji_tomorrow_lines(day):
+    """明日やる日になる家事の一覧行（前日のお知らせ用）。毎日の家事・今日すでにやる日のもの・明日お休みの人は除く"""
+    tomorrow = (date.fromisoformat(day) + timedelta(days=1)).isoformat()
+    async with db.execute("SELECT * FROM users") as c:
+        users = await c.fetchall()
+    async with db.execute("SELECT user_id FROM off_days WHERE day=?", (tomorrow,)) as c:
+        off = {r["user_id"] for r in await c.fetchall()}
+    lines = []
+    for u in users:
+        if u["id"] in off or not any((u[col] or 0) > 1 for col, _, _, _ in KAJI_CATS):
+            continue
+        today_due = {st["label"] for st in await kaji_status(u, day) if st["due"]}
+        soon = [st for st in await kaji_status(u, tomorrow) if st["due"] and st["n"] > 1 and st["label"] not in today_due]
+        if soon:
+            lines.append(f"・<@{u['id']}>　" + "／".join(f"{st['emoji']}{st['label']}（{kaji_interval_text(st['n'])}）" for st in soon))
+    return lines
+
 async def kaji_remind(day):
-    """判定の数時間前に #家事🧹 で「今日やる日の家事」がまだの人へ声かけ（1日1回）"""
+    """判定の数時間前に #家事🧹 で、明日やる日の家事（前日のお知らせ）と、今日やる日なのにまだの家事を1通で（1日1回）"""
     ch = await get_ch("chore")
     if not ch:
         return 0
-    lines = await kaji_due_lines(day)
-    if not lines:
+    tomorrow_lines = await kaji_tomorrow_lines(day)
+    today_lines = await kaji_due_lines(day)
+    if not tomorrow_lines and not today_lines:
         return 0
-    await ch.send(f"🧹 **今日やる日の家事、まだ間に合います！**（{JUDGE_HOUR}:00 に判定）\n" + "\n".join(lines)[:1800]
-                  + "\n-# やったら 🧹 のボタンで記録してね")
+    parts = []
+    if tomorrow_lines:
+        parts.append("🗓 **明日やる日の家事**（洗剤・ごみ袋の準備などはお早めに）\n" + "\n".join(tomorrow_lines))
+    if today_lines:
+        parts.append(f"⚠️ **今日やる日なのに、まだの家事**（{JUDGE_HOUR}:00 に判定・まだ間に合います）\n" + "\n".join(today_lines))
+    await ch.send("🧹 **家事のお知らせ**\n" + "\n\n".join(parts)[:1850] + "\n-# やったら 🧹 のボタンで記録してね")
     await bump_panel("chore")
-    return len(lines)
+    return len(tomorrow_lines) + len(today_lines)
 
 async def prejudge_reminder(day):
     """判定の1時間前に、まだ間に合う未達を本人メンションでそっと知らせる"""
