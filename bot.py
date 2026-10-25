@@ -2637,9 +2637,19 @@ async def offsite_backup():
 @app_commands.describe(sousa="やること")
 @app_commands.choices(sousa=[app_commands.Choice(name="状態を確認", value="status"),
                              app_commands.Choice(name="DBを今すぐ #bot管理🔒 にバックアップ", value="backup"),
-                             app_commands.Choice(name="yt-dlpを今すぐ更新（変わったら自動で再起動）", value="update")])
+                             app_commands.Choice(name="yt-dlpを今すぐ更新（変わったら自動で再起動）", value="update"),
+                             app_commands.Choice(name="記念カードを試しに作る（自分にだけ）", value="anniv")])
 async def kanri_command(interaction, sousa: app_commands.Choice[str]):
     await interaction.response.defer(ephemeral=True)
+    if sousa.value == "anniv":
+        f0 = date.fromisoformat(CIRCLE_FOUNDED)
+        nxt = next(dd for dd in (date(f0.year + (f0.month + k - 1) // 12, (f0.month + k - 1) % 12 + 1, f0.day) for k in range(6, 1200, 6))
+                   if dd > now_jst().date() and anniversary_label(dd))
+        buf, _ = await build_anniversary(day_str(now_jst()), anniversary_label(nxt))
+        await interaction.followup.send(f"🎉 試し作成（いまの時点の合計）。本番は **{nxt.month}/{nxt.day}（{anniversary_label(nxt)}）の9時** に #つうしんぼ へ自動投稿されます。",
+                                        file=discord.File(buf, filename="anniversary-preview.png") if buf else discord.utils.MISSING,
+                                        ephemeral=True)
+        return
     if sousa.value == "backup":
         ok = await offsite_backup()
         await interaction.followup.send("💾 バックアップを #bot管理🔒 に送りました。" if ok else "⚠️ 送れませんでした（/setup で #bot管理🔒 を作ってね）",
@@ -2741,6 +2751,7 @@ async def ops_daily(now):
     if now.weekday() == 0 and now.hour == 5 and await meta_get("ops_backup_week") != wk:
         await meta_set("ops_backup_week", wk)
         await offsite_backup()
+    await maybe_post_anniversary(now)   # 🎉 発足から半年・1周年…の9時に記念カード
 
 # ---- ⏰ 起床リマインド（オプトイン）：締切のN分前に未報告ならメンション ----
 _wakeremind_cache = {"day": None, "done": set()}
@@ -7962,6 +7973,7 @@ def intro_template_embed():
             "**④ 叱られ方の希望／できること・してほしいこと**　例：ガツンと来てOK／モーニングコールできます\n"
             "**⑤ 今学期の一言目標**　例：1限に生きて行く\n\n"
             "カードには起床目標・連続達成・履修科目数・ロールが自動で添えられます。"
+            "**🪪 プロフィールカード** を押すと、自己紹介と称号を名刺風の1枚画像にして自分にだけ届けます（新歓・SNS用）。"
             "書き終わったら、#ロール🏷 のリアクションで **学部・学年・生活形態のロール** も付けてね。\n"
             "※ 本名・住所・連絡先は書かないでね。"
         ))
@@ -8046,6 +8058,133 @@ async def open_intro_modal(interaction):
         row = await c.fetchone()
     await interaction.response.send_modal(IntroModal(dict(row) if row else None))
 
+# ---- 🪪 プロフィールカード（自己紹介＋称号の名刺風1枚・新歓やSNS用） ----
+PROFILE_SECTIONS = [("🎯", "今学期の目標", "f5", 2), ("🍚", "いつものごはん・ハマってること", "f3", 3),
+                    ("😵", "苦手なこと・朝型／夜型", "f2", 3), ("🤝", "叱られ方・できること", "f4", 3)]
+
+def render_profile_card(name, avatar, intro, info):
+    """intro=自己紹介(dict f1..f5)、info={wake, streak, best, titles}、avatar=画像bytes(任意)。描けなければ None"""
+    try:
+        from PIL import Image as PImage, ImageDraw, ImageFont, ImageOps
+    except Exception:
+        return None
+    f = _find_cjk_font()
+    if not f:
+        return None
+    fb = _find_cjk_font_bold() or f
+    ef = _find_emoji_font()
+    W, H, pad = 1080, 1350, 60
+    img = PImage.new("RGB", (W, H), CARD_CREAM)
+    d = ImageDraw.Draw(img)
+    F = lambda s, bold=False: ImageFont.truetype(fb if bold else f, s)
+    E = lambda s: ImageFont.truetype(ef, s) if ef else None
+    logo = _gohan_art("logo")
+    if logo:
+        _paste_art(img, logo, W - pad - round(logo.width * 96 / logo.height), 34, 96)
+    d.text((pad, 52), "PROFILE", font=F(28, True), fill=CARD_ORANGE)
+    # アイコン（丸抜き）＋名前＋ひとこと紹介
+    av = 210
+    ay = 120
+    if avatar:
+        try:
+            a = ImageOps.fit(PImage.open(io.BytesIO(avatar)).convert("RGB"), (av, av))
+            mask = PImage.new("L", (av, av), 0)
+            ImageDraw.Draw(mask).ellipse([0, 0, av - 1, av - 1], fill=255)
+            img.paste(a, (pad, ay), mask)
+        except Exception:
+            avatar = None
+    if not avatar:
+        d.ellipse([pad, ay, pad + av, ay + av], fill=CARD_TRACK)
+        d.text((pad + av // 2, ay + av // 2), (name or "?")[:1], font=F(96, True), fill=CARD_MUTED, anchor="mm")
+    d.ellipse([pad - 4, ay - 4, pad + av + 4, ay + av + 4], outline=CARD_ORANGE, width=6)
+    nx = pad + av + 40
+    nf = F(64 if len(name) <= 8 else 48, True)
+    _draw_mixed(d, nx, ay + 18, name[:14], nf, E(64), CARD_INK)
+    yy = ay + 110
+    for ln in _wrap_px(d, (intro.get("f1") or "").strip(), F(28), E(28), W - pad - nx)[:3]:
+        _draw_mixed(d, nx, yy, ln, F(28), E(28), CARD_MUTED)
+        yy += 40
+    # 数字のピル
+    y = ay + av + 40
+    pills = [f"☀ 起床目標 {info['wake'] or '未設定'}", f"🔥 {info['streak']}日連続", f"🏆 自己ベスト {info['best']}日"]
+    x = pad
+    for p in pills:
+        w = int(_mixed_w(d, p, F(28, True), E(28))) + 44
+        d.rounded_rectangle([x, y, x + w, y + 60], radius=30, fill="#fffaf2", outline=CARD_LINE, width=2)
+        _draw_mixed(d, x + 22, y + 13, p, F(28, True), E(28), CARD_INK)
+        x += w + 16
+    y += 80
+    if info["titles"]:   # 称号ロールはオレンジのバッジで
+        x = pad
+        for t in info["titles"][:4]:
+            w = int(_mixed_w(d, t, F(26, True), E(26))) + 36
+            if x + w > W - pad:
+                break
+            d.rounded_rectangle([x, y, x + w, y + 50], radius=25, fill=CARD_ORANGE)
+            _draw_mixed(d, x + 18, y + 10, t, F(26, True), E(26), "#ffffff")
+            x += w + 12
+        y += 74
+    # 自己紹介の各項目（書いてあるものだけ・入りきる分だけ）
+    y += 6
+    for ic, lb, key, max_lines in PROFILE_SECTIONS:
+        text = (intro.get(key) or "").strip()
+        if not text:
+            continue
+        lines = []
+        for para in text.splitlines():
+            lines += _wrap_px(d, para, F(30), E(30), W - pad * 2 - 56)
+        lines = lines[:max_lines]
+        need = 64 + 44 * len(lines) + 26
+        if y + need > H - 124:
+            break
+        d.rounded_rectangle([pad, y, W - pad, y + need], radius=22, fill="#fffaf2", outline=CARD_LINE, width=2)
+        _draw_mixed(d, pad + 28, y + 20, f"{ic} {lb}", F(26, True), E(26), CARD_ORANGE)
+        ly = y + 64
+        for ln in lines:
+            _draw_mixed(d, pad + 28, ly, ln, F(30), E(30), CARD_INK)
+            ly += 44
+        y += need + 18
+    d.line([pad, H - 104, W - pad, H - 104], fill=CARD_LINE, width=2)
+    bowl = _gohan_art("bowl")
+    fx = pad
+    if bowl:
+        fx += _paste_art(img, bowl, pad, H - 92, 64) + 14
+    d.text((fx, H - 84), "最低限生活リズムサークル", font=F(30, True), fill=CARD_INK)
+    d.text((W - pad, H - 76), "いっしょにレッツなまりず", font=F(22), fill=CARD_MUTED, anchor="ra")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+async def profile_info(member):
+    u = await get_user(member.id)
+    streak = await streak_of(member.id, day_str(now_jst()))
+    title_names = {nm for _, nm, _ in ALL_TITLES}
+    titles = [r.name for r in getattr(member, "roles", []) if r.name in title_names]
+    return {"wake": u["wake_deadline"] if u and u["wake_deadline"] else None, "streak": streak,
+            "best": max(streak, (u["best_streak"] if u and u["best_streak"] else 0)), "titles": titles}
+
+async def send_profile_card(interaction):
+    async with db.execute("SELECT * FROM intros WHERE user_id=?", (str(interaction.user.id),)) as c:
+        row = await c.fetchone()
+    if not row:
+        await interaction.response.send_message("先に「📝 自己紹介を書く」で自己紹介を書いてね。カードはその内容から作ります。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    avatar = None
+    try:
+        avatar = await interaction.user.display_avatar.replace(size=256, format="png").read()
+    except Exception:
+        pass
+    buf = await asyncio.to_thread(render_profile_card, interaction.user.display_name, avatar, dict(row),
+                                  await profile_info(interaction.user))
+    if not buf:
+        await interaction.followup.send("⚠️ カードを作れませんでした（VMに日本語フォントが必要）。", ephemeral=True)
+        return
+    await interaction.followup.send("🪪 プロフィールカードです（自分にだけ表示）。長押し・右クリックで保存して、新歓やSNSにもどうぞ！"
+                                    "\n-# 内容を変えたいときは📝で自己紹介を更新すると、次のカードに反映されます",
+                                    file=discord.File(buf, filename="profile.png"), ephemeral=True)
+
 class IntroView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -8053,6 +8192,10 @@ class IntroView(discord.ui.View):
     @discord.ui.button(label="📝 自己紹介を書く／更新する", style=discord.ButtonStyle.primary, custom_id="sk_intro")
     async def intro(self, interaction, button):
         await open_intro_modal(interaction)
+
+    @discord.ui.button(label="🪪 プロフィールカード", style=discord.ButtonStyle.secondary, custom_id="sk_intro_card")
+    async def intro_card_btn(self, interaction, button):
+        await send_profile_card(interaction)
 
 @bot.tree.command(name="jikoshokai", description="自己紹介を書く／更新する（#自己紹介🙋 にカードが投稿されます）")
 async def jikoshokai_command(interaction):
@@ -9724,6 +9867,121 @@ async def shiori_command(interaction, tsuki: app_commands.Range[int, 1, 12] = No
     await interaction.followup.send(
         f"📖 {m}月の生活のしおりです。長押し（右クリック）で保存してSNSにもどうぞ！\n-# #最低限生活リズムサークル",
         file=discord.File(buf, filename=f"shiori-{y}-{m:02d}.png"), ephemeral=True)
+
+# ---- 🎉 サークル記念カード（発足から半年・1周年…にみんなの合計を1枚に） ----
+CIRCLE_FOUNDED = os.getenv("CIRCLE_FOUNDED", "2026-09-01")
+
+def anniversary_label(d, founded=None):
+    """記念日なら '半年' / '1周年' / 'n周年'。それ以外は None"""
+    f = date.fromisoformat(founded or CIRCLE_FOUNDED)
+    if d.day != f.day or d <= f:
+        return None
+    months = (d.year - f.year) * 12 + (d.month - f.month)
+    if months == 6:
+        return "半年"
+    if months > 0 and months % 12 == 0:
+        return f"{months // 12}周年"
+    return None
+
+async def circle_totals(until_day):
+    """発足日〜until_dayのサークル全体の合計"""
+    d1 = CIRCLE_FOUNDED
+
+    async def one(sql, args=()):
+        async with db.execute(sql, args) as c:
+            r = await c.fetchone()
+        return (r[0] if r else 0) or 0
+    rng = (d1, until_day)
+    return {
+        "members": await one("SELECT COUNT(DISTINCT user_id) FROM events WHERE day BETWEEN ? AND ?", rng),
+        "wakes": await one("SELECT COUNT(*) FROM events WHERE kind='wake' AND day BETWEEN ? AND ?", rng),
+        "meals": await one("SELECT COUNT(*) FROM events WHERE kind='meal' AND day BETWEEN ? AND ?", rng),
+        "photos": await one("SELECT COUNT(*) FROM events WHERE kind='meal' AND msg_id IS NOT NULL AND day BETWEEN ? AND ?", rng),
+        "chores": await one("SELECT COUNT(*) FROM events WHERE kind='chore' AND day BETWEEN ? AND ?", rng),
+        "radio": await one("SELECT COUNT(*) FROM events WHERE kind='radio' AND day BETWEEN ? AND ?", rng),
+        "work_h": int((await one("SELECT SUM(end_ts-start_ts) FROM work_sessions WHERE end_ts IS NOT NULL AND day BETWEEN ? AND ?", rng)) // 3600),
+        "efforts": await one("SELECT COUNT(*) FROM efforts WHERE day BETWEEN ? AND ?", rng),
+        "claps": await one("SELECT COUNT(*) FROM meal_praise WHERE day BETWEEN ? AND ?", rng)
+                 + await one("SELECT COUNT(*) FROM effort_praise WHERE day BETWEEN ? AND ?", rng),
+        "kadai": await one("SELECT COUNT(*) FROM assignment_done WHERE skip=0"),
+        "best": await one("SELECT MAX(best_streak) FROM users"),
+    }
+
+def render_anniversary_card(label, totals, founded, today):
+    """記念カード（1080×1350 PNG）。描けなければ None"""
+    try:
+        from PIL import Image as PImage, ImageDraw, ImageFont
+    except Exception:
+        return None
+    f = _find_cjk_font()
+    if not f:
+        return None
+    fb = _find_cjk_font_bold() or f
+    ef = _find_emoji_font()
+    W, H, pad = 1080, 1350, 60
+    img = PImage.new("RGB", (W, H), CARD_CREAM)
+    d = ImageDraw.Draw(img)
+    F = lambda s, bold=False: ImageFont.truetype(fb if bold else f, s)
+    E = lambda s: ImageFont.truetype(ef, s) if ef else None
+    logo = _gohan_art("logo")
+    if logo:
+        _paste_art(img, logo, (W - round(logo.width * 150 / logo.height)) // 2, 44, 150)
+    head = f"発足から {label}！" if label == "半年" else f"{label}！"
+    tw = _mixed_w(d, "🎉 " + head, F(72, True), E(72))
+    _draw_mixed(d, (W - tw) // 2, 214, "🎉 " + head, F(72, True), E(72), CARD_ORANGE)
+    fd, td = date.fromisoformat(founded), date.fromisoformat(today)
+    sub = f"{fd.year}.{fd.month}.{fd.day} → {td.year}.{td.month}.{td.day}　みんなで積み上げた記録"
+    d.text((W // 2, 322), sub, font=F(28), fill=CARD_MUTED, anchor="ma")
+    tiles = [("☀", "起きた", f"{totals['wakes']:,}回"), ("🍚", "ごはん報告", f"{totals['meals']:,}回"),
+             ("📸", "ごはん写真", f"{totals['photos']:,}枚"), ("🧹", "家事", f"{totals['chores']:,}回"),
+             ("🖥", "作業部屋", f"{totals['work_h']:,}時間"), ("🏃", "ラジオ体操", f"{totals['radio']:,}回"),
+             ("📚", "課題提出", f"{totals['kadai']:,}件"), ("👏", "拍手", f"{totals['claps']:,}回")]
+    gap, ty, th = 24, 392, 160
+    tw2 = (W - pad * 2 - gap) // 2
+    for i, (ic, lb, val) in enumerate(tiles):
+        tx = pad + (i % 2) * (tw2 + gap)
+        yy = ty + (i // 2) * (th + gap)
+        d.rounded_rectangle([tx, yy, tx + tw2, yy + th], radius=22, fill="#fffaf2", outline=CARD_LINE, width=2)
+        _draw_mixed(d, tx + 26, yy + 22, f"{ic} {lb}", F(28), E(28), CARD_MUTED)
+        d.text((tx + 26, yy + 68), val, font=F(56, True), fill=CARD_INK)
+    by = ty + 4 * (th + gap) + 10
+    d.text((W // 2, by), f"参加した人 {totals['members']} 人 ・ いちばん長い連続達成 {totals['best']} 日",
+           font=F(30, True), fill=CARD_INK, anchor="ma")
+    d.line([pad, H - 104, W - pad, H - 104], fill=CARD_LINE, width=2)
+    bowl = _gohan_art("bowl")
+    fx = pad
+    if bowl:
+        fx += _paste_art(img, bowl, pad, H - 92, 64) + 14
+    d.text((fx, H - 84), "最低限生活リズムサークル", font=F(30, True), fill=CARD_INK)
+    d.text((W - pad, H - 76), "これからもレッツなまりず", font=F(22), fill=CARD_MUTED, anchor="ra")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+async def build_anniversary(today_iso, label):
+    totals = await circle_totals(today_iso)
+    return await asyncio.to_thread(render_anniversary_card, label, totals, CIRCLE_FOUNDED, today_iso), totals
+
+async def maybe_post_anniversary(now):
+    """記念日の9時に #つうしんぼ へ記念カード（1日1回）"""
+    label = anniversary_label(now.date())
+    day = day_str(now)
+    if not label or now.hour != 9 or await meta_get("anniv_posted") == day:
+        return None
+    await meta_set("anniv_posted", day)
+    buf, totals = await build_anniversary(day, label)
+    ch = await get_ch("tsushinbo")
+    if not ch:
+        return None
+    text = (f"🎉 **最低限生活リズムサークル、{'発足から' if label == '半年' else ''}{label}！**\n"
+            f"みんなで起きた回数 **{totals['wakes']:,}回**、ごはん報告 **{totals['meals']:,}回**。毎日ちょっとずつの積み重ねです。"
+            "これからもレッツなまりず🌅\n-# 画像はSNSにもどうぞ #最低限生活リズムサークル")
+    if buf:
+        await ch.send(text, file=discord.File(buf, filename=f"anniversary-{day}.png"))
+    else:
+        await ch.send(text)
+    return True
 
 # ---- 🎧 週間ヘビロテカード（作業部屋でよく流れた曲） ----
 async def heavy_rotation(d1, d2, top=5):

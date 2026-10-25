@@ -797,6 +797,20 @@ async def main():
     await B.db.commit()
     check("冷蔵庫ヒント: 低脂肪牛乳→牛乳のTIPS", await B.fridge_tip_hints("98", _tday), ["**低脂肪牛乳** を使うなら →「牛乳で作るミルク粥」<#t9001>"])
 
+    # 🎉 記念カード（発足から半年・n周年）
+    check("記念日: 半年", B.anniversary_label(date(2027, 3, 1), "2026-09-01"), "半年")
+    check("記念日: 1周年・2周年", (B.anniversary_label(date(2027, 9, 1), "2026-09-01"), B.anniversary_label(date(2028, 9, 1), "2026-09-01")), ("1周年", "2周年"))
+    check("記念日: それ以外は None", (B.anniversary_label(date(2027, 3, 2), "2026-09-01"), B.anniversary_label(date(2027, 6, 1), "2026-09-01"),
+                                      B.anniversary_label(date(2026, 9, 1), "2026-09-01")), (None, None, None))
+    _tot = await B.circle_totals("2099-12-31")
+    check("記念: 合計が全部数値で数えられる", all(isinstance(v, int) and v >= 0 for v in _tot.values()) and len(_tot) == 11, True)
+    check("記念: カードPNG生成", B.render_anniversary_card("半年", _tot, "2026-09-01", "2027-03-01") is not None, True)
+
+    # 🪪 プロフィールカード
+    check("プロフィール: 自己紹介パネルに🪪ボタン", {i.custom_id for i in B.IntroView().children}, {"sk_intro", "sk_intro_card"})
+    check("プロフィール: カードPNG生成（アイコンなし）",
+          B.render_profile_card("テスト", None, {"f1": "工学部 1年", "f5": "早起き"}, {"wake": None, "streak": 0, "best": 0, "titles": []}) is not None, True)
+
     # 🍳 朝ごはんストリーク（今日まだなら昨日から・お休みは飛ばす）
     def _ts(dd, h):
         return int(datetime(2026, 9, dd, h, 0, tzinfo=JST).timestamp())
