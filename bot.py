@@ -184,7 +184,7 @@ CREATE TABLE IF NOT EXISTS assignments(
   id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL, title TEXT NOT NULL, note TEXT,
   due_ts INTEGER NOT NULL, created_by TEXT, created_at INTEGER, closed INTEGER NOT NULL DEFAULT 0, msg_id TEXT
 );
-CREATE TABLE IF NOT EXISTS assignment_done(assignment_id INTEGER NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY(assignment_id, user_id));
+CREATE TABLE IF NOT EXISTS assignment_done(assignment_id INTEGER NOT NULL, user_id TEXT NOT NULL, skip INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(assignment_id, user_id));
 CREATE TABLE IF NOT EXISTS assignment_reminded(assignment_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(assignment_id, stage));
 CREATE TABLE IF NOT EXISTS daily_results(day TEXT NOT NULL, user_id TEXT NOT NULL, achieved INTEGER NOT NULL, misses TEXT, PRIMARY KEY(day, user_id));
 CREATE TABLE IF NOT EXISTS efforts(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, text TEXT NOT NULL, day TEXT NOT NULL, ts INTEGER, msg_id TEXT);
@@ -271,7 +271,8 @@ async def db_init():
               "ALTER TABLE recurring_kadai ADD COLUMN due_days TEXT",
               "ALTER TABLE users ADD COLUMN off_weekdays TEXT",
               "ALTER TABLE member_recs ADD COLUMN kind TEXT NOT NULL DEFAULT 'song'",
-              "ALTER TABLE member_rec_tracks ADD COLUMN added_by TEXT"):
+              "ALTER TABLE member_rec_tracks ADD COLUMN added_by TEXT",
+              "ALTER TABLE assignment_done ADD COLUMN skip INTEGER NOT NULL DEFAULT 0"):
         try:
             await db.execute(m)
             await db.commit()
@@ -506,7 +507,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(SetteiView())
         self.add_view(MusicPanelView())
         self.add_view(IntroView())
-        self.add_dynamic_items(DoneButton, MealFixButton, PraiseButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
+        self.add_dynamic_items(DoneButton, SkipButton, MealFixButton, PraiseButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
                                MemoDoneButton, MemoCarryButton, MemoDropButton, WorkNoteButton, GoodsResetButton)
         self.add_view(EraiView())
         # コマンドの同期はグローバルではなくサーバー単位で行う（即時反映）。on_ready 参照。
@@ -4912,8 +4913,49 @@ async def assignment_row(aid):
         return await c.fetchone()
 
 async def done_set(aid):
+    """対応済み（✅完了＋🚫提出しない）の人。リマインドや未完了一覧から外す判定に使う"""
     async with db.execute("SELECT user_id FROM assignment_done WHERE assignment_id=?", (aid,)) as c:
         return {r["user_id"] for r in await c.fetchall()}
+
+async def skip_set(aid):
+    """🚫「提出しない」を選んだ人（選択式課題で別のものを出す等）"""
+    async with db.execute("SELECT user_id FROM assignment_done WHERE assignment_id=? AND skip=1", (aid,)) as c:
+        return {r["user_id"] for r in await c.fetchall()}
+
+async def kadai_mark(aid, uid, skip):
+    """✅完了（skip=0）か🚫提出しない（skip=1）として記録（どちらか一方・上書き）"""
+    await db.execute("INSERT INTO assignment_done(assignment_id,user_id,skip) VALUES(?,?,?) "
+                     "ON CONFLICT(assignment_id,user_id) DO UPDATE SET skip=excluded.skip", (aid, str(uid), 1 if skip else 0))
+
+class SkipButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_kadai_skip:(?P<id>\d+)"):
+    """選択式の課題など「自分は出さない」ものを外す（もう一度押すと取り消し）"""
+
+    def __init__(self, aid):
+        super().__init__(discord.ui.Button(label="🚫 提出しない", style=discord.ButtonStyle.secondary, custom_id=f"sk_kadai_skip:{aid}"))
+        self.aid = aid
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(int(match["id"]))
+
+    async def callback(self, interaction):
+        a = await assignment_row(self.aid)
+        if not a:
+            await interaction.response.send_message("この課題は見つかりませんでした。", ephemeral=True)
+            return
+        uid = str(interaction.user.id)
+        if uid in await skip_set(self.aid):
+            await db.execute("DELETE FROM assignment_done WHERE assignment_id=? AND user_id=?", (self.aid, uid))
+            msg = f"⬜ 「{a['title']}」の「提出しない」を取り消しました（また通知されます）。"
+        else:
+            await kadai_mark(self.aid, uid, True)
+            msg = f"🚫 「{a['title']}」は提出しないことにしました。リマインドも止まります（取り消しはもう一度押す）。"
+        await db.commit()
+        await interaction.response.send_message(msg, ephemeral=True)
+        try:
+            await maybe_celebrate(self.aid)
+        except Exception as e:
+            print(f"全員提出祝福エラー: {e!r}", flush=True)
 
 class DoneButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_kadai_done:(?P<id>\d+)"):
     def __init__(self, aid):
@@ -4931,11 +4973,11 @@ class DoneButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_kadai_
             return
         uid = str(interaction.user.id)
         done = await done_set(self.aid)
-        if uid in done:
+        if uid in done and uid not in await skip_set(self.aid):
             await db.execute("DELETE FROM assignment_done WHERE assignment_id=? AND user_id=?", (self.aid, uid))
             msg = f"⬜ 「{a['title']}」を未完了に戻しました。"
-        else:
-            await db.execute("INSERT OR IGNORE INTO assignment_done(assignment_id,user_id) VALUES(?,?)", (self.aid, uid))
+        else:   # 未着手 or 🚫提出しない→やっぱり出した
+            await kadai_mark(self.aid, uid, False)
             await db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES(?,?)", (uid, a["code"]))  # 押した人は履修者扱い
             msg = f"✅ 「{a['title']}」を完了にしました。おつかれさま！"
         await db.commit()
@@ -4976,6 +5018,7 @@ async def post_assignment(a, course, header):
     mention = " ".join(f"<@{t}>" for t in todo) if todo else "（対象者なし）"
     view = discord.ui.View(timeout=None)
     view.add_item(DoneButton(a["id"]))
+    view.add_item(SkipButton(a["id"]))
     msg = await ch.send(f"{header}\n{mention}", embed=kadai_embed(a, course, takers, done), view=view)
     await bump_panel("kadai")
     return msg
@@ -5520,10 +5563,14 @@ async def kadai_list_embed(uid):
     lines = []
     for a in rows:
         done = uid in await done_set(a["id"])
+        skipped = done and uid in await skip_set(a["id"])
         due = datetime.fromtimestamp(a["due_ts"], JST)
         left = days_left(due)
         if done and due < now_jst():
             continue   # 完了済みで期限（時刻まで）も過ぎた課題は見せない（自動クローズを待たず一覧から消す）
+        if skipped:   # 🚫提出しないは薄く1行だけ（取り消せるように残す）
+            lines.append(f"-# 🚫 {a['cname']}：{a['title']}（提出しない）")
+            continue
         lines.append(f"{'✅' if done else '⬜'} **{a['cname']}**：{a['title']}　{fmt_due(due)}" + ("" if done else f"（{'今日！' if left == 0 else ('期限切れ！' if left < 0 else f'あと{left}日')}）"))
     if not lines:
         return None
@@ -5549,7 +5596,7 @@ class KadaiDoneSelect(discord.ui.Select):
     async def callback(self, interaction):
         uid = str(interaction.user.id)
         for v in self.values:
-            await db.execute("INSERT OR IGNORE INTO assignment_done(assignment_id,user_id) VALUES(?,?)", (int(v), uid))
+            await kadai_mark(int(v), uid, False)
         await db.commit()
         for v in self.values:
             try:
@@ -5559,6 +5606,48 @@ class KadaiDoneSelect(discord.ui.Select):
         emb = await kadai_list_embed(uid)
         view = await kadai_list_view(uid)
         await interaction.response.edit_message(content=f"✅ {len(self.values)} 件を完了にしました{'。ぜんぶ片付いた🎉' if view is None else '！'}",
+                                                embed=emb, view=view or discord.ui.View())
+
+class KadaiSkipSelect(discord.ui.Select):
+    """選択式の課題など、自分は出さないものを外す（リマインド・一覧から消える）"""
+
+    def __init__(self, rows):
+        opts = []
+        for r in rows[:25]:
+            due = datetime.fromtimestamp(r["due_ts"], JST)
+            opts.append(discord.SelectOption(label=f"{r['cname']}：{r['title']}"[:80] + f"（{due.month}/{due.day}）", value=str(r["id"])))
+        super().__init__(placeholder="🚫 提出しない課題を選ぶ（選択式の課題など・複数OK）", options=opts,
+                         min_values=1, max_values=len(opts))
+
+    async def callback(self, interaction):
+        uid = str(interaction.user.id)
+        for v in self.values:
+            await kadai_mark(int(v), uid, True)
+        await db.commit()
+        for v in self.values:
+            try:
+                await maybe_celebrate(int(v))
+            except Exception as e:
+                print(f"全員提出祝福エラー: {e!r}", flush=True)
+        emb = await kadai_list_embed(uid)
+        view = await kadai_list_view(uid)
+        await interaction.response.edit_message(
+            content=f"🚫 {len(self.values)} 件を「提出しない」にしました（リマインドも止まります）。取り消しは下の↩から",
+            embed=emb, view=view or discord.ui.View())
+
+class KadaiUnskipSelect(discord.ui.Select):
+    def __init__(self, rows):
+        opts = [discord.SelectOption(label=f"{r['cname']}：{r['title']}"[:100], value=str(r["id"])) for r in rows[:25]]
+        super().__init__(placeholder="↩ 「提出しない」を取り消す", options=opts, min_values=1, max_values=len(opts))
+
+    async def callback(self, interaction):
+        uid = str(interaction.user.id)
+        await db.executemany("DELETE FROM assignment_done WHERE assignment_id=? AND user_id=? AND skip=1",
+                             [(int(v), uid) for v in self.values])
+        await db.commit()
+        emb = await kadai_list_embed(uid)
+        view = await kadai_list_view(uid)
+        await interaction.response.edit_message(content=f"↩ {len(self.values)} 件を未完了に戻しました。",
                                                 embed=emb, view=view or discord.ui.View())
 
 class KadaiDeferSelect(discord.ui.Select):
@@ -5597,6 +5686,7 @@ async def kadai_list_view(uid):
     rows = await kadai_undone_rows(uid)
     if rows:
         v.add_item(KadaiDoneSelect(rows))
+        v.add_item(KadaiSkipSelect(rows))
     async with db.execute(
         "SELECT a.*, c.name AS cname FROM assignments a JOIN courses c ON c.code=a.code "
         "WHERE a.closed=0 AND (a.created_by=? OR a.code IN (SELECT code FROM user_courses WHERE user_id=?)) ORDER BY a.due_ts",
@@ -5604,6 +5694,13 @@ async def kadai_list_view(uid):
         allrows = await c.fetchall()
     if allrows:
         v.add_item(KadaiDeferSelect(allrows))
+    async with db.execute(
+        "SELECT a.*, c.name AS cname FROM assignments a JOIN courses c ON c.code=a.code "
+        "WHERE a.closed=0 AND a.id IN (SELECT assignment_id FROM assignment_done WHERE user_id=? AND skip=1) ORDER BY a.due_ts",
+        (uid,)) as c:
+        skipped = await c.fetchall()
+    if skipped:
+        v.add_item(KadaiUnskipSelect(skipped))
     return v if v.children else None
 
 @kadai.command(name="done", description="課題を完了にする（投稿の✅ボタンでもOK）")
@@ -5614,7 +5711,7 @@ async def kadai_done(interaction, kadai_id: str):
     if not a:
         await interaction.response.send_message("課題が見つかりません。", ephemeral=True)
         return
-    await db.execute("INSERT OR IGNORE INTO assignment_done(assignment_id,user_id) VALUES(?,?)", (a["id"], str(interaction.user.id)))
+    await kadai_mark(a["id"], interaction.user.id, False)
     await db.commit()
     await interaction.response.send_message(f"✅ 「{a['title']}」を完了にしました。", ephemeral=True)
     try:
@@ -5679,7 +5776,10 @@ async def kadai_awards(d1, d2):
     per = {}
     for a in week_as:
         done = await done_set(a["id"])
+        skipped = await skip_set(a["id"])
         for uid in await takers_of(a["code"]):
+            if uid in skipped:
+                continue   # 🚫提出しないは分母からも外す（罰にも得にもしない）
             n, dn = per.get(uid, (0, 0))
             per[uid] = (n + 1, dn + (1 if uid in done else 0))
     cands = {uid: (n, dn) for uid, (n, dn) in per.items() if n >= 2}
@@ -5780,6 +5880,9 @@ async def maybe_celebrate(aid):
     done = await done_set(aid)
     if not set(takers) <= done:
         return False
+    submitted = done - await skip_set(aid)
+    if len(submitted) < 2:
+        return False   # 🚫提出しないを除いて実際に出した人が2人以上いるときだけ祝う
     async with db.execute("SELECT 1 FROM assignment_reminded WHERE assignment_id=? AND stage='all'", (aid,)) as c:
         if await c.fetchone():
             return False
@@ -5787,7 +5890,7 @@ async def maybe_celebrate(aid):
     await db.commit()
     ch = await get_ch("kadai")
     if ch:
-        await ch.send(f"🎉 **{a['cname']}**「{a['title']}」、履修者 {len(takers)} 人ぜんいん提出！ちょーえらい！{erai_emoji(ch.guild)}")
+        await ch.send(f"🎉 **{a['cname']}**「{a['title']}」、対象の {len(submitted)} 人ぜんいん提出！ちょーえらい！{erai_emoji(ch.guild)}")
         await bump_panel("kadai")
     return True
 

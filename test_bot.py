@@ -742,6 +742,27 @@ async def main():
     check("祝福: 全員✅で祝う", await B.maybe_celebrate(cid), True)
     check("祝福: 二度目は鳴らない", await B.maybe_celebrate(cid), False)
 
+    # 🚫 提出しない（選択式の課題など）
+    cur = await B.db.execute("INSERT INTO assignments(code,title,due_ts,created_by,created_at) VALUES('tst003','選択課題A',?, '95', ?)",
+                             (int(rnow.timestamp()) + 86400, int(rnow.timestamp())))
+    sid = cur.lastrowid
+    await B.db.commit()
+    check("提出しない: 最初は未完了一覧にある", any(r["id"] == sid for r in await B.kadai_undone_rows("95")), True)
+    await B.kadai_mark(sid, "95", True)
+    await B.db.commit()
+    check("提出しない: 未完了一覧から消える", any(r["id"] == sid for r in await B.kadai_undone_rows("95")), False)
+    check("提出しない: skip_setに入る・done_setにも入る（リマインド対象外）", ("95" in await B.skip_set(sid), "95" in await B.done_set(sid)), (True, True))
+    _le = await B.kadai_list_embed("95")
+    check("提出しない: 一覧には🚫で薄く残る", "🚫" in _le.description and "選択課題A" in _le.description, True)
+    _lv = await B.kadai_list_view("95")
+    check("提出しない: 取り消しセレクトが出る", any(isinstance(i, B.KadaiUnskipSelect) for i in _lv.children), True)
+    await B.kadai_mark(sid, "96", False)
+    await B.db.commit()
+    check("提出しない: 出したのが1人だけなら全員提出祝福は鳴らない", await B.maybe_celebrate(sid), False)
+    await B.kadai_mark(sid, "95", False)   # やっぱり出した→skipが外れて完了に
+    await B.db.commit()
+    check("提出しない→完了に上書き", ("95" in await B.skip_set(sid), "95" in await B.done_set(sid)), (False, True))
+
     # ④ 通信簿の課題系の賞
     for i, dd in ((1, 11), (2, 12)):
         await B.db.execute("INSERT INTO assignments(code,title,due_ts,created_by,created_at) VALUES('tst003',?,?,'96',?)",
