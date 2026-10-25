@@ -868,6 +868,17 @@ async def main():
     _al = B.render_meal_album([(_png, "ぺんぎん　🐾5"), (_png, "たぬき")], "10月のいやしアルバム", "", 10, True, None, None)
     check("いやしアルバム: コラージュPNG生成", _al is not None, True)
 
+    # 🧹 n日に1回の家事リマインド（今日やる日なのにまだの人だけ）
+    await B.ensure_user(M(99, "らくだ"))
+    await B.db.execute("UPDATE users SET kaji_wash=3, kaji_since='2026-10-20' WHERE id='99'")
+    await B.db.execute("INSERT INTO events(user_id,kind,sub,ts,day,note) VALUES('99','chore','wash_run',0,'2026-10-21','')")
+    await B.db.commit()
+    _kl = await B.kaji_due_lines("2026-10-24")
+    check("家事リマインド: 3日に1回で3日ぶりなら対象", any("<@99>" in l and "洗濯" in l and "3日ぶり" in l for l in _kl), True)
+    check("家事リマインド: まだ期限前なら対象外", any("<@99>" in l for l in await B.kaji_due_lines("2026-10-22")), False)
+    await B.db.execute("INSERT INTO off_days(day,user_id,reason) VALUES('2026-10-24','99','帰省')"); await B.db.commit()
+    check("家事リマインド: お休みの日は対象外", any("<@99>" in l for l in await B.kaji_due_lines("2026-10-24")), False)
+
     # 📌 やること宣言の期限（空欄＝今日だけ／11/3＝今日〜／11/1-11/3＝期間）
     _n = datetime(2026, 10, 26, 12, 0, tzinfo=JST)
     check("メモ期限: 空欄は今日だけ", B.parse_memo_deadline("", _n), ("2026-10-26", None))

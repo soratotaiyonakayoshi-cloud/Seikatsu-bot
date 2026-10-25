@@ -77,7 +77,8 @@ CH = {
              "📅 今日・🗓 明日・📆 今後（7日の課題＋30日の試験＋実験）の予定はボタンでいつでも確認（自分にだけ表示）。"),
     "meal": ("ごはん🍚", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。\n"
              "🧊 冷蔵庫＝期限が近い食品のメモ。登録すると期限の前日・当日の朝にお知らせ（3日過ぎたら自動で消えます）。"),
-    "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
+    "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。\n"
+              "「n日に1回」の家事は、やる日なのにまだのとき、判定の3時間前（20時）にここでお知らせします。"),
     "erai": ("えらい🌟", "最低限とは別に、今日がんばったことを報告して褒め合う場所。🌟ボタン（または /erai）から。判定はされません。\n"
              "📌 やること宣言＝やることメモ（1行に1つ・まとめて宣言OK）。**期限**（例 `11/3`・`11/1-11/3`）をつけるとその日まで毎日残ります。"
              "空欄なら今日だけ。終わったら✅、期限の日の23時に引き継ぎ確認、放置なら翌朝ひっそり消えます（叱責なし）。"),
@@ -2932,6 +2933,37 @@ def actionable_misses(misses):
     """事前リマインドで知らせる価値のある（今からでも間に合う）未達だけ残す"""
     return [m for m in misses if not m.startswith(PREJUDGE_SKIP)]
 
+KAJI_REMIND_BEFORE_H = int(os.getenv("KAJI_REMIND_BEFORE_H", "3"))   # 判定の何時間前に家事リマインドを出すか（0で無効）
+
+async def kaji_due_lines(day):
+    """今日やる日なのにまだの家事がある人の一覧行（お休み・設定初日の人は除く）"""
+    async with db.execute("SELECT * FROM users") as c:
+        users = await c.fetchall()
+    async with db.execute("SELECT user_id FROM off_days WHERE day=?", (day,)) as c:
+        off = {r["user_id"] for r in await c.fetchall()}
+    lines = []
+    for u in users:
+        if u["id"] in off or not any((u[col] or 0) > 0 for col, _, _, _ in KAJI_CATS):
+            continue
+        due = [st for st in await kaji_status(u, day) if st["due"]]
+        if due:
+            lines.append(f"・<@{u['id']}>　" + "／".join(
+                f"{st['emoji']}{st['label']}（{kaji_interval_text(st['n'])}・{st['gap']}日ぶり）" for st in due))
+    return lines
+
+async def kaji_remind(day):
+    """判定の数時間前に #家事🧹 で「今日やる日の家事」がまだの人へ声かけ（1日1回）"""
+    ch = await get_ch("chore")
+    if not ch:
+        return 0
+    lines = await kaji_due_lines(day)
+    if not lines:
+        return 0
+    await ch.send(f"🧹 **今日やる日の家事、まだ間に合います！**（{JUDGE_HOUR}:00 に判定）\n" + "\n".join(lines)[:1800]
+                  + "\n-# やったら 🧹 のボタンで記録してね")
+    await bump_panel("chore")
+    return len(lines)
+
 async def prejudge_reminder(day):
     """判定の1時間前に、まだ間に合う未達を本人メンションでそっと知らせる"""
     ch = await get_ch("kora")
@@ -3025,6 +3057,13 @@ async def judge_loop():
         await update_work_vc_status(now)   # VCサブタイトル（勉強会の開始/終了の切替もここで拾う）
     except Exception as e:
         print(f"VCステータスエラー: {e!r}", flush=True)
+    kh = JUDGE_HOUR - KAJI_REMIND_BEFORE_H
+    if KAJI_REMIND_BEFORE_H > 0 and kh >= 0 and now.hour == kh and await meta_get("last_kaji_remind_day") != day:
+        await meta_set("last_kaji_remind_day", day)
+        try:
+            await kaji_remind(day)   # 🧹 n日に1回の家事：今日やる日なのにまだの人へ
+        except Exception as e:
+            print(f"家事リマインドエラー: {e!r}", flush=True)
     if JUDGE_HOUR >= 1 and now.hour == JUDGE_HOUR - 1 and await meta_get("last_prejudge_day") != day:
         await meta_set("last_prejudge_day", day)   # 先に記録して二重投稿を防ぐ
         try:
