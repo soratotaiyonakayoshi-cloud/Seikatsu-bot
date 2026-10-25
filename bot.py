@@ -238,8 +238,10 @@ CREATE TABLE IF NOT EXISTS univ_events(
   created_by TEXT, ts INTEGER
 );
 CREATE TABLE IF NOT EXISTS private_events(
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, title TEXT NOT NULL, start_day TEXT NOT NULL, end_day TEXT NOT NULL, ts INTEGER
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, title TEXT NOT NULL, start_day TEXT NOT NULL, end_day TEXT NOT NULL, ts INTEGER,
+  shared INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS private_event_reminded(event_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(event_id, stage));
 CREATE TABLE IF NOT EXISTS univ_event_reminded(event_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(event_id, stage));
 CREATE TABLE IF NOT EXISTS course_notes(
   id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL, text TEXT NOT NULL, user_id TEXT, ts INTEGER
@@ -286,7 +288,8 @@ async def db_init():
               "ALTER TABLE users ADD COLUMN off_weekdays TEXT",
               "ALTER TABLE member_recs ADD COLUMN kind TEXT NOT NULL DEFAULT 'song'",
               "ALTER TABLE member_rec_tracks ADD COLUMN added_by TEXT",
-              "ALTER TABLE assignment_done ADD COLUMN skip INTEGER NOT NULL DEFAULT 0"):
+              "ALTER TABLE assignment_done ADD COLUMN skip INTEGER NOT NULL DEFAULT 0",
+              "ALTER TABLE private_events ADD COLUMN shared INTEGER NOT NULL DEFAULT 0"):
         try:
             await db.execute(m)
             await db.commit()
@@ -5580,7 +5583,8 @@ async def remind_loop():
         print(f"fridge remind error: {e!r}", flush=True)
     try:
         await univ_event_remind()   # 🏫 大学の予定（3日前・開始日・履修登録の締切2日前）
-        await private_cleanup(day)   # 🔒 終わった自分だけの予定は消す
+        await shared_event_remind()  # 📣 みんなに見せる予定（3日前・当日に本人へ声かけ）
+        await private_cleanup(day)   # 🙋 終わったじぶんの予定は消す
     except Exception as e:
         print(f"univ event remind error: {e!r}", flush=True)
     try:
@@ -7003,28 +7007,77 @@ async def univ_hub_message(user):
         v.add_item(UnivDelSelect(mine))
     return "\n".join(lines), v
 
-# ---- 🔒 自分だけの予定（だれにも共有されない・終わった翌日に自動で消える） ----
+# ---- 🙋 じぶんの予定：🔒自分だけ（だれにも見えない）／📣みんなに見せる（#えらい🌟で宣言＋3日前と当日に声かけ） ----
+#      どちらも終わった翌日に自動で消える
 PRIVATE_KIND = "自分だけ"
+SHARED_KIND = "みんなに宣言"
 UNIV_EMOJI[PRIVATE_KIND] = "🔒"
+UNIV_EMOJI[SHARED_KIND] = "📣"
 
 async def private_events_between(uid, d1, d2):
-    """自分だけの予定を、大学の予定と同じ形の辞書で返す（idは負数で区別）"""
+    """じぶんの予定を、大学の予定と同じ形の辞書で返す（idは負数で区別・kindで見せる/自分だけを表す）"""
     async with db.execute("SELECT * FROM private_events WHERE user_id=? AND end_day >= ? AND start_day <= ? ORDER BY start_day, id",
                           (str(uid), d1, d2)) as c:
         rows = await c.fetchall()
-    return [{"id": -r["id"], "pid": r["id"], "title": r["title"], "kind": PRIVATE_KIND, "start_day": r["start_day"],
-             "end_day": r["end_day"], "created_by": str(uid), "uname": ""} for r in rows]
+    return [{"id": -r["id"], "pid": r["id"], "title": r["title"], "kind": SHARED_KIND if r["shared"] else PRIVATE_KIND,
+             "shared": r["shared"], "start_day": r["start_day"], "end_day": r["end_day"], "created_by": str(uid), "uname": ""}
+            for r in rows]
 
 async def private_cleanup(today):
-    """終わった自分だけの予定は消す（毎朝）"""
+    """終わったじぶんの予定は消す（毎朝）"""
     cur = await db.execute("DELETE FROM private_events WHERE end_day < ?", (today,))
+    await db.execute("DELETE FROM private_event_reminded WHERE event_id NOT IN (SELECT id FROM private_events)")
     await db.commit()
     return cur.rowcount
 
-class PrivateEventModal(discord.ui.Modal, title="🔒 自分だけの予定"):
-    t_in = discord.ui.TextInput(label="なにをする？（自分にしか見えません）", max_length=40, placeholder="例：バイト面接／帰省／歯医者")
-    s_in = discord.ui.TextInput(label="はじまり（例 11/3）", max_length=12)
-    e_in = discord.ui.TextInput(label="おわり（1日だけなら空欄）", max_length=12, required=False)
+async def announce_shared_event(member, r, today):
+    """📣みんなに見せる予定を #えらい🌟 で宣言"""
+    ch = await get_ch("erai")
+    if ch:
+        await ch.send(f"📣 **{member.display_name}** の宣言：{univ_line(r, today)}\n-# みんなで見守ろう。3日前と当日の朝にBotが声をかけます",
+                      silent=True)
+        await bump_panel("erai")
+
+async def shared_event_remind(now=None):
+    """📣みんなに見せる予定：3日前と開始日の朝に #えらい🌟 で本人にメンション（各1回）"""
+    now = now or now_jst()
+    today = day_str(now)
+    t = now.date()
+    async with db.execute("SELECT * FROM private_events WHERE shared=1 AND start_day BETWEEN ? AND ?",
+                          (today, (t + timedelta(days=3)).isoformat())) as c:
+        rows = await c.fetchall()
+    ch = await get_ch("erai")
+    if not ch:
+        return 0
+    n = 0
+    for r in rows:
+        left = (date.fromisoformat(r["start_day"]) - t).days
+        stage = {3: "pre", 0: "day"}.get(left)
+        if not stage:
+            continue
+        async with db.execute("SELECT 1 FROM private_event_reminded WHERE event_id=? AND stage=?", (r["id"], stage)) as c:
+            if await c.fetchone():
+                continue
+        await db.execute("INSERT OR IGNORE INTO private_event_reminded(event_id,stage) VALUES(?,?)", (r["id"], stage))
+        await db.commit()
+        ev = {"title": r["title"], "kind": SHARED_KIND, "start_day": r["start_day"], "end_day": r["end_day"]}
+        head = "📣 **3日後**" if stage == "pre" else "📣 **今日は宣言の日！**"
+        await ch.send(f"{head} <@{r['user_id']}>：{univ_line(ev, today)}" + ("　がんばれ！🔥" if stage == "day" else "　準備はどう？"))
+        n += 1
+    if n:
+        await bump_panel("erai")
+    return n
+
+class PrivateEventModal(discord.ui.Modal):
+    def __init__(self, shared=False):
+        super().__init__(title="📣 みんなに見せる予定" if shared else "🔒 自分だけの予定")
+        self.shared = shared
+        self.t_in = discord.ui.TextInput(label="なにをする？" + ("（#えらい🌟 で宣言されます）" if shared else "（自分にしか見えません）"),
+                                         max_length=40, placeholder="例：TOEIC本番／レポート仕上げ" if shared else "例：バイト面接／帰省／歯医者")
+        self.s_in = discord.ui.TextInput(label="はじまり（例 11/3）", max_length=12)
+        self.e_in = discord.ui.TextInput(label="おわり（1日だけなら空欄）", max_length=12, required=False)
+        for it in (self.t_in, self.s_in, self.e_in):
+            self.add_item(it)
 
     async def on_submit(self, interaction):
         now = now_jst()
@@ -7037,19 +7090,54 @@ class PrivateEventModal(discord.ui.Modal, title="🔒 自分だけの予定"):
             e = e.replace(year=e.year + 1)
         if e < now.date():
             s, e = s.replace(year=s.year + 1), e.replace(year=e.year + 1)
-        await db.execute("INSERT INTO private_events(user_id,title,start_day,end_day,ts) VALUES(?,?,?,?,?)",
-                         (str(interaction.user.id), str(self.t_in.value).strip()[:40], s.isoformat(), e.isoformat(),
-                          int(now.timestamp())))
+        title = str(self.t_in.value).strip()[:40]
+        await db.execute("INSERT INTO private_events(user_id,title,start_day,end_day,ts,shared) VALUES(?,?,?,?,?,?)",
+                         (str(interaction.user.id), title, s.isoformat(), e.isoformat(), int(now.timestamp()), 1 if self.shared else 0))
         await db.commit()
-        r = {"title": str(self.t_in.value).strip(), "kind": PRIVATE_KIND, "start_day": s.isoformat(), "end_day": e.isoformat()}
-        await interaction.response.send_message(
-            f"🔒 登録しました：{univ_line(r, day_str(now))}\n-# 自分にしか見えません。朝の予定・カレンダーに出て、終わった翌日に自動で消えます",
-            ephemeral=True)
+        r = {"title": title, "kind": SHARED_KIND if self.shared else PRIVATE_KIND, "start_day": s.isoformat(), "end_day": e.isoformat()}
+        if self.shared:
+            await interaction.response.send_message(f"📣 宣言しました：{univ_line(r, day_str(now))}\n-# #えらい🌟 に流れました。3日前と当日の朝にメンションで声をかけます",
+                                                    ephemeral=True)
+            await announce_shared_event(interaction.user, r, day_str(now))
+        else:
+            await interaction.response.send_message(
+                f"🔒 登録しました：{univ_line(r, day_str(now))}\n-# 自分にしか見えません。朝の予定・カレンダーに出て、終わった翌日に自動で消えます",
+                ephemeral=True)
+
+class PrivateToggleSelect(discord.ui.Select):
+    """登録済みの予定の 🔒自分だけ⇔📣みんなに見せる を切り替える"""
+
+    def __init__(self, rows):
+        opts = [discord.SelectOption(label=f"{r['title']}（{univ_span_text(r)}）"[:100], value=str(r["pid"]),
+                                     emoji="📣" if r["shared"] else "🔒",
+                                     description="いま：みんなに見せる → 自分だけにする" if r["shared"] else "いま：自分だけ → みんなに見せる")
+                for r in rows[:25]]
+        super().__init__(placeholder="👀 見せる／自分だけ を切り替える", options=opts)
+
+    async def callback(self, interaction):
+        pid = int(self.values[0])
+        async with db.execute("SELECT * FROM private_events WHERE id=? AND user_id=?", (pid, str(interaction.user.id))) as c:
+            r = await c.fetchone()
+        if not r:
+            await interaction.response.edit_message(content="⚠️ 見つかりませんでした。", view=None)
+            return
+        new = 0 if r["shared"] else 1
+        await db.execute("UPDATE private_events SET shared=? WHERE id=?", (new, pid))
+        await db.commit()
+        ev = {"title": r["title"], "kind": SHARED_KIND if new else PRIVATE_KIND, "start_day": r["start_day"], "end_day": r["end_day"]}
+        today = day_str(now_jst())
+        if new:
+            await interaction.response.edit_message(content=f"📣 みんなに見せる予定にしました：{univ_line(ev, today)}（#えらい🌟 で宣言）", view=None)
+            await announce_shared_event(interaction.user, ev, today)
+        else:
+            await interaction.response.edit_message(content=f"🔒 自分だけの予定に戻しました：{univ_line(ev, today)}（今後の声かけはしません）",
+                                                    view=None)
 
 class PrivateDelSelect(discord.ui.Select):
     def __init__(self, rows):
-        opts = [discord.SelectOption(label=f"{r['title']}（{univ_span_text(r)}）"[:100], value=str(r["pid"])) for r in rows[:25]]
-        super().__init__(placeholder="🗑 自分だけの予定を消す", options=opts, min_values=1, max_values=len(opts))
+        opts = [discord.SelectOption(label=f"{r['title']}（{univ_span_text(r)}）"[:100], value=str(r["pid"]),
+                                     emoji="📣" if r["shared"] else "🔒") for r in rows[:25]]
+        super().__init__(placeholder="🗑 予定を消す", options=opts, min_values=1, max_values=len(opts))
 
     async def callback(self, interaction):
         await db.executemany("DELETE FROM private_events WHERE id=? AND user_id=?",
@@ -7061,22 +7149,30 @@ class PrivateHubView(discord.ui.View):
     def __init__(self, rows):
         super().__init__(timeout=600)
         if rows:
+            self.add_item(PrivateToggleSelect(rows))
             self.add_item(PrivateDelSelect(rows))
 
-    @discord.ui.button(label="➕ 自分だけの予定を追加", style=discord.ButtonStyle.primary, row=1)
+    @discord.ui.button(label="🔒 自分だけの予定を追加", style=discord.ButtonStyle.primary, row=2)
     async def b_add(self, interaction, button):
-        await interaction.response.send_modal(PrivateEventModal())
+        await interaction.response.send_modal(PrivateEventModal(False))
+
+    @discord.ui.button(label="📣 みんなに見せる予定を追加", style=discord.ButtonStyle.success, row=2)
+    async def b_add_shared(self, interaction, button):
+        await interaction.response.send_modal(PrivateEventModal(True))
 
 async def send_private_hub(interaction):
     today = day_str(now_jst())
     rows = await private_events_between(interaction.user.id, today, "9999-12-31")
-    lines = ["🔒 **自分だけの予定**（だれにも共有されません・終わった翌日に自動で消えます）"]
+    lines = ["🙋 **じぶんの予定**",
+             "-# 🔒自分だけ＝だれにも見えない／📣みんなに見せる＝#えらい🌟 で宣言して、3日前と当日の朝に声かけ（緊張感がほしい予定に）",
+             "-# どちらも終わった翌日に自動で消えます"]
     lines += [f"・{univ_line(r, today)}" for r in rows[:20]] or ["-# まだありません"]
     await interaction.response.send_message("\n".join(lines), view=PrivateHubView(rows), ephemeral=True)
 
 # ---- 🗓 予定カレンダー（大学の予定は帯、自分の課題・試験・実験は日付のマスに。本人にだけ表示） ----
 UNIV_COLORS = {"長期休暇": "#e8913a", "履修登録": "#3d8f83", "行事": "#8a6fae", "その他": "#5b7fa6", "試験期間": "#c2527a",
-               PRIVATE_KIND: "#9a9184"}
+               PRIVATE_KIND: "#9a9184", SHARED_KIND: "#c2527a"}
+LEGEND_KINDS = ("長期休暇", "履修登録", "行事", "その他", PRIVATE_KIND, SHARED_KIND)
 
 async def calendar_data(uid, y, m):
     """月表示の材料：(グリッド開始日, 終了日, 大学の予定, {日付: [自分の予定の文字列]})"""
@@ -7206,7 +7302,7 @@ def render_calendar_card(name, y, m, gs, ge, events, items, today):
     # 凡例
     ly = gy + nrows * rh + 16
     x = pad
-    for kind in ("長期休暇", "履修登録", "行事", "その他", PRIVATE_KIND):
+    for kind in LEGEND_KINDS:
         d.rounded_rectangle([x, ly + 4, x + 34, ly + 24], radius=6, fill=UNIV_COLORS[kind])
         d.text((x + 42, ly), kind, font=F(20), fill=CARD_MUTED)
         x += 42 + int(d.textlength(kind, font=F(20))) + 26
@@ -7261,7 +7357,7 @@ def render_timeline_card(name, start, end, events, more, today):
     img = PImage.new("RGB", (W, H), CARD_CREAM)
     d = ImageDraw.Draw(img)
     d.text((pad, 50), "これからの予定", font=F(54, True), fill=CARD_INK)
-    d.text((pad + 4, 118), f"{name} さんのタイムライン（大学の予定＋自分だけの予定・課題は除く）", font=F(20), fill=CARD_MUTED)
+    d.text((pad + 4, 118), f"{name} さんのタイムライン（大学の予定＋じぶんの予定・課題は除く）", font=F(20), fill=CARD_MUTED)
     logo = _gohan_art("logo")
     if logo:
         _paste_art(img, logo, W - pad - round(logo.width * 90 / logo.height), 30, 90)
@@ -7313,13 +7409,13 @@ def render_timeline_card(name, start, end, events, more, today):
         d.text((pad, gy + gh + 8), f"ほか {more} 件（もっと先の予定は来月以降に表示されます）", font=F(16), fill=CARD_MUTED)
     ly = H - 100
     x = pad
-    for kind in ("長期休暇", "履修登録", "行事", "その他", PRIVATE_KIND):
+    for kind in LEGEND_KINDS:
         d.rounded_rectangle([x, ly + 4, x + 34, ly + 24], radius=6, fill=UNIV_COLORS[kind])
         d.text((x + 42, ly), kind, font=F(20), fill=CARD_MUTED)
         x += 42 + int(d.textlength(kind, font=F(20))) + 26
     d.line([pad, H - 58, W - pad, H - 58], fill=CARD_LINE, width=2)
     d.text((pad, H - 46), "最低限生活リズムサークル", font=F(24, True), fill=CARD_INK)
-    d.text((W - pad, H - 42), "灰色（自分だけ）の予定はあなたにしか見えません", font=F(18), fill=CARD_MUTED, anchor="ra")
+    d.text((W - pad, H - 42), "この画像はあなたにだけ表示されています", font=F(18), fill=CARD_MUTED, anchor="ra")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
@@ -7351,7 +7447,7 @@ def calendar_buttons(view, row=2):
             await send_calendar(interaction, off)
         b.callback = _cb
         view.add_item(b)
-    b = discord.ui.Button(label="🔒 自分だけの予定", style=discord.ButtonStyle.secondary, row=row)
+    b = discord.ui.Button(label="🙋 じぶんの予定", style=discord.ButtonStyle.secondary, row=row)
 
     async def _pv(interaction):
         await send_private_hub(interaction)
@@ -7773,8 +7869,8 @@ async def today_digest(uid, now, label="今日"):
             if r["kind"] == "長期休暇" and r["start_day"] <= tday:
                 continue
             lines.append(("🏫 いま：" if r["start_day"] <= tday else "🏫 もうすぐ：") + univ_line(r, tday))
-        for r in await private_events_between(uid, tday, soon):   # 🔒 自分だけの予定（本人の返事にしか出ない）
-            lines.append(("🔒 今日：" if r["start_day"] <= tday else "🔒 もうすぐ：") + univ_line(r, tday))
+        for r in await private_events_between(uid, tday, soon):   # 🙋 じぶんの予定（本人の返事にしか出ない）
+            lines.append(("🙋 今日：" if r["start_day"] <= tday else "🙋 もうすぐ：") + univ_line(r, tday))
     except Exception:
         pass
     if break_on(now):   # 🌸 長期休暇中は授業がないので時間割は出さない
@@ -7899,7 +7995,7 @@ async def upcoming_digest(uid, now, days=7):
         ev = sorted(list(await univ_events_between(tday, d30)) + await private_events_between(uid, tday, d30),
                     key=lambda r: (r["start_day"], r["end_day"]))
         if ev:
-            lines.append("🏫 **大学の予定・自分だけの予定（30日以内）**")
+            lines.append("🏫 **大学の予定・じぶんの予定（30日以内）**")
             lines += [f"　{univ_line(r, tday)}" for r in ev[:10]]
     except Exception:
         pass

@@ -827,7 +827,7 @@ async def main():
     check("カレンダー: 大学の予定が入る", any(r["title"] == "学園祭" for r in _evs), True)
     check("カレンダー: 画像PNG生成", B.render_calendar_card("テスト", 2026, 11, _gs, _ge, _evs, _its, "2026-11-21") is not None, True)
     check("カレンダー: ボタンは📊・🗓今月・🗓来月・🔒の4つ", [i.label for i in B.calendar_buttons(B.discord.ui.View(), row=0).children],
-          ["📊 タイムライン", "🗓 今月", "🗓 来月", "🔒 自分だけの予定"])
+          ["📊 タイムライン", "🗓 今月", "🗓 来月", "🙋 じぶんの予定"])
 
     # 🔒 自分だけの予定（本人にだけ・終わったら消える）
     _td = B.now_jst().date()
@@ -835,10 +835,19 @@ async def main():
                        (_td.isoformat(), _td.isoformat()))
     await B.db.execute("INSERT INTO private_events(user_id,title,start_day,end_day,ts) VALUES('95','むかしの予定','2020-01-01','2020-01-02',0)")
     await B.db.commit()
-    check("自分だけ: 本人の朝の予定に出る", "🔒 今日：" in await B.today_digest("95", B.now_jst()), True)
+    check("自分だけ: 本人の朝の予定に出る", "🙋 今日：🔒" in await B.today_digest("95", B.now_jst()), True)
     check("自分だけ: ほかの人には出ない", "歯医者" in await B.today_digest("96", B.now_jst()), False)
     check("自分だけ: カレンダーにも入る", any(r["kind"] == B.PRIVATE_KIND for r in (await B.calendar_data("95", _td.year, _td.month))[2]), True)
     check("自分だけ: 終わったものは消える", await B.private_cleanup(B.day_str(B.now_jst())), 1)
+
+    # 📣 みんなに見せる予定（kindで区別・3日前と当日に声かけ・各1回）
+    _d3 = (_td + B.timedelta(days=3)).isoformat()
+    await B.db.execute("INSERT INTO private_events(user_id,title,start_day,end_day,ts,shared) VALUES('95','TOEIC本番',?,?,0,1)", (_d3, _d3))
+    await B.db.commit()
+    _pe = [r for r in await B.private_events_between("95", _td.isoformat(), _d3) if r["title"] == "TOEIC本番"]
+    check("宣言: 見せる予定はkindが宣言・📣", (_pe[0]["kind"], B.UNIV_EMOJI[_pe[0]["kind"]]), (B.SHARED_KIND, "📣"))
+    check("宣言: 自分だけ⇔見せるの切替プルダウン", any(isinstance(i, B.PrivateToggleSelect) for i in B.PrivateHubView(_pe).children), True)
+    check("宣言: ほかの人の予定には出ない", "TOEIC" in await B.today_digest("96", B.now_jst()), False)
 
     # 📊 タイムライン（今月から最低4か月・課題は載せない）
     await B.db.execute("INSERT INTO private_events(user_id,title,start_day,end_day,ts) VALUES('95','帰省','2026-11-05','2026-11-07',0)")
