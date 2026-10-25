@@ -85,8 +85,9 @@ CH = {
                 "🎶 音楽はこのパネルから：リクエスト（URL・検索語・プレイリスト）／🎵BGM／🌿環境音／⏯⏭⏹。\n"
                 "📂 みんなのプレイリスト＝サーバー共有の選曲リスト（作る・流す・自分のは編集）／⭐ おすすめ曲・🎤おすすめアーティスト＝紹介文つきで登録（1人20件まで）／📜 いま流れている曲の歌詞（自分にだけ表示）／🎤 同期歌詞がある曲は自動で歌詞表示（🎤からずれ補正・OFF・自動のON/OFF）。\n"
                 "-# 細かい操作はコマンドで：`/volume` `/loop` `/shuffle`。音源の追加は音声ファイルを投稿→右クリック→アプリ→「BGMに追加」"),
-    "animal": ("どうぶつ🐄", "犬・猫・鳥・道端のなんか・ミニホース…癒しの写真や動画をどうぞ（判定なし・ただの癒し）。\n"
-               "写真にはBotが🐾を付けます。1週間でいちばんリアクションを集めた写真の人は、通信簿で🐾癒し賞に。"),
+    "animal": ("どうぶつ🐄", "犬・猫・鳥・ぬいぐるみ・道端のなんか・ミニホース…癒しの写真や動画をどうぞ（判定なし・ただの癒し）。\n"
+               "写真にはBotが🐾を付けます。1週間でいちばんリアクションを集めた写真の人は、通信簿で🐾癒し賞に。\n"
+               "月末には、その月いちばんリアクションを集めた9枚で **🐾いやしアルバム** ができます。"),
     "bath": ("おふろ🛁", "🛁 お風呂に入ったら押す。🪥 歯磨きも（1日に何回でも）。"),
     "goods": ("使用期限📦", "マンスリーコンタクト・歯ブラシ・スポンジなど「開封からN日で交換」する品のリマインド。\n"
               "📦 開封した日に登録（定番品は日数入力も不要）→ 交換時期の前日・当日の朝にここでお知らせ → 🔄 を押すと次のサイクルへ。\n"
@@ -95,7 +96,8 @@ CH = {
     "tsushinbo": ("つうしんぼ📮", "毎週日曜の夜に、その週の通信簿（達成率ランキング・各賞）が届く場所。"),
     "kadai": ("課題📚", "🎓 で履修科目を登録 → 気づいた人が ➕ で課題を登録 → 同じ科目の履修者だけに通知＆リマインド（3日前・前日・当日）。\n"
               "毎週出るプリントや出席フォームは 🔁 毎週課題に登録すれば自動で課題化。投稿の ✅ で完了、選択式で出さない課題は 🚫 で外せます。\n"
-              "🗒 科目メモ＝教室変更・持ち物などを履修者で共有（授業の日の朝に表示）。コマンド派は `/jikanwari` `/kadai` でも。"),
+              "🗒 科目メモ＝教室変更・持ち物などを履修者で共有（授業の日の朝に表示）。\n"
+              "🎓 大学の予定＝長期休暇・履修登録期間などをだれでも登録（朝の予定・今後の予定・お知らせに出ます）。コマンド派は `/jikanwari` `/kadai` でも。"),
     "settei": ("設定🔧", "🛠 ボタンから項目を選んで自分の最低限を設定（`/saitei` でまとめて設定も可）。毎週の定休日（曜日）もここで。\n"
                "`/kojin add` で自分だけの項目を追加し、📝ボタンで毎日チェック。`/oyasumi` で単発のお休み申告。"),
 }
@@ -231,6 +233,11 @@ CREATE TABLE IF NOT EXISTS member_rec_tracks(
   id INTEGER PRIMARY KEY AUTOINCREMENT, rec_id INTEGER NOT NULL, query TEXT NOT NULL, title TEXT, comment TEXT, ts INTEGER,
   added_by TEXT
 );
+CREATE TABLE IF NOT EXISTS univ_events(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, kind TEXT NOT NULL, start_day TEXT NOT NULL, end_day TEXT NOT NULL,
+  created_by TEXT, ts INTEGER
+);
+CREATE TABLE IF NOT EXISTS univ_event_reminded(event_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(event_id, stage));
 CREATE TABLE IF NOT EXISTS course_notes(
   id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL, text TEXT NOT NULL, user_id TEXT, ts INTEGER
 );
@@ -424,22 +431,45 @@ async def build_misses(u, day, d1, d2, is_sunday):
     return misses
 
 # ---- 🌸 長期休暇モード（春休み・夏休み）：期間中は授業系の表示・毎週課題を止め、起床締切をずらす ----
-_BREAK = {"start": None, "end": None, "shift": 0, "name": "長期休暇"}   # metaから起動時に読み込む
+_BREAK = {"start": None, "end": None, "shift": 0, "name": "長期休暇"}   # /kyuka の手動設定（metaから起動時に読み込む）
+_UNIV_BREAKS = []   # 🎓大学の予定で「長期休暇」として登録されたもの [(start, end, name)]
+UNIV_BREAK_SHIFT = int(float(os.getenv("UNIV_BREAK_SHIFT_H", "2")) * 60)   # 大学の予定の長期休暇で起床締切をずらす幅
 
 async def load_break():
     _BREAK.update(start=await meta_get("break_start"), end=await meta_get("break_end"),
                   shift=int(await meta_get("break_shift", "0") or 0), name=await meta_get("break_name", "長期休暇"))
+    try:
+        async with db.execute("SELECT title, start_day, end_day FROM univ_events WHERE kind='長期休暇'") as c:
+            _UNIV_BREAKS[:] = [(r["start_day"], r["end_day"], r["title"]) for r in await c.fetchall()]
+    except Exception:
+        _UNIV_BREAKS[:] = []
+
+def _iso(d):
+    return d if isinstance(d, str) else (d.date() if isinstance(d, datetime) else d).isoformat()
+
+def break_span(d):
+    """d を含む長期休暇 {start,end,name,shift}。手動の /kyuka を優先。無ければ None"""
+    k = _iso(d)
+    if _BREAK["start"] and _BREAK["end"] and _BREAK["start"] <= k <= _BREAK["end"]:
+        return {"start": _BREAK["start"], "end": _BREAK["end"], "name": _BREAK["name"], "shift": _BREAK["shift"]}
+    for s, e, n in _UNIV_BREAKS:
+        if s <= k <= e:
+            return {"start": s, "end": e, "name": n, "shift": UNIV_BREAK_SHIFT}
+    return None
 
 def break_on(d):
     """d（date/datetime/ISO文字列）が長期休暇の期間内か"""
-    if not (_BREAK["start"] and _BREAK["end"]):
-        return False
-    k = d if isinstance(d, str) else (d.date() if isinstance(d, datetime) else d).isoformat()
-    return _BREAK["start"] <= k <= _BREAK["end"]
+    return break_span(d) is not None
 
-def break_text():
-    s, e = _BREAK["start"], _BREAK["end"]
-    return f"{_BREAK['name']}（{int(s[5:7])}/{int(s[8:])}〜{int(e[5:7])}/{int(e[8:])}）"
+def _span_text(sp):
+    s, e = sp["start"], sp["end"]
+    return f"{sp['name']}（{int(s[5:7])}/{int(s[8:])}〜{int(e[5:7])}/{int(e[8:])}）"
+
+def break_text(d=None):
+    """d を含む休暇の表示名。d省略時は /kyuka の手動設定"""
+    sp = break_span(d) if d is not None else ({"start": _BREAK["start"], "end": _BREAK["end"], "name": _BREAK["name"]}
+                                               if _BREAK["start"] else None)
+    return _span_text(sp) if sp else ""
 
 def effective_deadline(u, dt):
     """起床締切。土日は holiday_shift（分）だけ後ろにずらす。長期休暇中は毎日、休暇用のずらし幅と大きいほう"""
@@ -447,8 +477,9 @@ def effective_deadline(u, dt):
     if not dl:
         return None
     shift = u["holiday_shift"] or 0
-    if break_on(dt) and _BREAK["shift"]:
-        shift = max(shift, _BREAK["shift"])
+    sp = break_span(dt)
+    if sp and sp["shift"]:
+        shift = max(shift, sp["shift"])
         h, m = map(int, dl.split(":"))
         t = min(h * 60 + m + shift, 23 * 60 + 59)
         return f"{t // 60:02d}:{t % 60:02d}"
@@ -1157,9 +1188,10 @@ def _paste_art(img, art, x, y, h, angle=0, alpha=1.0):
     img.paste(a, (x, y), a)
     return a.width
 
-def render_meal_album(photos, title, sub="", month=None, crown=False):
+def render_meal_album(photos, title, sub="", month=None, crown=False, title_art="title", side_art="bowl"):
     """photos: [(画像bytes, キャプション), ...] 最大9枚 → コラージュPNG。描けなければ None
-    month指定時は手描きレタリングの見出し。crown=Trueで1枚目（👏1位）に王冠とハート"""
+    month指定時は手描き数字＋見出し（title_art=手描きレタリング素材名。Noneなら title の文字で描く）。
+    side_art=見出し横の素材名。crown=Trueで1枚目（1位）に王冠とハート"""
     try:
         from PIL import Image as PImage, ImageDraw, ImageFont, ImageOps
     except Exception:
@@ -1170,22 +1202,34 @@ def render_meal_album(photos, title, sub="", month=None, crown=False):
     fb = _find_cjk_font_bold() or f
     cols = min(3, len(photos))
     rows = -(-min(len(photos), 9) // cols)
-    art_title = _gohan_art("title") if month else None
-    art_logo, art_bowl, art_spark = _gohan_art("logo"), _gohan_art("bowl"), _gohan_art("sparkle")
+    art_title = _gohan_art(title_art) if (month and title_art) else None
+    use_digits = bool(month) and (art_title is not None or title_art is None)
+    art_logo, art_spark = _gohan_art("logo"), _gohan_art("sparkle")
+    art_bowl = _gohan_art(side_art) if side_art else None
     cell, cap_h, pad = 360, 34, 14
-    head = 132 if (art_title or art_logo) else 86
+    head = 132 if (use_digits or art_logo) else 86
     W = pad + cols * (cell + pad)
     H = head + rows * (cell + cap_h + pad)
     img = PImage.new("RGB", (W, H), (247, 242, 232))
     d = ImageDraw.Draw(img)
     logo_w = round(art_logo.width * 104 / art_logo.height) if art_logo else 0
-    if art_title:
+    if use_digits:
         x = pad + 8
-        for ch in str(month):   # 手描き数字＋「月のベスト飯アルバム」レタリング
+        for ch in str(month):   # 手描き数字＋見出し（レタリング素材か文字）
             dg = _gohan_art(f"d{ch}")
             if dg:
                 x += _paste_art(img, dg, x, 22, 80) + 6
-        x += 6 + _paste_art(img, art_title, x + 6, 46, 56) + 16
+            else:
+                d.text((x, 26), ch, font=ImageFont.truetype(fb, 72), fill=(217, 112, 26))
+                x += d.textlength(ch, font=ImageFont.truetype(fb, 72)) + 4
+        if art_title:
+            x += 6 + _paste_art(img, art_title, x + 6, 46, 56) + 16
+        else:
+            rest = title[len(str(month)):] if title.startswith(str(month)) else title
+            tf = ImageFont.truetype(fb, 46)
+            d.text((x + 8, 52), rest, font=tf, fill=(27, 24, 21))
+            x += 8 + d.textlength(rest, font=tf) + 16
+        x = int(x)
         if art_bowl:   # タイトルの横にごはん茶碗
             x += _paste_art(img, art_bowl, x, 18, 100) + 4
         if art_spark and x + 48 < W - pad - logo_w:
@@ -1670,10 +1714,35 @@ async def backfill_meal_msg_ids(days=62):
     print(f"ごはん写真のmsg_id後付け: {linked}件", flush=True)
     return linked
 
-@bot.tree.command(name="album", description="ベスト飯アルバムを作って #ごはん🍚 に投稿（月を指定・省略で先月）")
-@app_commands.describe(tsuki="月（1〜12。省略すると先月）")
-async def album_command(interaction, tsuki: int = None):
+@bot.tree.command(name="album", description="月のアルバムを作って投稿（ベスト飯→#ごはん🍚／いやし→#どうぶつ🐄・省略で先月）")
+@app_commands.describe(tsuki="月（1〜12。省略すると先月）", shurui="どのアルバム？（既定=ベスト飯）")
+@app_commands.choices(shurui=[app_commands.Choice(name="🍚 ベスト飯アルバム", value="meal"),
+                              app_commands.Choice(name="🐾 いやしアルバム", value="iyashi")])
+async def album_command(interaction, tsuki: int = None, shurui: app_commands.Choice[str] = None):
     await interaction.response.defer(ephemeral=True, thinking=True)
+    if shurui and shurui.value == "iyashi":
+        now = now_jst()
+        if tsuki is None:
+            base = now.replace(day=1) - timedelta(days=1)
+            y, m = base.year, base.month
+        elif 1 <= tsuki <= 12:
+            y, m = (now.year if tsuki <= now.month else now.year - 1), tsuki
+        else:
+            await interaction.followup.send("月は 1〜12 で指定してください。", ephemeral=True)
+            return
+        d1, d2 = month_bounds(y, m)
+        buf = await build_iyashi_album(d1, min(d2, day_str(now)), m)
+        ch = await get_ch("animal")
+        if not buf:
+            await interaction.followup.send(f"{y}年{m}月は #どうぶつ🐄 に写真が見つかりませんでした。", ephemeral=True)
+            return
+        if ch:
+            await ch.send(f"🐾 **{m}月のいやしアルバム**（{interaction.user.display_name} のリクエストでお届け）",
+                          file=discord.File(buf, filename="iyashi_album.png"))
+            await interaction.followup.send(f"✅ {m}月のいやしアルバムを #どうぶつ🐄 に投稿しました。", ephemeral=True)
+        else:
+            await interaction.followup.send(file=discord.File(buf, filename="iyashi_album.png"), ephemeral=True)
+        return
     now = now_jst()
     if tsuki is None:
         base = now.replace(day=1) - timedelta(days=1)   # 先月
@@ -1947,6 +2016,54 @@ def render_week_chart(d1, series):
     plt.close(fig)
     buf.seek(0)
     return buf
+
+# ---- 🐾 いやしアルバム（#どうぶつ🐄 の月間ベスト9。動物もぬいぐるみも） ----
+async def iyashi_photo_rows(d1, d2, limit_scan=1500):
+    """期間内の画像投稿を (メッセージ, リアクション数) で集める。Botが自動で付けた🐾は数えない"""
+    ch = await get_ch("animal")
+    if not ch:
+        return []
+    start = datetime.fromisoformat(d1 + "T00:00:00").replace(tzinfo=JST)
+    end = start + timedelta(days=(date.fromisoformat(d2) - date.fromisoformat(d1)).days + 1)
+    out = []
+    try:
+        async for m in ch.history(limit=limit_scan, after=start, before=end):
+            if m.author.bot or not any((a.content_type or "").startswith("image/") for a in m.attachments):
+                continue
+            n = sum(r.count - (1 if r.me else 0) for r in m.reactions)
+            out.append((m, n))
+    except Exception as e:
+        print(f"いやしアルバム集計エラー: {e!r}", flush=True)
+    out.sort(key=lambda x: (-x[1], x[0].created_at))
+    return out
+
+async def build_iyashi_album(d1, d2, month):
+    rows = await iyashi_photo_rows(d1, d2)
+    photos = []
+    for m, n in rows:
+        att = next((a for a in m.attachments if (a.content_type or "").startswith("image/")), None)
+        try:
+            b = await att.read()
+        except Exception:
+            continue
+        photos.append((b, _plain_name(m.author.display_name, 12) + (f"　🐾{n}" if n else "")))
+        if len(photos) >= 9:
+            break
+    if not photos:
+        return None
+    crown = rows[0][1] > 0
+    return await asyncio.to_thread(render_meal_album, photos, f"{month}月のいやしアルバム", "", month, crown, None, None)
+
+async def post_monthly_iyashi_album(now=None):
+    """月末に #どうぶつ🐄 へ今月のいやしアルバム（写真が無い月は何もしない）"""
+    now = now or now_jst()
+    buf = await build_iyashi_album(day_str(now.replace(day=1)), day_str(now), now.month)
+    ch = await get_ch("animal")
+    if not buf or not ch:
+        return False
+    await ch.send(f"🐾 **{now.month}月のいやしアルバム**（いちばんリアクションを集めた子たち。来月もいやしをどうぞ）",
+                  file=discord.File(buf, filename="iyashi_album.png"))
+    return True
 
 async def iyashi_winner(d1, d2):
     """#どうぶつ📸 で今週いちばんリアクションを集めた写真の投稿者（🐾癒し賞）。無ければ None"""
@@ -2674,7 +2791,8 @@ async def kanri_command(interaction, sousa: app_commands.Choice[str]):
              f"・DB：{db_mb:.2f}MB／最終外部バックアップ週：{await meta_get('ops_backup_week') or 'まだ'}",
              f"・音楽：{'再生中 ' + (_player.get('current') or '') if vc and vc.is_connected() and vc.is_playing() else ('VCで待機中' if vc and vc.is_connected() else 'VCにいない')}",
              f"・管理チャンネル：{'あり' if await meta_get('ch_botlog') else '⚠️ なし（/setup で作成）'}",
-             f"・長期休暇モード：{(break_text() + ('（期間中）' if break_on(now_jst()) else '（予定）')) if _BREAK['start'] else 'なし'}"]
+             f"・長期休暇モード：{(break_text(now_jst()) + '（期間中）') if break_on(now_jst()) else ((break_text() + '（/kyukaの予定）') if _BREAK['start'] else 'いまは期間外')}"
+             f"（大学の予定の長期休暇 {len(_UNIV_BREAKS)} 件）"]
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 def parse_md(s, ref):
@@ -2923,6 +3041,10 @@ async def judge_loop():
                     await post_monthly_meal_album(now)   # 今月のベスト飯アルバムを #ごはん🍚 へ
                 except Exception as e:
                     print(f"ごはんアルバムエラー: {e!r}", flush=True)
+                try:
+                    await post_monthly_iyashi_album(now)   # 🐾 今月のいやしアルバムを #どうぶつ🐄 へ
+                except Exception as e:
+                    print(f"いやしアルバムエラー: {e!r}", flush=True)
                 try:   # 📖 個人の月間しおりは本人だけが受け取る形（数字を晒さない）。ここでは案内だけ
                     tch = await get_ch("tsushinbo")
                     if tch:
@@ -5454,6 +5576,10 @@ async def remind_loop():
     except Exception as e:
         print(f"fridge remind error: {e!r}", flush=True)
     try:
+        await univ_event_remind()   # 🎓 大学の予定（3日前・開始日・履修登録の締切2日前）
+    except Exception as e:
+        print(f"univ event remind error: {e!r}", flush=True)
+    try:
         await memo_cleanup(day)   # 引き継がれなかったメモは朝に消える
     except Exception as e:
         print(f"memo cleanup error: {e!r}", flush=True)
@@ -6720,6 +6846,158 @@ class FreeSlotRemoveSelect(discord.ui.Select):
         await db.commit()
         await interaction.response.edit_message(content=f"🗑 {len(self.values)} 件消しました。", view=None)
 
+# ---- 🎓 大学の予定（長期休暇・履修登録期間など。誰でも登録→朝の予定・今後の予定・#課題📚 のお知らせに出る） ----
+UNIV_KINDS = [("長期休暇", "🌸", "期間中は時間割と毎週課題がお休み・起床締切が少し遅くなる"),
+              ("履修登録", "📋", "期間中は朝の予定に締切までの日数が出る"),
+              ("試験期間", "📝", "定期試験の期間"),
+              ("行事", "🎪", "学園祭・休講日・オープンキャンパスなど"),
+              ("その他", "📌", "そのほか全員に関係する予定")]
+UNIV_EMOJI = {k: e for k, e, _ in UNIV_KINDS}
+
+def md(iso):
+    return f"{int(iso[5:7])}/{int(iso[8:])}"
+
+def univ_span_text(r):
+    return md(r["start_day"]) if r["start_day"] == r["end_day"] else f"{md(r['start_day'])}〜{md(r['end_day'])}"
+
+def univ_status(r, today):
+    """「あと3日で開始」「締切まであと2日」「今日まで！」などの状態文"""
+    t = date.fromisoformat(today)
+    s, e = date.fromisoformat(r["start_day"]), date.fromisoformat(r["end_day"])
+    if t < s:
+        n = (s - t).days
+        return "明日から" if n == 1 else f"あと{n}日"
+    if s == e:
+        return "今日！"
+    left = (e - t).days
+    if left == 0:
+        return "今日まで！"
+    return f"{'締切' if r['kind'] == '履修登録' else '終わり'}まであと{left}日"
+
+def univ_line(r, today):
+    return f"{UNIV_EMOJI.get(r['kind'], '📌')} **{r['title']}**（{univ_span_text(r)}・{univ_status(r, today)}）"
+
+async def univ_events_between(d1, d2):
+    """[d1, d2] と期間が重なる予定（開始順）"""
+    async with db.execute("SELECT e.*, COALESCE(u.name,'?') AS uname FROM univ_events e LEFT JOIN users u ON u.id=e.created_by "
+                          "WHERE e.end_day >= ? AND e.start_day <= ? ORDER BY e.start_day, e.id", (d1, d2)) as c:
+        return await c.fetchall()
+
+async def add_univ_event(uid, kind, title, start, end):
+    cur = await db.execute("INSERT INTO univ_events(title,kind,start_day,end_day,created_by,ts) VALUES(?,?,?,?,?,?)",
+                           (title[:40], kind, start.isoformat(), end.isoformat(), str(uid), int(now_jst().timestamp())))
+    await db.commit()
+    if kind == "長期休暇":
+        await load_break()
+    return cur.lastrowid
+
+async def univ_event_remind(now=None):
+    """毎朝 #課題📚 へ：開始3日前・開始日・（履修登録は）締切2日前。各段階1回だけ・メンションなし"""
+    now = now or now_jst()
+    today = day_str(now)
+    t = date.fromisoformat(today)
+    rows = await univ_events_between(today, (t + timedelta(days=3)).isoformat())
+    ch = await get_ch("kadai")
+    if not ch:
+        return 0
+    n = 0
+    for r in rows:
+        s, e = date.fromisoformat(r["start_day"]), date.fromisoformat(r["end_day"])
+        stage = None
+        if (s - t).days == 3:
+            stage, msg = "pre", f"🎓 **3日後から**：{univ_line(r, today)}"
+        elif s == t:
+            stage, msg = "start", f"🎓 **今日から**：{univ_line(r, today)}" if s != e else f"🎓 **今日**：{univ_line(r, today)}"
+        elif r["kind"] == "履修登録" and (e - t).days == 2 and e > s:
+            stage, msg = "end2", f"🎓 **締切まであと2日**：{univ_line(r, today)}　登録し忘れに注意！"
+        if not stage:
+            continue
+        async with db.execute("SELECT 1 FROM univ_event_reminded WHERE event_id=? AND stage=?", (r["id"], stage)) as c:
+            if await c.fetchone():
+                continue
+        await db.execute("INSERT OR IGNORE INTO univ_event_reminded(event_id,stage) VALUES(?,?)", (r["id"], stage))
+        await db.commit()
+        if r["kind"] == "長期休暇" and stage == "start":
+            msg += "\n-# 🌸 期間中は時間割と毎週課題がお休み・起床締切が少し遅くなります"
+        await ch.send(msg)
+        n += 1
+    if n:
+        await bump_panel("kadai")
+    return n
+
+class UnivEventModal(discord.ui.Modal):
+    def __init__(self, kind):
+        super().__init__(title=f"🎓 大学の予定：{kind}"[:45])
+        self.kind = kind
+        self.t_in = discord.ui.TextInput(label="名前", max_length=40, default=kind if kind != "その他" else None,
+                                         placeholder="例：前期 履修登録／春休み／学園祭")
+        self.s_in = discord.ui.TextInput(label="はじまり（例 4/1）", max_length=12)
+        self.e_in = discord.ui.TextInput(label="おわり（例 4/10・1日だけなら空欄）", max_length=12, required=False)
+        for it in (self.t_in, self.s_in, self.e_in):
+            self.add_item(it)
+
+    async def on_submit(self, interaction):
+        now = now_jst()
+        s = parse_md(str(self.s_in.value), now)
+        e = parse_md(str(self.e_in.value), now) if str(self.e_in.value).strip() else s
+        if not s or not e:
+            await interaction.response.send_message("⚠️ 日付が読めませんでした。例：`4/1` `2027-04-10`", ephemeral=True)
+            return
+        if e < s:   # 12/20〜1/10 のように年をまたぐ
+            e = e.replace(year=e.year + 1)
+        if e < now.date() - timedelta(days=1):   # 過ぎた日付を書いたら来年のこととみなす
+            s, e = s.replace(year=s.year + 1), e.replace(year=e.year + 1)
+        title = str(self.t_in.value).strip() or self.kind
+        await add_univ_event(interaction.user.id, self.kind, title, s, e)
+        r = {"title": title, "kind": self.kind, "start_day": s.isoformat(), "end_day": e.isoformat()}
+        extra = "\n-# 🌸 この期間は自動で長期休暇モードになります（時間割・毎週課題がお休み、起床締切が少し遅く）" if self.kind == "長期休暇" else ""
+        await interaction.response.send_message(f"✅ 登録しました：{univ_line(r, day_str(now))}{extra}", ephemeral=True)
+        ch = await get_ch("kadai")
+        if ch:
+            await ch.send(f"🎓 **{interaction.user.display_name}** が大学の予定を登録しました：{univ_line(r, day_str(now))}"
+                          "\n-# 間違いに気づいたら登録した人に教えてね（課題パネルの 🎓 大学の予定 から消せます）")
+            await bump_panel("kadai")
+
+class UnivKindSelect(discord.ui.Select):
+    def __init__(self):
+        opts = [discord.SelectOption(label=k, emoji=e, value=k, description=desc[:100]) for k, e, desc in UNIV_KINDS]
+        super().__init__(placeholder="➕ 予定を登録する（種類を選ぶ）", options=opts)
+
+    async def callback(self, interaction):
+        await interaction.response.send_modal(UnivEventModal(self.values[0]))
+
+class UnivDelSelect(discord.ui.Select):
+    def __init__(self, rows):
+        opts = [discord.SelectOption(label=f"{r['title']}（{univ_span_text(r)}）"[:100], value=str(r["id"]),
+                                     emoji=UNIV_EMOJI.get(r["kind"], "📌")) for r in rows[:25]]
+        super().__init__(placeholder="🗑 予定を消す（自分が登録したもの）", options=opts, min_values=1, max_values=len(opts))
+
+    async def callback(self, interaction):
+        uid = str(interaction.user.id)
+        admin = bool(getattr(interaction.user, "guild_permissions", None) and interaction.user.guild_permissions.administrator)
+        n = 0
+        for v in self.values:
+            q = "DELETE FROM univ_events WHERE id=?" + ("" if admin else " AND created_by=?")
+            cur = await db.execute(q, (int(v),) if admin else (int(v), uid))
+            n += cur.rowcount
+        await db.commit()
+        await load_break()
+        await interaction.response.edit_message(content=f"🗑 予定を {n} 件消しました。", view=None)
+
+async def univ_hub_message(user):
+    today = day_str(now_jst())
+    rows = await univ_events_between(today, (date.fromisoformat(today) + timedelta(days=180)).isoformat())
+    lines = ["🎓 **大学の予定**（だれでも登録OK・朝の予定と 📆今後の予定 に出ます）"]
+    lines += [f"・{univ_line(r, today)}（{r['uname']}）" for r in rows[:15]] \
+        or ["-# まだ登録がありません。長期休暇や履修登録の期間を入れておくとみんなが助かります"]
+    v = discord.ui.View(timeout=600)
+    v.add_item(UnivKindSelect())
+    admin = bool(getattr(user, "guild_permissions", None) and user.guild_permissions.administrator)
+    mine = [r for r in rows if admin or r["created_by"] == str(user.id)]
+    if mine:
+        v.add_item(UnivDelSelect(mine))
+    return "\n".join(lines), v
+
 # ---- 🌱 新学期の準備：前の学期の科目をまとめて外して、そのまま新しい科目の登録へ ----
 async def current_term():
     """いまの科目マスタの学期（マスタ科目でいちばん多いterm）。不明なら None"""
@@ -6874,6 +7152,12 @@ async def today_course_notes(codes, limit=3):
 class KadaiPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
+
+    @discord.ui.button(label="🎓 大学の予定", style=discord.ButtonStyle.secondary, custom_id="sk_univ", row=1)
+    async def univ_btn(self, interaction, button):
+        await ensure_user(interaction.user)
+        text, v = await univ_hub_message(interaction.user)
+        await interaction.response.send_message(text, view=v, ephemeral=True)
 
     @discord.ui.button(label="🌱 新学期の準備", style=discord.ButtonStyle.secondary, custom_id="sk_newterm", row=2)
     async def newterm_btn(self, interaction, button):
@@ -7107,8 +7391,16 @@ async def today_digest(uid, now, label="今日"):
     dc = DAY_CHARS[now.weekday()]
     per = {}
     lines = []
+    try:   # 🎓 大学の予定：開催中（長期休暇は下の一言で出す）と、3日以内に始まるもの
+        tday = day_str(now)
+        for r in await univ_events_between(tday, (now.date() + timedelta(days=3)).isoformat()):
+            if r["kind"] == "長期休暇" and r["start_day"] <= tday:
+                continue
+            lines.append(("🎓 いま：" if r["start_day"] <= tday else "🎓 もうすぐ：") + univ_line(r, tday))
+    except Exception:
+        pass
     if break_on(now):   # 🌸 長期休暇中は授業がないので時間割は出さない
-        lines.append(f"🌸 {break_text()}中：時間割と毎週課題はお休みです")
+        lines.append(f"🌸 {break_text(now)}中：時間割と毎週課題はお休みです")
     else:
         for c in await user_course_rows(uid):
             for slot in (c["slots"] or "").split(","):
@@ -7221,8 +7513,16 @@ async def today_digest(uid, now, label="今日"):
     return "\n".join(lines)
 
 async def upcoming_digest(uid, now, days=7):
-    """今後n日の課題・試験・実験のまとめ（起床パネル📆今後の予定ボタン用）"""
+    """今後n日の課題・試験・実験＋30日以内の大学の予定のまとめ（起床パネル📆今後の予定ボタン用）"""
     lines = []
+    try:
+        tday = day_str(now)
+        ev = await univ_events_between(tday, (now.date() + timedelta(days=30)).isoformat())
+        if ev:
+            lines.append("🎓 **大学の予定（30日以内）**")
+            lines += [f"　{univ_line(r, tday)}" for r in ev[:8]]
+    except Exception:
+        pass
     end = now + timedelta(days=days)
     async with db.execute(
         "SELECT a.title, a.due_ts, c.name AS cname FROM assignments a JOIN courses c ON c.code=a.code "

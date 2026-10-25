@@ -80,7 +80,7 @@ check("起床パネルの行割り: 明日は1段目・今後は2段目",
       ([i.row for i in B.WakeView().children if getattr(i, "custom_id", "") == "sk_tomorrow"],
        [i.row for i in B.WakeView().children if getattr(i, "custom_id", "") == "sk_upcoming"]), ([0], [1]))
 check("課題パネルは11ボタン", {i.custom_id for i in B.KadaiPanelView().children},
-      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki", "sk_exam", "sk_jw_free", "sk_cnote", "sk_newterm"})
+      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki", "sk_exam", "sk_jw_free", "sk_cnote", "sk_newterm", "sk_univ"})
 check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
 check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["BGMに追加", "album", "ambient", "bgm", "erai", "hantei", "help", "jikanwari", "jikoshokai", "join", "kadai", "kanri", "kesseki", "kigen", "kiroku", "kojin", "kyuka", "loop", "nakama", "oyasumi", "pause", "play", "queue", "rajio", "reizouko", "resume", "saitei", "setup", "shiori", "shuffle", "skip", "stop", "suimin", "tips", "tsushinbo", "volume", "watashi", "レシピカードにする"])
 check("音楽: URL判定", (B.looks_like_url("https://youtu.be/x"), B.looks_like_url("lofi hiphop")), (True, False))
@@ -796,6 +796,35 @@ async def main():
     await B.db.execute("INSERT INTO fridge_items(user_id,name,due_day,created_day) VALUES('98','低脂肪牛乳',?,?)", (_tday, _tday))
     await B.db.commit()
     check("冷蔵庫ヒント: 低脂肪牛乳→牛乳のTIPS", await B.fridge_tip_hints("98", _tday), ["**低脂肪牛乳** を使うなら →「牛乳で作るミルク粥」<#t9001>"])
+
+    # 🎓 大学の予定
+    _now = B.now_jst()
+    _t0 = _now.date()
+    eid = await B.add_univ_event("95", "履修登録", "前期 履修登録", _t0 - B.timedelta(days=1), _t0 + B.timedelta(days=2))
+    _r = {"title": "前期 履修登録", "kind": "履修登録", "start_day": (_t0 - B.timedelta(days=1)).isoformat(), "end_day": (_t0 + B.timedelta(days=2)).isoformat()}
+    check("大学の予定: 締切までの日数", B.univ_status(_r, B.day_str(_now)), "締切まであと2日")
+    check("大学の予定: 開始前・当日まで・1日だけ",
+          (B.univ_status({"kind": "行事", "start_day": "2027-01-10", "end_day": "2027-01-10"}, "2027-01-07"),
+           B.univ_status({"kind": "その他", "start_day": "2027-01-01", "end_day": "2027-01-05"}, "2027-01-05"),
+           B.univ_status({"kind": "行事", "start_day": "2027-01-10", "end_day": "2027-01-10"}, "2027-01-10")),
+          ("あと3日", "今日まで！", "今日！"))
+    _dg2 = await B.today_digest("95", _now)
+    check("大学の予定: 開催中は朝の予定に出る", "🎓 いま" in _dg2 and "前期 履修登録" in _dg2, True)
+    _up = await B.upcoming_digest("95", _now)
+    check("大学の予定: 今後の予定にも出る", "大学の予定" in _up and "前期 履修登録" in _up, True)
+    await B.add_univ_event("96", "長期休暇", "冬休み", date(2027, 12, 25), date(2028, 1, 6))
+    check("大学の予定: 長期休暇は自動で休暇モード", (B.break_on("2027-12-30"), B.break_text(date(2027, 12, 30))), (True, "冬休み（12/25〜1/6）"))
+    check("大学の予定: 休暇の締切ずらし", B.effective_deadline({"wake_deadline": "07:00", "holiday_shift": 0}, date(2027, 12, 30)), "09:00")
+    await B.db.execute("DELETE FROM univ_events WHERE kind='長期休暇'"); await B.db.commit(); await B.load_break()
+    check("大学の予定: 消すと休暇モードも外れる", B.break_on("2027-12-30"), False)
+
+    # 🐾 いやしアルバム（見出しは文字・横の茶碗なし）
+    from PIL import Image as _PI
+    _bio = __import__("io").BytesIO()
+    _PI.new("RGB", (400, 300), (200, 180, 160)).save(_bio, format="PNG")
+    _png = _bio.getvalue()
+    _al = B.render_meal_album([(_png, "ぺんぎん　🐾5"), (_png, "たぬき")], "10月のいやしアルバム", "", 10, True, None, None)
+    check("いやしアルバム: コラージュPNG生成", _al is not None, True)
 
     # 🎉 記念カード（発足から半年・n周年）
     check("記念日: 半年", B.anniversary_label(date(2027, 3, 1), "2026-09-01"), "半年")
