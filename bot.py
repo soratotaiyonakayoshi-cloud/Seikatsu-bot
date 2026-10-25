@@ -96,8 +96,13 @@ CH = {
     "tsushinbo": ("つうしんぼ📮", "毎週日曜の夜に、その週の通信簿（達成率ランキング・各賞）が届く場所。"),
     "kadai": ("課題📚", "🎓 で履修科目を登録 → 気づいた人が ➕ で課題を登録 → 同じ科目の履修者だけに通知＆リマインド（3日前・前日・当日）。\n"
               "毎週出るプリントや出席フォームは 🔁 毎週課題に登録すれば自動で課題化。投稿の ✅ で完了、選択式で出さない課題は 🚫 で外せます。\n"
-              "🗒 科目メモ＝教室変更・持ち物などを履修者で共有（授業の日の朝に表示）。\n"
-              "🏫 大学の予定＝長期休暇・履修登録期間などをだれでも登録（朝の予定・今後の予定・お知らせに出ます）。コマンド派は `/jikanwari` `/kadai` でも。"),
+              "🗒 科目メモ＝教室変更・持ち物などを履修者で共有（授業の日の朝に表示）。コマンド派は `/jikanwari` `/kadai` でも。\n"
+              "-# 大学の予定・試験日・カレンダーは #予定🗓 にまとまっています"),
+    "yotei": ("予定🗓", "🏫 **大学の予定**＝長期休暇・履修登録期間・行事などを**だれでも**登録（朝の予定・📆今後の予定・ここでのお知らせに出ます。"
+              "長期休暇はその期間が自動で休暇モードに）。\n"
+              "🙋 **じぶんの予定**＝🔒自分だけ（だれにも見えない）か📣みんなに見せる（#えらい🌟 で宣言＋3日前・当日に声かけ）。終わったら自動で消えます。\n"
+              "📝 **試験日**＝科目ごとの試験日のカウントダウン（履修者へのお知らせは #課題📚）。\n"
+              "📊 **タイムライン**で数か月先までの予定を一望、🗓 **カレンダー**で月ごとに（課題・試験・実験も入ります）。画像は自分にだけ表示。"),
     "settei": ("設定🔧", "🛠 ボタンから項目を選んで自分の最低限を設定（`/saitei` でまとめて設定も可）。毎週の定休日（曜日）もここで。\n"
                "`/kojin add` で自分だけの項目を追加し、📝ボタンで毎日チェック。`/oyasumi` で単発のお休み申告。"),
 }
@@ -570,6 +575,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(GoodsPanelView())
         self.add_view(SetteiView())
         self.add_view(MusicPanelView())
+        self.add_view(YoteiPanelView())
         self.add_view(IntroView())
         self.add_dynamic_items(DoneButton, SkipButton, MealFixButton, PraiseButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
                                MemoDoneButton, MemoCarryButton, MemoDropButton, WorkNoteButton, GoodsResetButton)
@@ -6905,7 +6911,7 @@ async def univ_event_remind(now=None):
     today = day_str(now)
     t = date.fromisoformat(today)
     rows = await univ_events_between(today, (t + timedelta(days=3)).isoformat())
-    ch = await get_ch("kadai")
+    ch, key = await yotei_channel()
     if not ch:
         return 0
     n = 0
@@ -6930,8 +6936,15 @@ async def univ_event_remind(now=None):
         await ch.send(msg)
         n += 1
     if n:
-        await bump_panel("kadai")
+        await bump_panel(key)
     return n
+
+async def yotei_channel():
+    """予定系のお知らせ先：#予定🗓（/setup前の古い環境なら #課題📚）→ (チャンネル, パネルkey)"""
+    ch = await get_ch("yotei")
+    if ch:
+        return ch, "yotei"
+    return await get_ch("kadai"), "kadai"
 
 class UnivEventModal(discord.ui.Modal):
     def __init__(self, kind):
@@ -6960,11 +6973,11 @@ class UnivEventModal(discord.ui.Modal):
         r = {"title": title, "kind": self.kind, "start_day": s.isoformat(), "end_day": e.isoformat()}
         extra = "\n-# 🌸 この期間は自動で長期休暇モードになります（時間割・毎週課題がお休み、起床締切が少し遅く）" if self.kind == "長期休暇" else ""
         await interaction.response.send_message(f"✅ 登録しました：{univ_line(r, day_str(now))}{extra}", ephemeral=True)
-        ch = await get_ch("kadai")
+        ch, key = await yotei_channel()
         if ch:
             await ch.send(f"🏫 **{interaction.user.display_name}** が大学の予定を登録しました：{univ_line(r, day_str(now))}"
-                          "\n-# 間違いに気づいたら登録した人に教えてね（課題パネルの 🏫 大学の予定 から消せます）")
-            await bump_panel("kadai")
+                          "\n-# 間違いに気づいたら登録した人に教えてね（#予定🗓 の 🏫 大学の予定 から消せます）")
+            await bump_panel(key)
 
 class UnivKindSelect(discord.ui.Select):
     def __init__(self):
@@ -7620,15 +7633,67 @@ async def today_course_notes(codes, limit=3):
             break
     return out
 
-class KadaiPanelView(discord.ui.View):
+async def send_exam_hub(interaction):
+    """📝 試験日カウントダウンの登録・一覧（#予定🗓 のパネルから）"""
+    await ensure_user(interaction.user)
+    rows = await user_course_rows(interaction.user.id)
+    if not rows:
+        await interaction.response.send_message("先に #課題📚 の 🎓 で履修科目を登録してください（試験日は科目ごとに登録します）。", ephemeral=True)
+        return
+    exs = await exam_rows_for(str(interaction.user.id))
+    view = discord.ui.View(timeout=600)
+    view.add_item(ExamCourseSelect(rows))
+    if exs:
+        view.add_item(ExamRemoveSelect(exs))
+    lines = []
+    for e in exs[:15]:
+        left = exam_days_left(e["exam_day"])
+        lines.append(f"・**{e['cname']}**「{e['title']}」{exam_date_str(e['exam_day'])}　" + ("**今日！🔥**" if left == 0 else f"**あと{left}日**"))
+    txt = ("📝 **試験日カウントダウン**（30日前・1週間前・3日前に #課題📚 で履修者へ、前日の🌙・当日の☀️はあなたにだけお知らせ）\n"
+           + ("\n".join(lines) if lines else "-# 登録されている試験はまだありません"))
+    await interaction.response.send_message(txt, view=view, ephemeral=True)
+
+class YoteiPanelView(discord.ui.View):
+    """🗓 #予定 のパネル：大学の予定・試験日・じぶんの予定・タイムライン・カレンダー"""
+
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🏫 大学の予定", style=discord.ButtonStyle.secondary, custom_id="sk_univ", row=1)
+    @discord.ui.button(label="🏫 大学の予定", style=discord.ButtonStyle.primary, custom_id="sk_univ", row=0)
     async def univ_btn(self, interaction, button):
         await ensure_user(interaction.user)
         text, v = await univ_hub_message(interaction.user)
         await interaction.response.send_message(text, view=v, ephemeral=True)
+
+    @discord.ui.button(label="🙋 じぶんの予定", style=discord.ButtonStyle.primary, custom_id="sk_mine", row=0)
+    async def mine_btn(self, interaction, button):
+        await ensure_user(interaction.user)
+        await send_private_hub(interaction)
+
+    @discord.ui.button(label="📝 試験日", style=discord.ButtonStyle.secondary, custom_id="sk_exam", row=0)
+    async def exam_btn(self, interaction, button):
+        await send_exam_hub(interaction)
+
+    @discord.ui.button(label="📊 タイムライン", style=discord.ButtonStyle.success, custom_id="sk_timeline", row=1)
+    async def tl_btn(self, interaction, button):
+        await ensure_user(interaction.user)
+        await send_timeline(interaction)
+
+    @discord.ui.button(label="🗓 今月のカレンダー", style=discord.ButtonStyle.secondary, custom_id="sk_cal0", row=1)
+    async def cal0_btn(self, interaction, button):
+        await ensure_user(interaction.user)
+        await send_calendar(interaction, 0)
+
+    @discord.ui.button(label="🗓 来月のカレンダー", style=discord.ButtonStyle.secondary, custom_id="sk_cal1", row=1)
+    async def cal1_btn(self, interaction, button):
+        await ensure_user(interaction.user)
+        await send_calendar(interaction, 1)
+
+VIEW_FACTORY["yotei"] = YoteiPanelView
+
+class KadaiPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
 
     @discord.ui.button(label="🌱 新学期の準備", style=discord.ButtonStyle.secondary, custom_id="sk_newterm", row=2)
     async def newterm_btn(self, interaction, button):
@@ -7731,26 +7796,6 @@ class KadaiPanelView(discord.ui.View):
         await interaction.response.send_message(
             "🧩 **空きコマの予定**（バイト・部活など。時間割画像と☀️朝の時間割に出ます・自分にだけ）\n"
             + (cur if rows else "-# まだ登録がありません"), view=view, ephemeral=True)
-
-    @discord.ui.button(label="📝 試験日", style=discord.ButtonStyle.secondary, custom_id="sk_exam", row=2)
-    async def exam_btn(self, interaction, button):
-        await ensure_user(interaction.user)
-        rows = await user_course_rows(interaction.user.id)
-        if not rows:
-            await interaction.response.send_message("先に 🎓 で履修科目を登録してください。", ephemeral=True)
-            return
-        exs = await exam_rows_for(str(interaction.user.id))
-        view = discord.ui.View(timeout=600)
-        view.add_item(ExamCourseSelect(rows))
-        if exs:
-            view.add_item(ExamRemoveSelect(exs))
-        lines = []
-        for e in exs[:15]:
-            left = exam_days_left(e["exam_day"])
-            lines.append(f"・**{e['cname']}**「{e['title']}」{exam_date_str(e['exam_day'])}　" + ("**今日！🔥**" if left == 0 else f"**あと{left}日**"))
-        txt = ("📝 **試験日カウントダウン**（30日前・1週間前・3日前にみんなへ、前日の🌙・当日の☀️はあなたにだけお知らせ）\n"
-               + ("\n".join(lines) if lines else "-# 登録されている試験はまだありません"))
-        await interaction.response.send_message(txt, view=view, ephemeral=True)
 
     @discord.ui.button(label="🔁 毎週課題", style=discord.ButtonStyle.success, custom_id="sk_kd_teiki", row=0)
     async def kd_teiki(self, interaction, button):

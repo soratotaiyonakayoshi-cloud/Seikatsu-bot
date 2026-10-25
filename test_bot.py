@@ -45,9 +45,12 @@ check("設定パネル: 🛠ボタンあり", any(getattr(i, "custom_id", "") ==
 check("設定パネル: 項目セレクトは14項目", len(B.SaiteiSelect().options), 14)
 
 # ---- 永続ビュー（custom_id 必須制約）とコマンド登録 ----
-for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView, B.KadaiPanelView, B.GoodsPanelView, B.MusicPanelView):
+for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView, B.KadaiPanelView, B.GoodsPanelView, B.MusicPanelView, B.YoteiPanelView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
-check("永続ビュー7種 登録OK", True, True)
+check("永続ビュー8種 登録OK", True, True)
+check("予定パネル: 6ボタン", {i.custom_id for i in B.YoteiPanelView().children},
+      {"sk_univ", "sk_mine", "sk_exam", "sk_timeline", "sk_cal0", "sk_cal1"})
+check("予定パネル: VIEW_FACTORYとチャンネル定義", (B.VIEW_FACTORY.get("yotei") is B.YoteiPanelView, B.CH["yotei"][0]), (True, "予定🗓"))
 check("音楽パネルは12ボタン", {i.custom_id for i in B.MusicPanelView().children},
       {"sk_mu_play", "sk_mu_bgm", "sk_mu_amb", "sk_mu_join", "sk_mu_pause", "sk_mu_skip", "sk_mu_queue", "sk_mu_stop",
        "sk_mu_lists", "sk_mu_recs", "sk_mu_lyrics", "sk_mu_karaoke"})
@@ -79,8 +82,8 @@ check("起床パネルに🗓明日・📆今後", {"sk_tomorrow", "sk_upcoming"
 check("起床パネルの行割り: 明日は1段目・今後は2段目",
       ([i.row for i in B.WakeView().children if getattr(i, "custom_id", "") == "sk_tomorrow"],
        [i.row for i in B.WakeView().children if getattr(i, "custom_id", "") == "sk_upcoming"]), ([0], [1]))
-check("課題パネルは11ボタン", {i.custom_id for i in B.KadaiPanelView().children},
-      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki", "sk_exam", "sk_jw_free", "sk_cnote", "sk_newterm", "sk_univ"})
+check("課題パネルは11ボタン（予定系は#予定へ）", {i.custom_id for i in B.KadaiPanelView().children},
+      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki", "sk_jw_free", "sk_cnote", "sk_newterm"})
 check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
 check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["BGMに追加", "album", "ambient", "bgm", "erai", "hantei", "help", "jikanwari", "jikoshokai", "join", "kadai", "kanri", "kesseki", "kigen", "kiroku", "kojin", "kyuka", "loop", "nakama", "oyasumi", "pause", "play", "queue", "rajio", "reizouko", "resume", "saitei", "setup", "shiori", "shuffle", "skip", "stop", "suimin", "tips", "tsushinbo", "volume", "watashi", "レシピカードにする"])
 check("音楽: URL判定", (B.looks_like_url("https://youtu.be/x"), B.looks_like_url("lofi hiphop")), (True, False))
@@ -811,7 +814,7 @@ async def main():
     _dg2 = await B.today_digest("95", _now)
     check("大学の予定: 開催中は朝の予定に出る", "🏫 いま" in _dg2 and "前期 履修登録" in _dg2, True)
     check("大学の予定: 試験期間は選べない（科目ごとの📝試験日を使う）", "試験期間" in [o.value for o in B.UnivKindSelect().options], False)
-    check("大学の予定: ボタンは🏫", any(getattr(i, "label", "") == "🏫 大学の予定" for i in B.KadaiPanelView().children), True)
+    check("大学の予定: ボタンは🏫で#予定のパネルに", any(getattr(i, "label", "") == "🏫 大学の予定" for i in B.YoteiPanelView().children), True)
     _up = await B.upcoming_digest("95", _now)
     check("大学の予定: 今後の予定にも出る", "大学の予定" in _up and "前期 履修登録" in _up, True)
     await B.add_univ_event("96", "長期休暇", "冬休み", date(2027, 12, 25), date(2028, 1, 6))
