@@ -79,7 +79,8 @@ CH = {
              "🧊 冷蔵庫＝期限が近い食品のメモ。登録すると期限の前日・当日の朝にお知らせ（3日過ぎたら自動で消えます）。"),
     "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。"),
     "erai": ("えらい🌟", "最低限とは別に、今日がんばったことを報告して褒め合う場所。🌟ボタン（または /erai）から。判定はされません。\n"
-             "📌 やること宣言＝今日限りのメモ（1行に1つ・まとめて宣言OK）。終わったら✅、23時に引き継ぎ確認、放置なら翌朝ひっそり消えます（叱責なし）。"),
+             "📌 やること宣言＝やることメモ（1行に1つ・まとめて宣言OK）。**期限**（例 `11/3`・`11/1-11/3`）をつけるとその日まで毎日残ります。"
+             "空欄なら今日だけ。終わったら✅、期限の日の23時に引き継ぎ確認、放置なら翌朝ひっそり消えます（叱責なし）。"),
     "worklog": ("作業ログ🖥", f"🔊{WORK_VC_NAME} に入ると計測開始・出ると終了。入室中に ✍ ボタンで「何をやるか」をひとこと宣言できます。\n"
                 "10分未満のセッションはログに残りません（時間は記録）。`/kiroku` に今週の作業時間、通信簿に🖥もくもく賞。\n"
                 "🎶 音楽はこのパネルから：リクエスト（URL・検索語・プレイリスト）／🎵BGM／🌿環境音／⏯⏭⏹。\n"
@@ -294,7 +295,8 @@ async def db_init():
               "ALTER TABLE member_recs ADD COLUMN kind TEXT NOT NULL DEFAULT 'song'",
               "ALTER TABLE member_rec_tracks ADD COLUMN added_by TEXT",
               "ALTER TABLE assignment_done ADD COLUMN skip INTEGER NOT NULL DEFAULT 0",
-              "ALTER TABLE private_events ADD COLUMN shared INTEGER NOT NULL DEFAULT 0"):
+              "ALTER TABLE private_events ADD COLUMN shared INTEGER NOT NULL DEFAULT 0",
+              "ALTER TABLE memos ADD COLUMN until_day TEXT"):
         try:
             await db.execute(m)
             await db.commit()
@@ -8005,7 +8007,8 @@ async def today_digest(uid, now, label="今日"):
     try:
         ms = await open_memos(uid, day_str(now))
         if ms:
-            lines.append("📌 やること：" + "／".join(r["text"] + ("　🌅" if r["carried"] else "") for r in ms))
+            lines.append("📌 やること：" + "／".join(r["text"] + memo_deadline_label(r, day_str(now)) + ("　🌅" if r["carried"] else "")
+                                                   for r in ms))
     except Exception:
         pass
     try:
@@ -9146,6 +9149,39 @@ async def open_memos(uid, day):
     async with db.execute("SELECT * FROM memos WHERE user_id=? AND day=? AND done=0 ORDER BY id", (str(uid), day)) as c:
         return await c.fetchall()
 
+def memo_until(r):
+    """期限つきメモの期限（ISO）。無ければ None"""
+    try:
+        return r["until_day"] or None
+    except (IndexError, KeyError):
+        return None
+
+def memo_deadline_label(r, today=None):
+    """「（〜11/3・あと2日）」のような期限表示。期限なしは空"""
+    u = memo_until(r)
+    if not u:
+        return ""
+    today = today or day_str(now_jst())
+    left = (date.fromisoformat(u) - date.fromisoformat(today)).days
+    return f"（〜{md(u)}・" + ("今日まで！" if left <= 0 else f"あと{left}日") + "）"
+
+def parse_memo_deadline(spec, now):
+    """期限欄 → (開始日, 期限日) ISO。空欄は (今日, None)。'11/3'=今日〜11/3、'11/1-11/3'=11/1〜11/3。読めなければ None"""
+    t = unicodedata.normalize("NFKC", spec or "").strip()
+    today = now.date()
+    if not t:
+        return today.isoformat(), None
+    days = parse_day_spec(t, now)
+    if not days:
+        return None
+    s, e = date.fromisoformat(days[0]), date.fromisoformat(days[-1])
+    if len(days) == 1:
+        s = today
+    s = max(s, today)
+    if e < today:
+        return None
+    return s.isoformat(), (e.isoformat() if e > today or s > today else None)
+
 async def memo_delete_public_by_id(msg_id):
     if not msg_id:
         return
@@ -9169,10 +9205,11 @@ async def memo_group_payload(rows, guild):
     if len(rows) == 1:
         r = rows[0]
         content = memo_done_text(name, r["text"], guild) if r["done"] else \
-            f"📌 **{name}**：{r['text']}" + ("　🌅持ち越し" if r["carried"] else "")
+            f"📌 **{name}**：{r['text']}{memo_deadline_label(r)}" + ("　🌅持ち越し" if r["carried"] else "")
     else:
         tail = f"　ぜんぶやりきった！{erai_emoji(guild)}" if not open_rows else f"（✅ {len(rows) - len(open_rows)}/{len(rows)}）"
-        lines = [(f"✅ ~~{r['text']}~~" if r["done"] else f"⬜ {r['text']}" + ("　🌅" if r["carried"] else "")) for r in rows]
+        lines = [(f"✅ ~~{r['text']}~~" if r["done"] else f"⬜ {r['text']}{memo_deadline_label(r)}" + ("　🌅" if r["carried"] else ""))
+                 for r in rows]
         content = f"{'✅' if not open_rows else '📌'} **{name}** のやること{tail}\n" + "\n".join(lines)
     view = None
     if open_rows:
@@ -9241,6 +9278,8 @@ def parse_memo_lines(raw):
 class MemoModal(discord.ui.Modal, title="📌 やることメモ"):
     what = discord.ui.TextInput(label="やること（1行に1つ・まとめて宣言OK）", style=discord.TextStyle.paragraph,
                                 placeholder="例：\n参考文献を探す\n振込\nゴミ袋を買う", max_length=400)
+    until = discord.ui.TextInput(label="期限（任意・空欄なら今日だけ）", required=False, max_length=20,
+                                 placeholder="11/3＝今日〜11/3　／　11/1-11/3＝その期間")
 
     async def on_submit(self, interaction):
         user = interaction.user
@@ -9250,10 +9289,15 @@ class MemoModal(discord.ui.Modal, title="📌 やることメモ"):
         if not tasks:
             await interaction.response.send_message("⚠️ やることが読み取れませんでした。1行に1つ書いてね。", ephemeral=True)
             return
+        span = parse_memo_deadline(str(self.until.value), now)
+        if not span:
+            await interaction.response.send_message("⚠️ 期限が読めませんでした（過ぎた日付も×）。例：`11/3` `11/1-11/3`", ephemeral=True)
+            return
+        start_day, until_day = span
         ids = []
         for t in tasks:
-            cur = await db.execute("INSERT INTO memos(user_id,text,day,ts) VALUES(?,?,?,?)",
-                                   (str(user.id), t, day_str(now), int(now.timestamp())))
+            cur = await db.execute("INSERT INTO memos(user_id,text,day,ts,until_day) VALUES(?,?,?,?,?)",
+                                   (str(user.id), t, start_day, int(now.timestamp()), until_day))
             ids.append(cur.lastrowid)
         await db.commit()
         ch = await get_ch("erai")
@@ -9266,9 +9310,13 @@ class MemoModal(discord.ui.Modal, title="📌 やることメモ"):
             await db.execute(f"UPDATE memos SET msg_id=? WHERE id IN ({q})", [str(msg.id)] + ids)
             await db.commit()
         head = f"「{tasks[0]}」" if len(tasks) == 1 else f"{len(tasks)}件"
-        await interaction.response.send_message(
-            f"📌 {head}を宣言しました。終わったら ✅ を。23時に残っていたら引き継ぐか聞きます（放置すると翌朝ひっそり消えます）" + hitokoto_suffix(),
-            ephemeral=True)
+        if until_day:
+            when = (f"{md(start_day)}から" if start_day > day_str(now) else "") + f"{md(until_day)}まで"
+            tail = (f"{when}は毎日の「やること」に残ります。終わったら ✅ を。"
+                    f"期限の日の23時にまだ残っていたら、引き継ぐか聞きます")
+        else:
+            tail = "終わったら ✅ を。23時に残っていたら引き継ぐか聞きます（放置すると翌朝ひっそり消えます）"
+        await interaction.response.send_message(f"📌 {head}を宣言しました。{tail}" + hitokoto_suffix(), ephemeral=True)
         if ch:
             await bump_panel("erai")
 
@@ -9296,12 +9344,13 @@ class MemoListButton(discord.ui.Button):
             await interaction.response.edit_message(content=note + "📌 全部やりきった！えらい！", view=None)
 
 def memo_list_text(rows):
-    return "📌 **今日のやること**（押したら完了）\n" + "\n".join("・" + r["text"] + ("　🌅持ち越し" if r["carried"] else "") for r in rows)
+    return "📌 **今日のやること**（押したら完了）\n" + "\n".join(
+        "・" + r["text"] + memo_deadline_label(r) + ("　🌅持ち越し" if r["carried"] else "") for r in rows)
 
 async def send_memo_list(interaction):
     rows = await open_memos(interaction.user.id, day_str(now_jst()))
     if not rows:
-        await interaction.response.send_message("📌 今日のやることは空っぽです。「📌 やること宣言」から気軽にどうぞ（日時指定なし・翌朝には勝手に消えます）。", ephemeral=True)
+        await interaction.response.send_message("📌 今日のやることは空っぽです。「📌 やること宣言」から気軽にどうぞ（期限なしなら翌朝には勝手に消えます・期限をつけるとその日まで残ります）。", ephemeral=True)
         return
     view = discord.ui.View(timeout=600)
     for r in rows[:25]:
@@ -9323,7 +9372,8 @@ class MemoCarryButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_m
             return
         now = now_jst()
         target = day_str(now + timedelta(days=1)) if now.hour >= JUDGE_HOUR else day_str(now)
-        cur = await db.execute("UPDATE memos SET day=?, carried=carried+1 WHERE user_id=? AND day<? AND done=0", (target, self.uid, target))
+        cur = await db.execute("UPDATE memos SET day=?, carried=carried+1 WHERE user_id=? AND day<? AND done=0 "
+                               "AND (until_day IS NULL OR until_day < ?)", (target, self.uid, target, target))
         await db.execute("DELETE FROM memo_prompts WHERE user_id=? AND msg_id=?", (self.uid, str(interaction.message.id)))
         await db.commit()
         await interaction.response.edit_message(content=f"🌅 {cur.rowcount}件を明日へ引き継ぎました。ぼちぼちいこう。", view=None)
@@ -9342,9 +9392,10 @@ class MemoDropButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_me
             await interaction.response.send_message("本人だけが選べます。", ephemeral=True)
             return
         today = day_str(now_jst())
-        async with db.execute("SELECT * FROM memos WHERE user_id=? AND day<=? AND done=0", (self.uid, today)) as c:
+        keep = "AND (until_day IS NULL OR until_day <= ?)"   # まだ期限前のメモは消さない
+        async with db.execute(f"SELECT * FROM memos WHERE user_id=? AND day<=? AND done=0 {keep}", (self.uid, today, today)) as c:
             rows = await c.fetchall()
-        await db.execute("DELETE FROM memos WHERE user_id=? AND day<=? AND done=0", (self.uid, today))
+        await db.execute(f"DELETE FROM memos WHERE user_id=? AND day<=? AND done=0 {keep}", (self.uid, today, today))
         await db.execute("DELETE FROM memo_prompts WHERE user_id=? AND msg_id=?", (self.uid, str(interaction.message.id)))
         await db.commit()
         for mid in {r["msg_id"] for r in rows if r["msg_id"]}:
@@ -9363,7 +9414,7 @@ async def memo_carry_prompts(day):
         async with db.execute("SELECT 1 FROM memo_prompts WHERE day=? AND user_id=?", (day, uid)) as c:
             if await c.fetchone():
                 continue
-        rows = await open_memos(uid, day)
+        rows = [r for r in await open_memos(uid, day) if not memo_until(r) or memo_until(r) <= day]   # 期限前のものは聞かない
         if not rows:
             continue
         view = discord.ui.View(timeout=None)
@@ -9380,6 +9431,10 @@ async def memo_carry_prompts(day):
 async def memo_cleanup(today):
     """引き継がれなかった昨日以前のメモを自動削除し、宣言・確認メッセージも畳む。古い夜勤記録も掃除。
     宣言メッセージの扱い：✅だけの宣言は歴史として残す／一部✅は✅だけ残す形に固定／全部未完了なら削除"""
+    # 期限つきで期限がまだ来ていない未完了メモは、消さずに今日へ繰り越す（引き継ぎ回数は増やさない）
+    await db.execute("UPDATE memos SET day=? WHERE day<? AND done=0 AND until_day IS NOT NULL AND until_day >= ?",
+                     (today, today, today))
+    await db.commit()
     async with db.execute("SELECT * FROM memos WHERE day<?", (today,)) as c:
         stale = await c.fetchall()
     by_msg = {}

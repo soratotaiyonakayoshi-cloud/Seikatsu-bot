@@ -868,6 +868,24 @@ async def main():
     _al = B.render_meal_album([(_png, "ぺんぎん　🐾5"), (_png, "たぬき")], "10月のいやしアルバム", "", 10, True, None, None)
     check("いやしアルバム: コラージュPNG生成", _al is not None, True)
 
+    # 📌 やること宣言の期限（空欄＝今日だけ／11/3＝今日〜／11/1-11/3＝期間）
+    _n = datetime(2026, 10, 26, 12, 0, tzinfo=JST)
+    check("メモ期限: 空欄は今日だけ", B.parse_memo_deadline("", _n), ("2026-10-26", None))
+    check("メモ期限: 日付1つは今日〜その日", B.parse_memo_deadline("11/3", _n), ("2026-10-26", "2026-11-03"))
+    check("メモ期限: 期間は開始日から", B.parse_memo_deadline("11/1-11/3", _n), ("2026-11-01", "2026-11-03"))
+    check("メモ期限: 今日を書いたら期限なし扱い", B.parse_memo_deadline("10/26", _n), ("2026-10-26", None))
+    check("メモ期限: 表示", B.memo_deadline_label({"until_day": "2026-11-03"}, "2026-11-01"), "（〜11/3・あと2日）")
+    cur = await B.db.execute("INSERT INTO memos(user_id,text,day,ts,until_day) VALUES('95','レポート','2026-10-25',0,'2026-10-28')")
+    _mid = cur.lastrowid
+    await B.db.execute("INSERT INTO memos(user_id,text,day,ts) VALUES('95','振込','2026-10-25',0)")
+    await B.db.commit()
+    await B.memo_cleanup("2026-10-26")
+    _left = {r["text"]: r["day"] for r in await (await B.db.execute("SELECT text, day FROM memos WHERE user_id='95'")).fetchall()}
+    check("メモ期限: 期限内は今日へ繰り越し・期限なしは消える", (_left.get("レポート"), "振込" in _left), ("2026-10-26", False))
+    check("メモ期限: 期限前は夜の引き継ぎ確認の対象外",
+          [r["text"] for r in await B.open_memos("95", "2026-10-26") if not B.memo_until(r) or B.memo_until(r) <= "2026-10-26"], [])
+    await B.db.execute("DELETE FROM memos WHERE id=?", (_mid,)); await B.db.commit()
+
     # 🎉 記念カード（発足から半年・n周年）
     check("記念日: 半年", B.anniversary_label(date(2027, 3, 1), "2026-09-01"), "半年")
     check("記念日: 1周年・2周年", (B.anniversary_label(date(2027, 9, 1), "2026-09-01"), B.anniversary_label(date(2028, 9, 1), "2026-09-01")), ("1周年", "2周年"))
