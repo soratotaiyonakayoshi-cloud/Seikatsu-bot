@@ -423,12 +423,35 @@ async def build_misses(u, day, d1, d2, is_sunday):
             misses.append(f"📝 {r['name']} 未チェック")
     return misses
 
+# ---- 🌸 長期休暇モード（春休み・夏休み）：期間中は授業系の表示・毎週課題を止め、起床締切をずらす ----
+_BREAK = {"start": None, "end": None, "shift": 0, "name": "長期休暇"}   # metaから起動時に読み込む
+
+async def load_break():
+    _BREAK.update(start=await meta_get("break_start"), end=await meta_get("break_end"),
+                  shift=int(await meta_get("break_shift", "0") or 0), name=await meta_get("break_name", "長期休暇"))
+
+def break_on(d):
+    """d（date/datetime/ISO文字列）が長期休暇の期間内か"""
+    if not (_BREAK["start"] and _BREAK["end"]):
+        return False
+    k = d if isinstance(d, str) else (d.date() if isinstance(d, datetime) else d).isoformat()
+    return _BREAK["start"] <= k <= _BREAK["end"]
+
+def break_text():
+    s, e = _BREAK["start"], _BREAK["end"]
+    return f"{_BREAK['name']}（{int(s[5:7])}/{int(s[8:])}〜{int(e[5:7])}/{int(e[8:])}）"
+
 def effective_deadline(u, dt):
-    """起床締切。土日は holiday_shift（分）だけ後ろにずらす"""
+    """起床締切。土日は holiday_shift（分）だけ後ろにずらす。長期休暇中は毎日、休暇用のずらし幅と大きいほう"""
     dl = u["wake_deadline"]
     if not dl:
         return None
     shift = u["holiday_shift"] or 0
+    if break_on(dt) and _BREAK["shift"]:
+        shift = max(shift, _BREAK["shift"])
+        h, m = map(int, dl.split(":"))
+        t = min(h * 60 + m + shift, 23 * 60 + 59)
+        return f"{t // 60:02d}:{t % 60:02d}"
     if shift and dt.weekday() >= 5:
         h, m = map(int, dl.split(":"))
         t = min(h * 60 + m + shift, 23 * 60 + 59)
@@ -2640,8 +2663,74 @@ async def kanri_command(interaction, sousa: app_commands.Choice[str]):
              f"・Spotify連携：{'設定あり' if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET else '未設定'}",
              f"・DB：{db_mb:.2f}MB／最終外部バックアップ週：{await meta_get('ops_backup_week') or 'まだ'}",
              f"・音楽：{'再生中 ' + (_player.get('current') or '') if vc and vc.is_connected() and vc.is_playing() else ('VCで待機中' if vc and vc.is_connected() else 'VCにいない')}",
-             f"・管理チャンネル：{'あり' if await meta_get('ch_botlog') else '⚠️ なし（/setup で作成）'}"]
+             f"・管理チャンネル：{'あり' if await meta_get('ch_botlog') else '⚠️ なし（/setup で作成）'}",
+             f"・長期休暇モード：{(break_text() + ('（期間中）' if break_on(now_jst()) else '（予定）')) if _BREAK['start'] else 'なし'}"]
     await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+def parse_md(s, ref):
+    """'2/1' '2月1日' '2026-02-01' → date（年なしは ref の年）。読めなければ None"""
+    t = unicodedata.normalize("NFKC", (s or "")).strip()
+    m = re.fullmatch(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", t)
+    try:
+        if m:
+            return date(int(m[1]), int(m[2]), int(m[3]))
+        m = re.fullmatch(r"(\d{1,2})[/月](\d{1,2})日?", t)
+        if m:
+            return date(ref.year, int(m[1]), int(m[2]))
+    except ValueError:
+        return None
+    return None
+
+async def set_break(start, end, shift_min, name):
+    """長期休暇モードを保存（start/end=date。start=None で解除）"""
+    if start is None:
+        for k in ("break_start", "break_end"):
+            await db.execute("DELETE FROM meta WHERE key=?", (k,))
+        await db.commit()
+    else:
+        await meta_set("break_start", start.isoformat())
+        await meta_set("break_end", end.isoformat())
+        await meta_set("break_shift", str(int(shift_min)))
+        await meta_set("break_name", name)
+    await load_break()
+
+@bot.tree.command(name="kyuka", description="【管理者用】長期休暇モード（春休み・夏休み）：時間割と毎週課題を止め、起床締切をずらす")
+@app_commands.checks.has_permissions(administrator=True)
+@app_commands.describe(kaishi="はじまり 例: 2/1", owari="おわり 例: 3/31", zurashi="起床締切を何時間遅らせるか（既定2・0でずらさない）",
+                       namae="名前（既定 春休み）", kaijo="True で長期休暇モードを解除")
+async def kyuka_command(interaction, kaishi: str = None, owari: str = None, zurashi: float = 2.0,
+                        namae: str = "春休み", kaijo: bool = False):
+    now = now_jst()
+    if kaijo:
+        await set_break(None, None, 0, "")
+        await interaction.response.send_message("🌸 長期休暇モードを解除しました（時間割・毎週課題・起床締切が通常に戻ります）。", ephemeral=True)
+        return
+    if not kaishi or not owari:
+        st = f"いまの設定：**{break_text()}**・起床締切 +{_BREAK['shift'] / 60:g}時間" + ("（期間中）" if break_on(now) else "") \
+            if _BREAK["start"] else "いまは設定されていません。"
+        await interaction.response.send_message(
+            f"🌸 {st}\n-# 設定：`/kyuka kaishi:2/1 owari:3/31 zurashi:2`　解除：`/kyuka kaijo:True`", ephemeral=True)
+        return
+    s, e = parse_md(kaishi, now), parse_md(owari, now)
+    if not s or not e:
+        await interaction.response.send_message("⚠️ 日付が読めませんでした。例：`2/1` `3/31`", ephemeral=True)
+        return
+    if e < s:   # 12/20〜1/10 のように年をまたぐ
+        e = e.replace(year=e.year + 1)
+    if e < now.date():   # 過ぎた期間を書いたら来年のこととみなす
+        s, e = s.replace(year=s.year + 1), e.replace(year=e.year + 1)
+    shift = int(max(0.0, min(6.0, zurashi)) * 60)
+    await set_break(s, e, shift, (namae or "長期休暇").strip()[:12])
+    msg = (f"🌸 **{break_text()}** を設定しました。期間中は\n"
+           "・☀️朝の予定に時間割を出さない\n・🔁毎週課題を自動で作らない（休み明けの朝から再開）\n"
+           + (f"・起床の締切を毎日 **{shift / 60:g}時間** 遅らせる（各自の土日設定のほうが大きければそちら）\n" if shift else "・起床の締切はそのまま\n")
+           + "・手で登録した課題と試験のお知らせは通常どおり")
+    await interaction.response.send_message(msg, ephemeral=True)
+    ch = await get_ch("wake")
+    if ch:
+        await ch.send(f"🌸 **{break_text()}モード**のお知らせ：期間中は時間割と毎週課題がお休み"
+                      + (f"、起床の締切が **{shift / 60:g}時間** 遅くなります。" if shift else "になります。")
+                      + "\n-# 休み明けは自動で元に戻ります。ゆるく、でも生活リズムは崩さずにいこう")
 
 async def ops_daily(now):
     """毎朝の運用タスク：火曜4時=yt-dlp更新／月曜5時=外部バックアップ（それぞれ週1回）"""
@@ -4985,6 +5074,7 @@ async def on_ready():
     if not remind_loop.is_running():
         remind_loop.start()
     await load_role_msgs()
+    await load_break()
     if not _ops_hello["done"]:   # 起動の知らせ（デプロイ・自動再起動が正しく終わったかの確認用）
         _ops_hello["done"] = True
         ver = await asyncio.to_thread(_ytdlp_installed_version)
@@ -6250,6 +6340,8 @@ def teiki_due_dt(course, rule, d):
 async def spawn_recurring(now=None):
     """定例課題ルールから直近の授業日ぶんの課題を自動生成（毎朝）。生成済み・手動取り下げ済みの日は飛ばす"""
     now = now or now_jst()
+    if break_on(now):
+        return 0   # 🌸 長期休暇中は授業がないので毎週課題も生やさない（休み明けの朝から再開）
     async with db.execute("SELECT * FROM recurring_kadai WHERE active=1") as c:
         rules = await c.fetchall()
     made = 0
@@ -6617,6 +6709,75 @@ class FreeSlotRemoveSelect(discord.ui.Select):
         await db.commit()
         await interaction.response.edit_message(content=f"🗑 {len(self.values)} 件消しました。", view=None)
 
+# ---- 🌱 新学期の準備：前の学期の科目をまとめて外して、そのまま新しい科目の登録へ ----
+async def current_term():
+    """いまの科目マスタの学期（マスタ科目でいちばん多いterm）。不明なら None"""
+    async with db.execute("SELECT term, COUNT(*) AS n FROM courses WHERE custom=0 AND term IS NOT NULL AND term<>'' "
+                          "GROUP BY term ORDER BY n DESC LIMIT 1") as c:
+        r = await c.fetchone()
+    return r["term"] if r else None
+
+async def newterm_split(uid):
+    """自分の履修を (前の学期のマスタ科目, 自由入力の科目, いまの学期の科目数, いまの学期名) に分ける"""
+    term = await current_term()
+    async with db.execute("SELECT c.code, c.name, c.term, c.custom FROM user_courses uc JOIN courses c ON c.code=uc.code "
+                          "WHERE uc.user_id=? ORDER BY c.name", (str(uid),)) as c:
+        rows = await c.fetchall()
+    old = [r for r in rows if not r["custom"] and term and r["term"] and r["term"] != term]
+    custom = [r for r in rows if r["custom"]]
+    cur_n = len(rows) - len(old) - len(custom)
+    return old, custom, cur_n, term
+
+async def drop_courses(uid, codes):
+    if not codes:
+        return 0
+    q = ",".join("?" * len(codes))
+    cur = await db.execute(f"DELETE FROM user_courses WHERE user_id=? AND code IN ({q})", (str(uid), *codes))
+    await db.execute(f"DELETE FROM attendance WHERE user_id=? AND code IN ({q})", (str(uid), *codes))
+    await db.commit()
+    return cur.rowcount
+
+class NewTermCustomSelect(discord.ui.Select):
+    def __init__(self, rows):
+        opts = [discord.SelectOption(label=r["name"][:100], value=r["code"]) for r in rows[:25]]
+        super().__init__(placeholder="✍ 自分で足した科目も外す（サークル・バイトなどは残してOK）", options=opts,
+                         min_values=1, max_values=len(opts))
+
+    async def callback(self, interaction):
+        n = await drop_courses(interaction.user.id, list(self.values))
+        await interaction.response.send_message(f"🗑 自分で足した科目を {n} 件外しました。", ephemeral=True)
+
+class NewTermView(discord.ui.View):
+    def __init__(self, old, custom):
+        super().__init__(timeout=900)
+        self.old_codes = [r["code"] for r in old]
+        b = discord.ui.Button(label=f"🗑 前の学期の科目（{len(old)}）をまとめて外す", style=discord.ButtonStyle.danger,
+                              disabled=not old, row=1)
+        b.callback = self._drop_old
+        self.add_item(b)
+        if custom:
+            self.add_item(NewTermCustomSelect(custom))
+
+    async def _drop_old(self, interaction):
+        n = await drop_courses(interaction.user.id, self.old_codes)
+        self.old_codes = []
+        for it in self.children:
+            if isinstance(it, discord.ui.Button) and it.label.startswith("🗑"):
+                it.disabled = True
+        await interaction.response.edit_message(
+            content=f"🗑 前の学期の科目を **{n}件** 外しました（欠席カウンターも一緒にリセット）。\n下の「🎓 新しい科目を登録」からどうぞ！",
+            view=self)
+
+    @discord.ui.button(label="🧩 空きコマ予定もリセット", style=discord.ButtonStyle.secondary, row=2)
+    async def b_slots(self, interaction, button):
+        cur = await db.execute("DELETE FROM user_slots WHERE user_id=?", (str(interaction.user.id),))
+        await db.commit()
+        await interaction.response.send_message(f"🧩 空きコマ予定を {cur.rowcount} 件消しました。新しい予定は 🧩 から。", ephemeral=True)
+
+    @discord.ui.button(label="🎓 新しい科目を登録", style=discord.ButtonStyle.primary, row=2)
+    async def b_add(self, interaction, button):
+        await interaction.response.send_modal(CourseSearchModal())
+
 # ---- 🗒 科目メモ（履修者で共有：教室変更・持ち物・テスト範囲など。その授業の日の朝ダイジェストにも出る） ----
 COURSE_NOTE_MAX = 10   # 1科目あたり（古いものから消える）
 
@@ -6702,6 +6863,23 @@ async def today_course_notes(codes, limit=3):
 class KadaiPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
+
+    @discord.ui.button(label="🌱 新学期の準備", style=discord.ButtonStyle.secondary, custom_id="sk_newterm", row=2)
+    async def newterm_btn(self, interaction, button):
+        await ensure_user(interaction.user)
+        old, custom, cur_n, term = await newterm_split(interaction.user.id)
+        if not old and not custom:
+            await interaction.response.send_message(
+                f"🌱 前の学期の科目はありません（いまの時間割：{term or '不明'}・登録 {cur_n} 科目）。\n"
+                "-# 新学期の時間割がBotに入ると、ここから古い科目をまとめて外せるようになります", ephemeral=True)
+            return
+        lines = [f"🌱 **新学期の準備**（いまの時間割：{term}）"]
+        if old:
+            lines.append(f"前の学期の科目 **{len(old)}件**：" + "、".join(r["name"] for r in old[:12]) + ("…" if len(old) > 12 else ""))
+        if custom:
+            lines.append(f"自分で足した科目 {len(custom)}件（残すか選べます）")
+        lines.append("-# 外すのは自分の登録だけ。みんなの課題や試験日はそのまま残ります")
+        await interaction.response.send_message("\n".join(lines), view=NewTermView(old, custom), ephemeral=True)
 
     @discord.ui.button(label="🗒 科目メモ", style=discord.ButtonStyle.secondary, custom_id="sk_cnote", row=2)
     async def cnote_btn(self, interaction, button):
@@ -6875,17 +7053,20 @@ async def today_digest(uid, now, label="今日"):
     """「今日（明日）の授業」「未完了の課題」のダイジェスト。明日分は now に翌日・label='明日' を渡す"""
     dc = DAY_CHARS[now.weekday()]
     per = {}
-    for c in await user_course_rows(uid):
-        for slot in (c["slots"] or "").split(","):
-            slot = slot.strip()
-            if len(slot) >= 2 and slot[0] == dc and slot[1:].isdigit():
-                per.setdefault(int(slot[1:]), []).append(c)
-    async with db.execute("SELECT slot, label, place FROM user_slots WHERE user_id=?", (str(uid),)) as c:
-        for r in await c.fetchall():   # 空きコマの個人予定（バイト・部活など）も今日の時間割に混ぜる
-            s = r["slot"]
-            if s and s[0] == dc and s[1:].isdigit():
-                per.setdefault(int(s[1:]), []).append({"name": r["label"], "room": r["place"], "code": "_us_" + s})
     lines = []
+    if break_on(now):   # 🌸 長期休暇中は授業がないので時間割は出さない
+        lines.append(f"🌸 {break_text()}中：時間割と毎週課題はお休みです")
+    else:
+        for c in await user_course_rows(uid):
+            for slot in (c["slots"] or "").split(","):
+                slot = slot.strip()
+                if len(slot) >= 2 and slot[0] == dc and slot[1:].isdigit():
+                    per.setdefault(int(slot[1:]), []).append(c)
+        async with db.execute("SELECT slot, label, place FROM user_slots WHERE user_id=?", (str(uid),)) as c:
+            for r in await c.fetchall():   # 空きコマの個人予定（バイト・部活など）も今日の時間割に混ぜる
+                s = r["slot"]
+                if s and s[0] == dc and s[1:].isdigit():
+                    per.setdefault(int(s[1:]), []).append({"name": r["label"], "room": r["place"], "code": "_us_" + s})
     if per:
         lines.append(f"📅 **{label}の時間割**")
         seen = set()

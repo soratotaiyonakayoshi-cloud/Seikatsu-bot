@@ -1,6 +1,6 @@
 """bot.py の判定ロジック・DB・パネル制約のテスト。 実行: .venv/Scripts/python test_bot.py"""
 import os, sys, asyncio
-from datetime import datetime
+from datetime import datetime, date
 os.environ["DB_PATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_seikatsu.db")
 if os.path.exists(os.environ["DB_PATH"]):
     os.remove(os.environ["DB_PATH"])   # 前回中断の残骸があると集計テストが狂う
@@ -80,9 +80,9 @@ check("起床パネルの行割り: 明日は1段目・今後は2段目",
       ([i.row for i in B.WakeView().children if getattr(i, "custom_id", "") == "sk_tomorrow"],
        [i.row for i in B.WakeView().children if getattr(i, "custom_id", "") == "sk_upcoming"]), ([0], [1]))
 check("課題パネルは11ボタン", {i.custom_id for i in B.KadaiPanelView().children},
-      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki", "sk_exam", "sk_jw_free", "sk_cnote"})
+      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki", "sk_exam", "sk_jw_free", "sk_cnote", "sk_newterm"})
 check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
-check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["BGMに追加", "album", "ambient", "bgm", "erai", "hantei", "help", "jikanwari", "jikoshokai", "join", "kadai", "kanri", "kesseki", "kigen", "kiroku", "kojin", "loop", "nakama", "oyasumi", "pause", "play", "queue", "rajio", "reizouko", "resume", "saitei", "setup", "shiori", "shuffle", "skip", "stop", "suimin", "tips", "tsushinbo", "volume", "watashi", "レシピカードにする"])
+check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["BGMに追加", "album", "ambient", "bgm", "erai", "hantei", "help", "jikanwari", "jikoshokai", "join", "kadai", "kanri", "kesseki", "kigen", "kiroku", "kojin", "kyuka", "loop", "nakama", "oyasumi", "pause", "play", "queue", "rajio", "reizouko", "resume", "saitei", "setup", "shiori", "shuffle", "skip", "stop", "suimin", "tips", "tsushinbo", "volume", "watashi", "レシピカードにする"])
 check("音楽: URL判定", (B.looks_like_url("https://youtu.be/x"), B.looks_like_url("lofi hiphop")), (True, False))
 check("音楽: 音源なしなら空リスト", isinstance(B.bgm_files(), list), True)
 check("環境音: ファイル一覧はリスト", isinstance(B.ambient_files(), list), True)
@@ -748,6 +748,35 @@ async def main():
     await B.db.commit()
     check("祝福: 全員✅で祝う", await B.maybe_celebrate(cid), True)
     check("祝福: 二度目は鳴らない", await B.maybe_celebrate(cid), False)
+
+    # 🌸 長期休暇モード
+    check("休暇: 日付の読み取り", (B.parse_md("2/1", date(2026, 10, 1)), B.parse_md("2027-03-31", date(2026, 10, 1)), B.parse_md("あ", date(2026, 1, 1))),
+          (date(2026, 2, 1), date(2027, 3, 31), None))
+    await B.set_break(date(2027, 2, 1), date(2027, 3, 31), 120, "春休み")
+    check("休暇: 期間内の判定", (B.break_on("2027-02-10"), B.break_on(date(2027, 4, 1)), B.break_on(datetime(2027, 3, 31, 9, 0, tzinfo=JST))), (True, False, True))
+    check("休暇: 表示名", B.break_text(), "春休み（2/1〜3/31）")
+    _u = {"wake_deadline": "07:00", "holiday_shift": 60}
+    check("休暇: 平日も締切が+2時間", B.effective_deadline(_u, date(2027, 2, 10)), "09:00")
+    check("休暇: 土日設定のほうが大きければそちら", B.effective_deadline({"wake_deadline": "07:00", "holiday_shift": 180}, date(2027, 2, 10)), "10:00")
+    check("休暇: 期間外はいつもどおり", B.effective_deadline(_u, date(2027, 4, 7)), "07:00")
+    check("休暇: 毎週課題を生やさない", await B.spawn_recurring(datetime(2027, 2, 10, 8, 0, tzinfo=JST)), 0)
+    _dg = await B.today_digest("1", datetime(2027, 2, 10, 8, 0, tzinfo=JST))
+    check("休暇: 朝の予定に時間割を出さず休暇の一言", ("🌸" in _dg, "時間割**" in _dg), (True, False))
+    await B.set_break(None, None, 0, "")
+    check("休暇: 解除", B.break_on("2027-02-10"), False)
+
+    # 🌱 新学期の準備（いまの学期＝マスタでいちばん多いterm。違う学期の科目だけ外す）
+    _term = await B.current_term()
+    await B.db.execute("INSERT OR IGNORE INTO courses(code,name,nname,teacher,room,faculty,dept,cls,slots,term,custom) "
+                       "VALUES('old001','むかしの科目','むかしのかもく','','','','','','月1','1999前期',0)")
+    await B.db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES('95','old001')")
+    await B.db.execute("INSERT OR IGNORE INTO attendance(user_id,code,absent,limit_n) VALUES('95','old001',2,4)")
+    await B.db.commit()
+    _old, _cus, _curn, _t = await B.newterm_split("95")
+    check("新学期: いまの学期が取れる", _t == _term and _t is not None, True)
+    check("新学期: 前の学期の科目だけ拾う", [r["code"] for r in _old], ["old001"])
+    check("新学期: まとめて外す（欠席カウンターも）", await B.drop_courses("95", ["old001"]), 1)
+    check("新学期: 外れた", (await (await B.db.execute("SELECT COUNT(*) AS n FROM attendance WHERE user_id='95' AND code='old001'")).fetchone())["n"], 0)
 
     # 🍳 朝ごはんストリーク（今日まだなら昨日から・お休みは飛ばす）
     def _ts(dd, h):
