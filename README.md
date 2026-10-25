@@ -104,7 +104,7 @@ journalctl -u seikatsu-bot -f            # ログ
 ### 音源（ラジオ体操）の置き方
 権利の都合でリポジトリには含めません。手元のmp3を VM に直接コピーします（PCのPowerShellで）:
 ```powershell
-scp -i "$HOME\.ssh\oracle.key" "D:\Downloads\videoplayback.mp3" ubuntu@158.179.180.17:/home/ubuntu/seikatsu-bot/radio.mp3
+scp "D:\Downloads\videoplayback.mp3" oracle:/home/ubuntu/seikatsu-bot/radio.mp3   # oracle = ~/.ssh/config のVM別名
 ```
 ファイル名を変える場合は `.env` の `RADIO_MP3` を合わせる。音声再生には `ffmpeg` と `libopus0` が必要（`setup.sh` で導入。既存VMは `sudo apt-get install -y ffmpeg libopus0 libffi-dev` と `venv/bin/pip install -r requirements.txt`）。
 

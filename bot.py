@@ -2411,6 +2411,214 @@ async def backup_db(keep=7):
     print(f"バックアップ完了: {dest}（{len(olds[-keep:])}世代）", flush=True)
     return dest
 
+# ------------------------------------------------------------
+#  🔒 運用：管理者だけが見る #bot管理 へのエラー通知・yt-dlp自動更新・DBの外部バックアップ
+#  （VMのログを見に行かなくても、壊れたら気づけて直し方がわかるように）
+# ------------------------------------------------------------
+BOTLOG_CH_NAME = "bot管理🔒"
+_alert_last = {}   # key -> 最後に通知した時刻（同じ問題を連投しない）
+_ops_hello = {"done": False}
+
+async def ensure_botlog_channel(guild, cat):
+    """管理者とBotだけが見える #bot管理🔒 を用意（/setupから・何度実行しても安全）"""
+    ch = None
+    cid = await meta_get("ch_botlog")
+    if cid:
+        ch = guild.get_channel(int(cid))
+    if ch is None:
+        ch = discord.utils.get(guild.text_channels, name=BOTLOG_CH_NAME)
+    ow = {guild.default_role: discord.PermissionOverwrite(view_channel=False),
+          guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True, embed_links=True)}
+    if ch is None:
+        ch = await guild.create_text_channel(BOTLOG_CH_NAME, category=cat, overwrites=ow,
+                                             topic="Botの不調・自動メンテの記録（管理者だけに見えます）")
+        await ch.send("🔒 ここはBotの管理用チャンネルです（管理者にだけ見えます）。\n"
+                      "エラーと直し方・yt-dlpの自動更新・週1回のDBバックアップがここに届きます。詳しくは docs/保守マニュアル.md")
+    else:
+        try:
+            await ch.edit(overwrites=ow)   # 非公開設定が崩れていたら直す
+        except Exception as e:
+            print(f"bot管理チャンネルの権限修正失敗: {e!r}", flush=True)
+    await meta_set("ch_botlog", ch.id)
+    return ch
+
+async def bot_alert(text, key=None, cooldown_h=6.0, file=None):
+    """#bot管理🔒 に通知する。同じkeyはcooldown_h時間に1回まで。チャンネルが無ければログだけ"""
+    import time as _t
+    if key:
+        last = _alert_last.get(key, 0)
+        if _t.time() - last < cooldown_h * 3600:
+            return False
+        _alert_last[key] = _t.time()
+    print(f"[bot管理] {text}", flush=True)
+    try:
+        cid = await meta_get("ch_botlog")
+        ch = bot.get_channel(int(cid)) if cid else None
+        if ch:
+            await ch.send(text[:1900], file=file)
+            return True
+    except Exception as e:
+        print(f"bot管理への通知失敗: {e!r}", flush=True)
+    return False
+
+YT_ERROR_GUIDES = (   # yt-dlpのエラー文 → (通知key, 何が起きたか・直し方)
+    (("sign in to confirm", "login_required", "not a bot"), "yt_cookie",
+     "🍪 **YouTubeのCookieが切れたみたい**（「Sign in to confirm」）\n"
+     "直し方：①PCのシークレットウィンドウでYouTubeにログイン ②拡張「Get cookies.txt LOCALLY」でExport ③**すぐウィンドウを閉じる**"
+     "（開いたままだとCookieが無効化される）④`scp cookies.txt oracle:/home/ubuntu/seikatsu-bot/cookies.txt` ⑤`seikatsu-deploy`"),
+    (("no video formats", "n challenge", "nsig", "requested format is not available", "signature extraction"), "yt_update",
+     "🛠 **yt-dlpが古くなったみたい**（YouTube側の仕様変更）。いま自動で最新版に更新を試みます。\n"
+     "直らないときは手動で：`ssh oracle` →`cd seikatsu-bot && venv/bin/pip install -U --pre \"yt-dlp[default]\"` → `sudo systemctl restart seikatsu-bot`"),
+    (("page needs to be reloaded",), "yt_reload",
+     "🔁 YouTubeが「ページの再読み込みが必要」と返しました。多くは一時的なものです。続くならCookieを取り直してください。"),
+)
+
+def classify_yt_error(msg):
+    """yt-dlpの例外文 → (key, 案内文)。当てはまらなければ None"""
+    low = (msg or "").lower()
+    for words, key, guide in YT_ERROR_GUIDES:
+        if any(w in low for w in words):
+            return key, guide
+    return None
+
+async def report_yt_error(e):
+    hit = classify_yt_error(repr(e))
+    if not hit:
+        return
+    key, guide = hit
+    if await bot_alert(guide + f"\n-# {repr(e)[:300]}", key=key):
+        if key == "yt_update":
+            asyncio.create_task(ytdlp_self_update("再生エラー"))
+
+def _ytdlp_installed_version():
+    """いまディスク上にあるyt-dlpのバージョン（別プロセスで確認＝読み込み済みモジュールに左右されない）"""
+    import subprocess
+    import sys as _sys
+    try:
+        r = subprocess.run([_sys.executable, "-c", "import yt_dlp.version as v; print(v.__version__)"],
+                           capture_output=True, text=True, timeout=60)
+        return (r.stdout or "").strip() or None
+    except Exception:
+        return None
+
+_update_lock = {"busy": False}
+
+async def ytdlp_self_update(reason=""):
+    """yt-dlpを最新ナイトリーに更新し、変わっていたら再生が止まっているときに再起動する（Restart=alwaysで復帰）"""
+    import sys as _sys
+    if _update_lock["busy"]:
+        return None
+    _update_lock["busy"] = True
+    try:
+        before = await asyncio.to_thread(_ytdlp_installed_version)
+        proc = await asyncio.create_subprocess_exec(
+            _sys.executable, "-m", "pip", "install", "-q", "-U", "--pre", "yt-dlp[default]",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=600)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await bot_alert("⚠️ yt-dlpの自動更新がタイムアウトしました（10分）。手動更新をお願いします。", key="yt_upd_fail", cooldown_h=24)
+            return None
+        after = await asyncio.to_thread(_ytdlp_installed_version)
+        if proc.returncode != 0 or not after:
+            await bot_alert(f"⚠️ yt-dlpの自動更新に失敗しました（{reason}）\n-# {(out or b'').decode(errors='replace')[-300:]}",
+                            key="yt_upd_fail", cooldown_h=24)
+            return None
+        if after == before:
+            print(f"yt-dlpは最新（{after}）", flush=True)
+            return False
+        await bot_alert(f"⬆️ yt-dlpを更新しました：{before} → {after}（{reason}）。再生が止まっているタイミングで自動で再起動します。")
+        asyncio.create_task(_restart_when_idle())
+        return True
+    finally:
+        _update_lock["busy"] = False
+
+async def _restart_when_idle(max_wait_min=180):
+    """再生中は待ち、止まったら（最長3時間で打ち切り）プロセスを終了→systemdが10秒後に再起動"""
+    for _ in range(max_wait_min):
+        vc = _player.get("vc")
+        if not (vc and vc.is_connected() and (vc.is_playing() or vc.is_paused())):
+            break
+        await asyncio.sleep(60)
+    print("♻️ 更新を反映するため再起動します", flush=True)
+    try:
+        await db.commit()
+    except Exception:
+        pass
+    os._exit(0)
+
+async def offsite_backup():
+    """DBを圧縮して #bot管理🔒 に添付＝VMが壊れても記録が残る（週1回）"""
+    import gzip
+    import shutil
+    dest = await backup_db()
+    gz = dest + ".gz"
+
+    def _z():
+        with open(dest, "rb") as f, gzip.open(gz, "wb") as g:
+            shutil.copyfileobj(f, g)
+    await asyncio.to_thread(_z)
+    size_mb = os.path.getsize(gz) / 1024 / 1024
+    try:
+        if size_mb > 9.5:   # Discordの添付上限（ブーストなし10MB）
+            await bot_alert(f"⚠️ DBが大きくなり（圧縮後 {size_mb:.1f}MB）Discordに添付できません。VMの `backups/` から手動で保存してください。",
+                            key="bk_big", cooldown_h=24 * 6)
+            return False
+        ok = await bot_alert(f"💾 週1回のDBバックアップです（{day_str(now_jst())}・{size_mb:.2f}MB）。\n"
+                             "-# 復元：VMで `gunzip` して `seikatsu.db` と差し替え → 再起動。手順は docs/保守マニュアル.md",
+                             file=discord.File(gz, filename=os.path.basename(gz)))
+        return ok
+    finally:
+        try:
+            os.remove(gz)
+        except Exception:
+            pass
+
+@bot.tree.command(name="kanri", description="【管理者用】Botのメンテ（状態確認・今すぐバックアップ・yt-dlp更新）")
+@app_commands.checks.has_permissions(administrator=True)
+@app_commands.describe(sousa="やること")
+@app_commands.choices(sousa=[app_commands.Choice(name="状態を確認", value="status"),
+                             app_commands.Choice(name="DBを今すぐ #bot管理🔒 にバックアップ", value="backup"),
+                             app_commands.Choice(name="yt-dlpを今すぐ更新（変わったら自動で再起動）", value="update")])
+async def kanri_command(interaction, sousa: app_commands.Choice[str]):
+    await interaction.response.defer(ephemeral=True)
+    if sousa.value == "backup":
+        ok = await offsite_backup()
+        await interaction.followup.send("💾 バックアップを #bot管理🔒 に送りました。" if ok else "⚠️ 送れませんでした（/setup で #bot管理🔒 を作ってね）",
+                                        ephemeral=True)
+        return
+    if sousa.value == "update":
+        r = await ytdlp_self_update("手動")
+        await interaction.followup.send({True: "⬆️ 更新しました。再生が止まり次第、自動で再起動します。",
+                                         False: "✅ yt-dlpはすでに最新でした。",
+                                         None: "⚠️ 更新に失敗しました（#bot管理🔒 に詳細）。"}[r], ephemeral=True)
+        return
+    ver = await asyncio.to_thread(_ytdlp_installed_version)
+    try:
+        db_mb = os.path.getsize(DB_PATH) / 1024 / 1024
+    except Exception:
+        db_mb = 0
+    vc = _player.get("vc")
+    lines = [f"🤖 **Botの状態**",
+             f"・yt-dlp：{ver or '不明'}",
+             f"・YouTube Cookie：{'あり' if os.path.exists(YTDLP_COOKIES) else '⚠️ なし（YouTubeが再生できない）'}",
+             f"・Spotify連携：{'設定あり' if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET else '未設定'}",
+             f"・DB：{db_mb:.2f}MB／最終外部バックアップ週：{await meta_get('ops_backup_week') or 'まだ'}",
+             f"・音楽：{'再生中 ' + (_player.get('current') or '') if vc and vc.is_connected() and vc.is_playing() else ('VCで待機中' if vc and vc.is_connected() else 'VCにいない')}",
+             f"・管理チャンネル：{'あり' if await meta_get('ch_botlog') else '⚠️ なし（/setup で作成）'}"]
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+async def ops_daily(now):
+    """毎朝の運用タスク：火曜4時=yt-dlp更新／月曜5時=外部バックアップ（それぞれ週1回）"""
+    wk = now.strftime("%G-W%V")
+    if now.weekday() == 1 and now.hour == 4 and await meta_get("ops_ytupd_week") != wk:
+        await meta_set("ops_ytupd_week", wk)
+        await ytdlp_self_update("週1回の定期更新")
+    if now.weekday() == 0 and now.hour == 5 and await meta_get("ops_backup_week") != wk:
+        await meta_set("ops_backup_week", wk)
+        await offsite_backup()
+
 # ---- ⏰ 起床リマインド（オプトイン）：締切のN分前に未報告ならメンション ----
 _wakeremind_cache = {"day": None, "done": set()}
 
@@ -2515,6 +2723,10 @@ async def judge_loop():
         await wake_remind_check(now)   # ⏰起床リマインド（オプトインの人だけ）
     except Exception as e:
         print(f"起床リマインドエラー: {e!r}", flush=True)
+    try:
+        await ops_daily(now)   # 🔒 yt-dlpの週1自動更新・DBの外部バックアップ
+    except Exception as e:
+        await bot_alert(f"⚠️ 定期メンテでエラー：{e!r}"[:500], key="ops_err", cooldown_h=24)
     try:   # 🌙 24時をまわっても作業部屋に人がいたら、VCチャットからそっと声かけ（1日1回）
         if now.hour == 0 and await meta_get("oyasumi_nudge_day") != day:
             await meta_set("oyasumi_nudge_day", day)
@@ -2710,6 +2922,10 @@ async def _ytdlp_resolve(query):
         return await asyncio.to_thread(_ex)
     except Exception as e:
         print(f"yt-dlp失敗: {e!r}", flush=True)
+        try:
+            await report_yt_error(e)   # Cookie切れ・yt-dlp古い等なら #bot管理🔒 に直し方つきで通知（＋自動更新）
+        except Exception:
+            pass
         return None
 
 PLAYLIST_MAX = 50   # プレイリストから一度に積む上限
@@ -2833,6 +3049,9 @@ async def _spotify_embed_tracks(sid):
     m = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.S)
     if not m:
         print("Spotify埋め込み: __NEXT_DATA__が見つからない（ページ構造変更？）", flush=True)
+        await bot_alert("🟢 **Spotifyのプレイリストが読めなくなりました**（埋め込みページの仕組みが変わった可能性）。"
+                        "単曲・アルバムURLは引き続き使えます。直すには `_spotify_embed_tracks` の読み取り部分の修正が必要です"
+                        "（docs/保守マニュアル.md 参照）。", key="sp_embed", cooldown_h=48)
         return None
     try:
         data = json.loads(m.group(1))
@@ -2898,7 +3117,11 @@ async def spotify_tracks(kind, sid):
             async with sess.get(f"https://api.spotify.com/v1/playlists/{sid}?market=JP&fields=name", headers=H) as r:
                 if r.status != 200:
                     # 403「Active premium subscription required」=アプリ所有者が無料アカウント（2025年からPremium必須）
-                    print(f"Spotify API {r.status}: {(await r.text())[:200]}", flush=True)
+                    body = (await r.text())[:200]
+                    print(f"Spotify API {r.status}: {body}", flush=True)
+                    if "premium" in body.lower():
+                        await bot_alert("🟢 **Spotify連携が止まりました**：アプリ所有者のSpotify Premiumが切れている可能性"
+                                        "（Premium必須の仕様）。再加入すると数時間で復活します。", key="sp_premium", cooldown_h=48)
                     return None
                 title = ((await r.json()).get("name") or "プレイリスト")[:60]
             emb = await _spotify_embed_tracks(sid)   # 曲一覧は埋め込みページが本命（APIは開発モードアプリに403）
@@ -4717,6 +4940,10 @@ async def on_ready():
     if not remind_loop.is_running():
         remind_loop.start()
     await load_role_msgs()
+    if not _ops_hello["done"]:   # 起動の知らせ（デプロイ・自動再起動が正しく終わったかの確認用）
+        _ops_hello["done"] = True
+        ver = await asyncio.to_thread(_ytdlp_installed_version)
+        await bot_alert(f"🟢 起動しました（yt-dlp {ver or '不明'}・Cookie {'あり' if os.path.exists(YTDLP_COOKIES) else '**なし**'}）")
     print("====================================", flush=True)
 
 @bot.event
@@ -9066,6 +9293,11 @@ async def setup_command(interaction):
         role_note = "ロール：" + (f"作成 {', '.join(created)}" if created else "既存を利用") + f"／パネル {n_panels}/3 件 → {rch.mention}\n"
     audio_state = "あり ✅" if os.path.exists(RADIO_MP3) else f"なし ⚠️ VMに {RADIO_MP3} を置いてください"
     tips_ch = await ensure_tips_forum(guild, cat)
+    try:
+        botlog = await ensure_botlog_channel(guild, cat)
+    except Exception as e:
+        botlog = None
+        SETUP_ERRORS.append(f"#{BOTLOG_CH_NAME} を作れませんでした（{e!r}）")
     await meta_set("guild_id", guild.id)
     for key in VIEW_FACTORY:
         await refresh_panel(key)   # 最下部にあるパネルは編集だけ＝変更のないチャンネルに新着を出さない
@@ -9101,6 +9333,7 @@ async def setup_command(interaction):
         + f"叱り絵文字：`:{KORA_EMOJI_NAME}:`（{kora_emoji(guild)}）\n"
         + role_note
         + f"ラジオ体操：毎朝 {RADIO_TIME} に {vc.mention} で再生（音源 {audio_state}）"
+        + (f"\n🔒 管理用：{botlog.mention}（エラー通知・自動メンテ・週1バックアップ。管理者だけに見えます）" if botlog else "")
         + ("\n⚠️ " + "\n⚠️ ".join(dict.fromkeys(SETUP_ERRORS)) if SETUP_ERRORS else ""), ephemeral=True)
 
 async def nakama_of(uid, wake_deadline):
@@ -9282,6 +9515,9 @@ async def on_app_command_error(interaction, error):
         if "50013" in str(error) or "Missing Permissions" in str(error):
             msg += "\n💡 Botの権限不足です。サーバー設定→ロール→Botのロールに「チャンネルの管理」「ロールの管理」「メッセージの送信」「メッセージの管理」があるか、Botのロールが付与対象ロールより上にあるか確認してください。"
         print(f"command error: {error!r}", flush=True)
+        cmd = getattr(interaction.command, "qualified_name", "?")
+        await bot_alert(f"⚠️ コマンド `/{cmd}` でエラー（{interaction.user.display_name}）\n-# {_short_tb(error)}",
+                        key=f"cmd:{cmd}:{type(error).__name__}", cooldown_h=1)
     try:
         if interaction.response.is_done():
             await interaction.followup.send(msg, ephemeral=True)
@@ -9289,6 +9525,29 @@ async def on_app_command_error(interaction, error):
             await interaction.response.send_message(msg, ephemeral=True)
     except Exception:
         pass
+
+def _short_tb(error):
+    """例外を「どのファイルの何行目で何が」の短い1行に（#bot管理🔒用）"""
+    import traceback
+    err = getattr(error, "original", error)
+    frames = traceback.extract_tb(err.__traceback__) if err.__traceback__ else []
+    where = next((f"bot.py:{f.lineno} {f.name}" for f in reversed(frames) if f.filename.endswith("bot.py")), "")
+    return f"{type(err).__name__}: {str(err)[:200]}" + (f"（{where}）" if where else "")
+
+async def _view_on_error(self, interaction, error, item):
+    """ボタン・セレクト操作で起きたエラーも #bot管理🔒 に（discord.pyの既定はログに出すだけ）"""
+    print(f"view error: {error!r}", flush=True)
+    label = getattr(item, "custom_id", None) or getattr(item, "label", None) or type(item).__name__
+    await bot_alert(f"⚠️ ボタン/選択 `{label}` でエラー（{interaction.user.display_name}）\n-# {_short_tb(error)}",
+                    key=f"view:{type(item).__name__}:{type(error).__name__}", cooldown_h=1)
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ うまく処理できませんでした。少し待ってからもう一度試してね。", ephemeral=True)
+    except Exception:
+        pass
+
+discord.ui.View.on_error = _view_on_error
+discord.ui.Modal.on_error = lambda self, interaction, error: _view_on_error(self, interaction, error, self)
 
 # --- 起動 ---
 if __name__ == "__main__":
