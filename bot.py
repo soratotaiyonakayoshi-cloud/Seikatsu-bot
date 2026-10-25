@@ -97,7 +97,7 @@ CH = {
     "kadai": ("課題📚", "🎓 で履修科目を登録 → 気づいた人が ➕ で課題を登録 → 同じ科目の履修者だけに通知＆リマインド（3日前・前日・当日）。\n"
               "毎週出るプリントや出席フォームは 🔁 毎週課題に登録すれば自動で課題化。投稿の ✅ で完了、選択式で出さない課題は 🚫 で外せます。\n"
               "🗒 科目メモ＝教室変更・持ち物などを履修者で共有（授業の日の朝に表示）。\n"
-              "🎓 大学の予定＝長期休暇・履修登録期間などをだれでも登録（朝の予定・今後の予定・お知らせに出ます）。コマンド派は `/jikanwari` `/kadai` でも。"),
+              "🏫 大学の予定＝長期休暇・履修登録期間などをだれでも登録（朝の予定・今後の予定・お知らせに出ます）。コマンド派は `/jikanwari` `/kadai` でも。"),
     "settei": ("設定🔧", "🛠 ボタンから項目を選んで自分の最低限を設定（`/saitei` でまとめて設定も可）。毎週の定休日（曜日）もここで。\n"
                "`/kojin add` で自分だけの項目を追加し、📝ボタンで毎日チェック。`/oyasumi` で単発のお休み申告。"),
 }
@@ -5576,7 +5576,7 @@ async def remind_loop():
     except Exception as e:
         print(f"fridge remind error: {e!r}", flush=True)
     try:
-        await univ_event_remind()   # 🎓 大学の予定（3日前・開始日・履修登録の締切2日前）
+        await univ_event_remind()   # 🏫 大学の予定（3日前・開始日・履修登録の締切2日前）
     except Exception as e:
         print(f"univ event remind error: {e!r}", flush=True)
     try:
@@ -6846,13 +6846,13 @@ class FreeSlotRemoveSelect(discord.ui.Select):
         await db.commit()
         await interaction.response.edit_message(content=f"🗑 {len(self.values)} 件消しました。", view=None)
 
-# ---- 🎓 大学の予定（長期休暇・履修登録期間など。誰でも登録→朝の予定・今後の予定・#課題📚 のお知らせに出る） ----
+# ---- 🏫 大学の予定（長期休暇・履修登録期間など。誰でも登録→朝の予定・今後の予定・#課題📚 のお知らせに出る） ----
 UNIV_KINDS = [("長期休暇", "🌸", "期間中は時間割と毎週課題がお休み・起床締切が少し遅くなる"),
               ("履修登録", "📋", "期間中は朝の予定に締切までの日数が出る"),
-              ("試験期間", "📝", "定期試験の期間"),
               ("行事", "🎪", "学園祭・休講日・オープンキャンパスなど"),
               ("その他", "📌", "そのほか全員に関係する予定")]
-UNIV_EMOJI = {k: e for k, e, _ in UNIV_KINDS}
+# 試験は科目ごとに日程が違うので、全体の「試験期間」は選ばせない（科目ごとの 📝 試験日 を使う）。過去の登録分の表示用に絵文字だけ残す
+UNIV_EMOJI = {**{k: e for k, e, _ in UNIV_KINDS}, "試験期間": "📝"}
 
 def md(iso):
     return f"{int(iso[5:7])}/{int(iso[8:])}"
@@ -6905,11 +6905,11 @@ async def univ_event_remind(now=None):
         s, e = date.fromisoformat(r["start_day"]), date.fromisoformat(r["end_day"])
         stage = None
         if (s - t).days == 3:
-            stage, msg = "pre", f"🎓 **3日後から**：{univ_line(r, today)}"
+            stage, msg = "pre", f"🏫 **3日後から**：{univ_line(r, today)}"
         elif s == t:
-            stage, msg = "start", f"🎓 **今日から**：{univ_line(r, today)}" if s != e else f"🎓 **今日**：{univ_line(r, today)}"
+            stage, msg = "start", f"🏫 **今日から**：{univ_line(r, today)}" if s != e else f"🏫 **今日**：{univ_line(r, today)}"
         elif r["kind"] == "履修登録" and (e - t).days == 2 and e > s:
-            stage, msg = "end2", f"🎓 **締切まであと2日**：{univ_line(r, today)}　登録し忘れに注意！"
+            stage, msg = "end2", f"🏫 **締切まであと2日**：{univ_line(r, today)}　登録し忘れに注意！"
         if not stage:
             continue
         async with db.execute("SELECT 1 FROM univ_event_reminded WHERE event_id=? AND stage=?", (r["id"], stage)) as c:
@@ -6927,7 +6927,7 @@ async def univ_event_remind(now=None):
 
 class UnivEventModal(discord.ui.Modal):
     def __init__(self, kind):
-        super().__init__(title=f"🎓 大学の予定：{kind}"[:45])
+        super().__init__(title=f"🏫 大学の予定：{kind}"[:45])
         self.kind = kind
         self.t_in = discord.ui.TextInput(label="名前", max_length=40, default=kind if kind != "その他" else None,
                                          placeholder="例：前期 履修登録／春休み／学園祭")
@@ -6954,8 +6954,8 @@ class UnivEventModal(discord.ui.Modal):
         await interaction.response.send_message(f"✅ 登録しました：{univ_line(r, day_str(now))}{extra}", ephemeral=True)
         ch = await get_ch("kadai")
         if ch:
-            await ch.send(f"🎓 **{interaction.user.display_name}** が大学の予定を登録しました：{univ_line(r, day_str(now))}"
-                          "\n-# 間違いに気づいたら登録した人に教えてね（課題パネルの 🎓 大学の予定 から消せます）")
+            await ch.send(f"🏫 **{interaction.user.display_name}** が大学の予定を登録しました：{univ_line(r, day_str(now))}"
+                          "\n-# 間違いに気づいたら登録した人に教えてね（課題パネルの 🏫 大学の予定 から消せます）")
             await bump_panel("kadai")
 
 class UnivKindSelect(discord.ui.Select):
@@ -6987,7 +6987,7 @@ class UnivDelSelect(discord.ui.Select):
 async def univ_hub_message(user):
     today = day_str(now_jst())
     rows = await univ_events_between(today, (date.fromisoformat(today) + timedelta(days=180)).isoformat())
-    lines = ["🎓 **大学の予定**（だれでも登録OK・朝の予定と 📆今後の予定 に出ます）"]
+    lines = ["🏫 **大学の予定**（だれでも登録OK・朝の予定と 📆今後の予定 に出ます）"]
     lines += [f"・{univ_line(r, today)}（{r['uname']}）" for r in rows[:15]] \
         or ["-# まだ登録がありません。長期休暇や履修登録の期間を入れておくとみんなが助かります"]
     v = discord.ui.View(timeout=600)
@@ -7153,7 +7153,7 @@ class KadaiPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🎓 大学の予定", style=discord.ButtonStyle.secondary, custom_id="sk_univ", row=1)
+    @discord.ui.button(label="🏫 大学の予定", style=discord.ButtonStyle.secondary, custom_id="sk_univ", row=1)
     async def univ_btn(self, interaction, button):
         await ensure_user(interaction.user)
         text, v = await univ_hub_message(interaction.user)
@@ -7391,12 +7391,12 @@ async def today_digest(uid, now, label="今日"):
     dc = DAY_CHARS[now.weekday()]
     per = {}
     lines = []
-    try:   # 🎓 大学の予定：開催中（長期休暇は下の一言で出す）と、3日以内に始まるもの
+    try:   # 🏫 大学の予定：開催中（長期休暇は下の一言で出す）と、3日以内に始まるもの
         tday = day_str(now)
         for r in await univ_events_between(tday, (now.date() + timedelta(days=3)).isoformat()):
             if r["kind"] == "長期休暇" and r["start_day"] <= tday:
                 continue
-            lines.append(("🎓 いま：" if r["start_day"] <= tday else "🎓 もうすぐ：") + univ_line(r, tday))
+            lines.append(("🏫 いま：" if r["start_day"] <= tday else "🏫 もうすぐ：") + univ_line(r, tday))
     except Exception:
         pass
     if break_on(now):   # 🌸 長期休暇中は授業がないので時間割は出さない
@@ -7519,7 +7519,7 @@ async def upcoming_digest(uid, now, days=7):
         tday = day_str(now)
         ev = await univ_events_between(tday, (now.date() + timedelta(days=30)).isoformat())
         if ev:
-            lines.append("🎓 **大学の予定（30日以内）**")
+            lines.append("🏫 **大学の予定（30日以内）**")
             lines += [f"　{univ_line(r, tday)}" for r in ev[:8]]
     except Exception:
         pass

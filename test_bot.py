@@ -809,7 +809,9 @@ async def main():
            B.univ_status({"kind": "行事", "start_day": "2027-01-10", "end_day": "2027-01-10"}, "2027-01-10")),
           ("あと3日", "今日まで！", "今日！"))
     _dg2 = await B.today_digest("95", _now)
-    check("大学の予定: 開催中は朝の予定に出る", "🎓 いま" in _dg2 and "前期 履修登録" in _dg2, True)
+    check("大学の予定: 開催中は朝の予定に出る", "🏫 いま" in _dg2 and "前期 履修登録" in _dg2, True)
+    check("大学の予定: 試験期間は選べない（科目ごとの📝試験日を使う）", "試験期間" in [o.value for o in B.UnivKindSelect().options], False)
+    check("大学の予定: ボタンは🏫", any(getattr(i, "label", "") == "🏫 大学の予定" for i in B.KadaiPanelView().children), True)
     _up = await B.upcoming_digest("95", _now)
     check("大学の予定: 今後の予定にも出る", "大学の予定" in _up and "前期 履修登録" in _up, True)
     await B.add_univ_event("96", "長期休暇", "冬休み", date(2027, 12, 25), date(2028, 1, 6))
