@@ -9402,7 +9402,7 @@ def render_shiori_card(name, st):
         vf = F(56 if len(val) <= 6 else 44, True)
         d.text((tx + 22, yy + 62), val, font=vf, fill=CARD_ORANGE if i in (2, 3) else CARD_INK)
         if sub:
-            d.text((tx + 22, yy + th - 38), sub, font=F(20), fill=CARD_MUTED)
+            d.text((tx + 22, yy + th - 32), sub, font=F(16), fill=CARD_MUTED)
     # 達成カレンダー
     cy = ty + th * 2 + gap + 46
     _draw_mixed(d, pad, cy, "📅 達成カレンダー", F(30, True), E(30), CARD_INK)
@@ -9446,7 +9446,7 @@ def render_shiori_card(name, st):
     if bowl:
         fx += _paste_art(img, bowl, pad, H - 92, 64) + 14
     d.text((fx, H - 84), "最低限生活リズムサークル", font=F(30, True), fill=CARD_INK)
-    d.text((W - pad, H - 76), "比べる相手は、過去の自分だけ。", font=F(22), fill=CARD_MUTED, anchor="ra")
+    d.text((W - pad, H - 76), "来月もレッツなまりず", font=F(22), fill=CARD_MUTED, anchor="ra")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
