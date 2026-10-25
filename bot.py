@@ -7029,25 +7029,67 @@ WMO = {0: "☀️快晴", 1: "🌤晴れ", 2: "⛅晴れ時々くもり", 3: "�
        56: "🌧みぞれ", 57: "🌧みぞれ", 61: "🌧雨", 63: "🌧雨", 65: "🌧強い雨", 66: "🌧みぞれ", 67: "🌧みぞれ", 71: "🌨雪", 73: "🌨雪", 75: "❄️大雪",
        77: "🌨雪", 80: "🌦にわか雨", 81: "🌧にわか雨", 82: "⛈激しい雨", 85: "🌨にわか雪", 86: "🌨にわか雪", 95: "⛈雷雨", 96: "⛈雷雨", 99: "⛈雷雨"}
 
-async def fetch_weather(day_offset=0):
-    """今日（day_offset=0）または明日（=1）の天気を1行で。失敗したら空文字"""
+_weather_cache = {"ts": 0.0, "daily": None}
+
+async def weather_daily():
+    """Open-Meteoの今日・明日の予報（daily配列）。30分キャッシュ。失敗は None"""
+    import time as _t
     import aiohttp
+    if _weather_cache["daily"] and _t.time() - _weather_cache["ts"] < 1800:
+        return _weather_cache["daily"]
     url = (f"https://api.open-meteo.com/v1/forecast?latitude={WEATHER_LAT}&longitude={WEATHER_LON}"
            "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
-           f"&timezone=Asia%2FTokyo&forecast_days={day_offset + 1}")
+           "&timezone=Asia%2FTokyo&forecast_days=2")
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as sess:
             async with sess.get(url) as r:
                 if r.status != 200:
-                    return ""
+                    return None
                 d = (await r.json())["daily"]
-        i = day_offset
-        code = int(d["weather_code"][i])
-        return (f"{WMO.get(code, '🌡')}　最高 {d['temperature_2m_max'][i]:.0f}℃／最低 {d['temperature_2m_min'][i]:.0f}℃"
-                + (f"　☔ {int(d['precipitation_probability_max'][i])}%" if d.get("precipitation_probability_max") and d["precipitation_probability_max"][i] is not None else ""))
     except Exception as e:
         print(f"天気取得失敗: {e!r}", flush=True)
+        return None
+    _weather_cache.update(ts=_t.time(), daily=d)
+    return d
+
+RAIN_CODES = set(range(51, 68)) | set(range(80, 83)) | set(range(95, 100))   # WMO：霧雨・雨・にわか雨・雷雨
+
+def rain_info(d, i):
+    """(降水確率%またはNone, 雨っぽいか)"""
+    try:
+        p = (d.get("precipitation_probability_max") or [None, None])[i]
+        code = int(d["weather_code"][i])
+        return (int(p) if p is not None else None), (code in RAIN_CODES or (p is not None and p >= 50))
+    except Exception:
+        return None, False
+
+async def fetch_weather(day_offset=0):
+    """今日（day_offset=0）または明日（=1）の天気を1行で。失敗したら空文字"""
+    d = await weather_daily()
+    if not d:
         return ""
+    try:
+        i = day_offset
+        code = int(d["weather_code"][i])
+        p, _ = rain_info(d, i)
+        return (f"{WMO.get(code, '🌡')}　最高 {d['temperature_2m_max'][i]:.0f}℃／最低 {d['temperature_2m_min'][i]:.0f}℃"
+                + (f"　☔ {p}%" if p is not None else ""))
+    except Exception as e:
+        print(f"天気整形失敗: {e!r}", flush=True)
+        return ""
+
+async def laundry_rain_note(day_obj):
+    """洗濯の日に雨予報なら一言（今日・明日の予報だけ見る）。それ以外は空文字"""
+    off = (day_obj - now_jst().date()).days
+    if off not in (0, 1):
+        return ""
+    d = await weather_daily()
+    if not d:
+        return ""
+    p, rainy = rain_info(d, off)
+    if not rainy:
+        return ""
+    return f"☔ 雨予報{f'（降水{p}%）' if p is not None else ''}なので、洗濯は部屋干しか別の日に回すのがおすすめ"
 
 async def today_digest(uid, now, label="今日"):
     """「今日（明日）の授業」「未完了の課題」のダイジェスト。明日分は now に翌日・label='明日' を渡す"""
@@ -7131,6 +7173,13 @@ async def today_digest(uid, now, label="今日"):
         due = [st for st in await kaji_status(u, day_str(now)) if st["due"]]
         if due:
             lines.append(f"🧹 {label}やる家事：" + "／".join(f"{st['emoji']}{st['label']}（{kaji_interval_text(st['n'])}）" for st in due))
+            if any(st["label"] == "洗濯" for st in due):
+                try:
+                    rn = await laundry_rain_note(now.date())
+                    if rn:
+                        lines.append("　" + rn)
+                except Exception:
+                    pass
     try:
         ms = await open_memos(uid, day_str(now))
         if ms:
@@ -7141,6 +7190,8 @@ async def today_digest(uid, now, label="今日"):
         fr = await fridge_soon(uid, day_str(now))
         if fr:
             lines.append("🧊 期限が近い食品：" + "／".join(fr))
+            for h in await fridge_tip_hints(uid, day_str(now)):
+                lines.append("　💡 " + h)
     except Exception:
         pass
     try:
@@ -8949,6 +9000,24 @@ async def fridge_soon(uid, today):
     for r in await fridge_items_of(uid):
         if (date.fromisoformat(r["due_day"]) - date.fromisoformat(today)).days <= 1:
             out.append(f"**{r['name']}**（{fridge_label(r['due_day'], today)}）")
+    return out
+
+async def fridge_tip_hints(uid, today, limit=2):
+    """期限が近い食品の名前で #暮らしのtips📚 を探して「使いみち」のヒントを返す（無ければ空）"""
+    out, used = [], set()
+    for r in await fridge_items_of(uid):
+        if (date.fromisoformat(r["due_day"]) - date.fromisoformat(today)).days > 1:
+            continue
+        name = r["name"]
+        words = [name] + [p for p in FRIDGE_PRESETS if p in name and p != name]   # 低脂肪牛乳→牛乳 でも探す
+        for w in words:
+            hits = [t for t in await search_tips(keyword=w, limit=3, today=today) if t["id"] not in used]
+            if hits:
+                used.add(hits[0]["id"])
+                out.append(f"**{name}** を使うなら →「{hits[0]['title']}」<#{hits[0]['thread_id']}>")
+                break
+        if len(out) >= limit:
+            break
     return out
 
 async def fridge_cleanup(today):

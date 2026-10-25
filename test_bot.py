@@ -778,6 +778,25 @@ async def main():
     check("新学期: まとめて外す（欠席カウンターも）", await B.drop_courses("95", ["old001"]), 1)
     check("新学期: 外れた", (await (await B.db.execute("SELECT COUNT(*) AS n FROM attendance WHERE user_id='95' AND code='old001'")).fetchone())["n"], 0)
 
+    # ☔ 天気×洗濯（キャッシュに予報を入れて判定）
+    import time as _time
+    B._weather_cache.update(ts=_time.time(), daily={"weather_code": [61, 1], "precipitation_probability_max": [80, 10],
+                                                    "temperature_2m_max": [15, 20], "temperature_2m_min": [8, 10]})
+    check("天気: 雨コード＋80%は雨", B.rain_info(B._weather_cache["daily"], 0), (80, True))
+    check("天気: 晴れ10%は雨じゃない", B.rain_info(B._weather_cache["daily"], 1), (10, False))
+    _today = B.now_jst().date()
+    check("洗濯: 今日が雨なら一言", "部屋干し" in await B.laundry_rain_note(_today), True)
+    check("洗濯: 明日が晴れなら何も言わない", await B.laundry_rain_note(_today + B.timedelta(days=1)), "")
+    check("天気: 1行表示に降水確率", "☔ 80%" in await B.fetch_weather(0), True)
+    B._weather_cache.update(ts=0.0, daily=None)
+
+    # 💡 冷蔵庫→TIPS（プリセット名で言い換えて探す）
+    _tday = B.day_str(B.now_jst())
+    await B.db.execute("INSERT INTO tips(thread_id,author_id,title,tags,day,ts) VALUES('t9001','95','牛乳で作るミルク粥','🍳レシピ',?,0)", (_tday,))
+    await B.db.execute("INSERT INTO fridge_items(user_id,name,due_day,created_day) VALUES('98','低脂肪牛乳',?,?)", (_tday, _tday))
+    await B.db.commit()
+    check("冷蔵庫ヒント: 低脂肪牛乳→牛乳のTIPS", await B.fridge_tip_hints("98", _tday), ["**低脂肪牛乳** を使うなら →「牛乳で作るミルク粥」<#t9001>"])
+
     # 🍳 朝ごはんストリーク（今日まだなら昨日から・お休みは飛ばす）
     def _ts(dd, h):
         return int(datetime(2026, 9, dd, h, 0, tzinfo=JST).timestamp())
