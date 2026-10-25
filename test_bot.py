@@ -820,6 +820,14 @@ async def main():
     await B.db.execute("DELETE FROM univ_events WHERE kind='長期休暇'"); await B.db.commit(); await B.load_break()
     check("大学の予定: 消すと休暇モードも外れる", B.break_on("2027-12-30"), False)
 
+    # 🗓 予定カレンダー
+    await B.add_univ_event("95", "行事", "学園祭", date(2026, 11, 20), date(2026, 11, 22))
+    _gs, _ge, _evs, _its = await B.calendar_data("95", 2026, 11)
+    check("カレンダー: グリッドは月曜はじまり・日曜おわり", (_gs.weekday(), _ge.weekday(), _gs <= date(2026, 11, 1)), (0, 6, True))
+    check("カレンダー: 大学の予定が入る", any(r["title"] == "学園祭" for r in _evs), True)
+    check("カレンダー: 画像PNG生成", B.render_calendar_card("テスト", 2026, 11, _gs, _ge, _evs, _its, "2026-11-21") is not None, True)
+    check("カレンダー: 今後の予定にもボタン", len(B.calendar_buttons(B.discord.ui.View(), row=0).children), 2)
+
     # 🐾 いやしアルバム（見出しは文字・横の茶碗なし）
     from PIL import Image as _PI
     _bio = __import__("io").BytesIO()

@@ -811,7 +811,7 @@ class WakeView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         text = await upcoming_digest(interaction.user.id, now_jst())
         await interaction.followup.send("📆 **今後の予定**\n" + (text or "7日以内の課題・試験・実験はありません。のんびりいこう"),
-                                        ephemeral=True)
+                                        view=calendar_buttons(discord.ui.View(timeout=600), row=0), ephemeral=True)
 
     @discord.ui.button(label="🏭 今夜は夜勤", style=discord.ButtonStyle.secondary, custom_id="sk_yakin", row=1)
     async def yakin(self, interaction, button):
@@ -6992,11 +6992,180 @@ async def univ_hub_message(user):
         or ["-# まだ登録がありません。長期休暇や履修登録の期間を入れておくとみんなが助かります"]
     v = discord.ui.View(timeout=600)
     v.add_item(UnivKindSelect())
+    calendar_buttons(v)
     admin = bool(getattr(user, "guild_permissions", None) and user.guild_permissions.administrator)
     mine = [r for r in rows if admin or r["created_by"] == str(user.id)]
     if mine:
         v.add_item(UnivDelSelect(mine))
     return "\n".join(lines), v
+
+# ---- 🗓 予定カレンダー（大学の予定は帯、自分の課題・試験・実験は日付のマスに。本人にだけ表示） ----
+UNIV_COLORS = {"長期休暇": "#e8913a", "履修登録": "#3d8f83", "行事": "#8a6fae", "その他": "#5b7fa6", "試験期間": "#c2527a"}
+
+async def calendar_data(uid, y, m):
+    """月表示の材料：(グリッド開始日, 終了日, 大学の予定, {日付: [自分の予定の文字列]})"""
+    first = date(y, m, 1)
+    last = date.fromisoformat(month_bounds(y, m)[1])
+    gs = first - timedelta(days=first.weekday())
+    ge = last + timedelta(days=6 - last.weekday())
+    events = await univ_events_between(gs.isoformat(), ge.isoformat())
+    items = {}
+    uid = str(uid)
+    t1 = int(datetime.combine(gs, datetime.min.time(), JST).timestamp())
+    t2 = int(datetime.combine(ge + timedelta(days=1), datetime.min.time(), JST).timestamp())
+    async with db.execute(
+        "SELECT a.id, a.title, a.due_ts, c.name AS cname, d.skip AS skip, d.user_id AS done_by FROM assignments a "
+        "JOIN courses c ON c.code=a.code LEFT JOIN assignment_done d ON d.assignment_id=a.id AND d.user_id=? "
+        "WHERE (a.created_by=? OR a.code IN (SELECT code FROM user_courses WHERE user_id=?)) AND a.due_ts >= ? AND a.due_ts < ? "
+        "ORDER BY a.due_ts", (uid, uid, uid, t1, t2)) as c:
+        for r in await c.fetchall():
+            if r["skip"]:
+                continue   # 🚫提出しないにした課題は載せない
+            k = datetime.fromtimestamp(r["due_ts"], JST).date().isoformat()
+            items.setdefault(k, []).append(("✅" if r["done_by"] else "📚") + r["title"])
+    async with db.execute("SELECT e.title, e.exam_day, c.name AS cname FROM exams e JOIN courses c ON c.code=e.code "
+                          "WHERE e.code IN (SELECT code FROM user_courses WHERE user_id=?) AND e.exam_day BETWEEN ? AND ?",
+                          (uid, gs.isoformat(), ge.isoformat())) as c:
+        for r in await c.fetchall():
+            items.setdefault(r["exam_day"], []).insert(0, f"📝{r['cname']}")
+    for c2 in await user_course_rows(uid):
+        for iso, txt in LAB_SCHEDULE.get(c2["code"], {}).items():
+            if gs.isoformat() <= iso <= ge.isoformat():
+                items.setdefault(iso, []).append(f"🧪{txt}")
+    return gs, ge, events, items
+
+def render_calendar_card(name, y, m, gs, ge, events, items, today):
+    """月カレンダー（PNG bytes）。描けなければ None"""
+    try:
+        from PIL import Image as PImage, ImageDraw, ImageFont
+    except Exception:
+        return None
+    f = _find_cjk_font()
+    if not f:
+        return None
+    fb = _find_cjk_font_bold() or f
+    ef = _find_emoji_font()
+    F = lambda s, bold=False: ImageFont.truetype(fb if bold else f, s)
+    E = lambda s: ImageFont.truetype(ef, s) if ef else None
+    pad, cw, rh, bar_h, bar_gap = 40, 143, 168, 26, 4
+    nrows = ((ge - gs).days + 1) // 7
+    W = pad * 2 + cw * 7
+    top = 150
+    H = top + 40 + nrows * rh + 130
+    img = PImage.new("RGB", (W, H), CARD_CREAM)
+    d = ImageDraw.Draw(img)
+    d.text((pad, 52), f"{y}年{m}月の予定", font=F(54, True), fill=CARD_INK)
+    d.text((pad + 4, 118), f"{name} さんのカレンダー（大学の予定＋自分の課題・試験・実験）", font=F(20), fill=CARD_MUTED)
+    logo = _gohan_art("logo")
+    if logo:
+        _paste_art(img, logo, W - pad - round(logo.width * 90 / logo.height), 30, 90)
+    for i, wd in enumerate("月火水木金土日"):
+        col = "#5b7fa6" if i == 5 else ("#c2527a" if i == 6 else CARD_MUTED)
+        d.text((pad + i * cw + cw // 2, top + 6), wd, font=F(22, True), fill=col, anchor="ma")
+    gy = top + 40
+
+    def fit(text, font, efont, maxw):
+        t = text
+        while t and _mixed_w(d, t, font, efont) > maxw:
+            t = t[:-1]
+        return t if t == text else (t[:-1] + "…" if len(t) > 1 else t)
+
+    # マス
+    for k in range((ge - gs).days + 1):
+        day = gs + timedelta(days=k)
+        x, yy = pad + (k % 7) * cw, gy + (k // 7) * rh
+        inm = day.month == m
+        d.rectangle([x, yy, x + cw, yy + rh], fill="#fffaf2" if inm else "#efe8da", outline=CARD_LINE, width=1)
+        if day.isoformat() == today:
+            d.rectangle([x + 2, yy + 2, x + cw - 2, yy + rh - 2], outline=CARD_ORANGE, width=3)
+        col = CARD_MUTED if not inm else ("#5b7fa6" if day.weekday() == 5 else ("#c2527a" if day.weekday() == 6 else CARD_INK))
+        d.text((x + 8, yy + 6), str(day.day), font=F(20, True), fill=col)
+    # 大学の予定の帯（重なりは段を分ける・2段まで）
+    lanes, lane_of = [], {}
+    for ev in sorted(events, key=lambda r: (r["start_day"], r["end_day"])):
+        for i, end in enumerate(lanes):
+            if end < ev["start_day"]:
+                lanes[i] = ev["end_day"]
+                lane_of[ev["id"]] = i
+                break
+        else:
+            lanes.append(ev["end_day"])
+            lane_of[ev["id"]] = len(lanes) - 1
+    used = {}
+    for ev in events:
+        ln = lane_of[ev["id"]]
+        if ln >= 2:
+            continue
+        s = max(date.fromisoformat(ev["start_day"]), gs)
+        e = min(date.fromisoformat(ev["end_day"]), ge)
+        cur = s
+        while cur <= e:
+            row = (cur - gs).days // 7
+            seg_end = min(e, gs + timedelta(days=row * 7 + 6))
+            c1, c2 = (cur - gs).days % 7, (seg_end - gs).days % 7
+            bx1, bx2 = pad + c1 * cw + 4, pad + (c2 + 1) * cw - 4
+            by = gy + row * rh + 34 + ln * (bar_h + bar_gap)
+            d.rounded_rectangle([bx1, by, bx2, by + bar_h], radius=8, fill=UNIV_COLORS.get(ev["kind"], "#5b7fa6"))
+            label = ("▶ " if cur > date.fromisoformat(ev["start_day"]) else "") + ev["title"]
+            d.text((bx1 + 8, by + 3), fit(label, F(16, True), None, bx2 - bx1 - 14), font=F(16, True), fill="#ffffff")
+            for k2 in range((cur - gs).days, (seg_end - gs).days + 1):
+                used[k2] = max(used.get(k2, 0), ln + 1)
+            cur = seg_end + timedelta(days=1)
+    # 自分の予定（課題・試験・実験）
+    for k in range((ge - gs).days + 1):
+        day = gs + timedelta(days=k)
+        lst = items.get(day.isoformat()) or []
+        if not lst:
+            continue
+        x, yy = pad + (k % 7) * cw, gy + (k // 7) * rh
+        iy = yy + 34 + used.get(k, 0) * (bar_h + bar_gap) + 2
+        room = (yy + rh - 6 - iy) // 22
+        show = lst if len(lst) <= room else lst[:max(0, room - 1)]
+        for t in show:
+            _draw_mixed(d, x + 6, iy, fit(t, F(15), E(15), cw - 12), F(15), E(15), CARD_INK)
+            iy += 22
+        if len(show) < len(lst):
+            d.text((x + 6, iy), f"ほか{len(lst) - len(show)}件", font=F(14), fill=CARD_MUTED)
+    # 凡例
+    ly = gy + nrows * rh + 26
+    x = pad
+    for kind in ("長期休暇", "履修登録", "行事", "その他"):
+        d.rounded_rectangle([x, ly + 4, x + 34, ly + 24], radius=6, fill=UNIV_COLORS[kind])
+        d.text((x + 42, ly), kind, font=F(20), fill=CARD_MUTED)
+        x += 42 + int(d.textlength(kind, font=F(20))) + 26
+    _draw_mixed(d, x + 10, ly, "📚課題　✅提出済み　📝試験　🧪実験", F(20), E(20), CARD_MUTED)
+    d.line([pad, H - 64, W - pad, H - 64], fill=CARD_LINE, width=2)
+    d.text((pad, H - 50), "最低限生活リズムサークル", font=F(24, True), fill=CARD_INK)
+    d.text((W - pad, H - 46), "予定は「大学の予定」ボタンから誰でも追加できます", font=F(18), fill=CARD_MUTED, anchor="ra")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+def calendar_buttons(view, row=2):
+    """今月・来月のカレンダーボタンを view に足す"""
+    for off, lb in ((0, "🗓 今月のカレンダー"), (1, "🗓 来月のカレンダー")):
+        b = discord.ui.Button(label=lb, style=discord.ButtonStyle.primary if off == 0 else discord.ButtonStyle.secondary, row=row)
+
+        async def _cb(interaction, off=off):
+            await send_calendar(interaction, off)
+        b.callback = _cb
+        view.add_item(b)
+    return view
+
+async def send_calendar(interaction, offset=0):
+    await interaction.response.defer(ephemeral=True)
+    now = now_jst()
+    y, m = now.year, now.month + offset
+    if m > 12:
+        y, m = y + 1, m - 12
+    gs, ge, events, items = await calendar_data(interaction.user.id, y, m)
+    buf = await asyncio.to_thread(render_calendar_card, interaction.user.display_name, y, m, gs, ge, events, items, day_str(now))
+    if not buf:
+        await interaction.followup.send("⚠️ カレンダーを作れませんでした（VMに日本語フォントが必要）。", ephemeral=True)
+        return
+    await interaction.followup.send(f"🗓 **{m}月の予定**（自分にだけ表示）", file=discord.File(buf, filename=f"calendar-{y}-{m:02d}.png"),
+                                    ephemeral=True)
 
 # ---- 🌱 新学期の準備：前の学期の科目をまとめて外して、そのまま新しい科目の登録へ ----
 async def current_term():
