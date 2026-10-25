@@ -2433,7 +2433,7 @@ async def ensure_botlog_channel(guild, cat):
         ch = await guild.create_text_channel(BOTLOG_CH_NAME, category=cat, overwrites=ow,
                                              topic="Botの不調・自動メンテの記録（管理者だけに見えます）")
         await ch.send("🔒 ここはBotの管理用チャンネルです（管理者にだけ見えます）。\n"
-                      "エラーと直し方・yt-dlpの自動更新・週1回のDBバックアップがここに届きます。詳しくは docs/保守マニュアル.md")
+                      "エラーと直し方・yt-dlpの自動更新・週1回のDBバックアップがここに届きます。詳しくは リポジトリの 保守マニュアル.md")
     else:
         try:
             await ch.edit(overwrites=ow)   # 非公開設定が崩れていたら直す
@@ -2566,7 +2566,7 @@ async def offsite_backup():
                             key="bk_big", cooldown_h=24 * 6)
             return False
         ok = await bot_alert(f"💾 週1回のDBバックアップです（{day_str(now_jst())}・{size_mb:.2f}MB）。\n"
-                             "-# 復元：VMで `gunzip` して `seikatsu.db` と差し替え → 再起動。手順は docs/保守マニュアル.md",
+                             "-# 復元：VMで `gunzip` して `seikatsu.db` と差し替え → 再起動。手順は リポジトリの 保守マニュアル.md",
                              file=discord.File(gz, filename=os.path.basename(gz)))
         return ok
     finally:
@@ -3051,7 +3051,7 @@ async def _spotify_embed_tracks(sid):
         print("Spotify埋め込み: __NEXT_DATA__が見つからない（ページ構造変更？）", flush=True)
         await bot_alert("🟢 **Spotifyのプレイリストが読めなくなりました**（埋め込みページの仕組みが変わった可能性）。"
                         "単曲・アルバムURLは引き続き使えます。直すには `_spotify_embed_tracks` の読み取り部分の修正が必要です"
-                        "（docs/保守マニュアル.md 参照）。", key="sp_embed", cooldown_h=48)
+                        "（リポジトリの 保守マニュアル.md 参照）。", key="sp_embed", cooldown_h=48)
         return None
     try:
         data = json.loads(m.group(1))
