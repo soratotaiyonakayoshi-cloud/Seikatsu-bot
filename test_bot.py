@@ -826,7 +826,27 @@ async def main():
     check("カレンダー: グリッドは月曜はじまり・日曜おわり", (_gs.weekday(), _ge.weekday(), _gs <= date(2026, 11, 1)), (0, 6, True))
     check("カレンダー: 大学の予定が入る", any(r["title"] == "学園祭" for r in _evs), True)
     check("カレンダー: 画像PNG生成", B.render_calendar_card("テスト", 2026, 11, _gs, _ge, _evs, _its, "2026-11-21") is not None, True)
-    check("カレンダー: 今後の予定にもボタン", len(B.calendar_buttons(B.discord.ui.View(), row=0).children), 2)
+    check("カレンダー: ボタンは📊・🗓今月・🗓来月・🔒の4つ", [i.label for i in B.calendar_buttons(B.discord.ui.View(), row=0).children],
+          ["📊 タイムライン", "🗓 今月", "🗓 来月", "🔒 自分だけの予定"])
+
+    # 🔒 自分だけの予定（本人にだけ・終わったら消える）
+    _td = B.now_jst().date()
+    await B.db.execute("INSERT INTO private_events(user_id,title,start_day,end_day,ts) VALUES('95','歯医者',?,?,0)",
+                       (_td.isoformat(), _td.isoformat()))
+    await B.db.execute("INSERT INTO private_events(user_id,title,start_day,end_day,ts) VALUES('95','むかしの予定','2020-01-01','2020-01-02',0)")
+    await B.db.commit()
+    check("自分だけ: 本人の朝の予定に出る", "🔒 今日：" in await B.today_digest("95", B.now_jst()), True)
+    check("自分だけ: ほかの人には出ない", "歯医者" in await B.today_digest("96", B.now_jst()), False)
+    check("自分だけ: カレンダーにも入る", any(r["kind"] == B.PRIVATE_KIND for r in (await B.calendar_data("95", _td.year, _td.month))[2]), True)
+    check("自分だけ: 終わったものは消える", await B.private_cleanup(B.day_str(B.now_jst())), 1)
+
+    # 📊 タイムライン（今月から最低4か月・課題は載せない）
+    await B.db.execute("INSERT INTO private_events(user_id,title,start_day,end_day,ts) VALUES('95','帰省','2026-11-05','2026-11-07',0)")
+    await B.db.commit()
+    _s, _e, _tl, _more = await B.timeline_data("95", "2026-10-25")   # 日付を固定（実行日に左右されないように）
+    check("タイムライン: 今月はじまり・4か月以上", (_s, (_e.year - _s.year) * 12 + _e.month - _s.month >= 3), (date(2026, 10, 1), True))
+    check("タイムライン: 大学の予定と自分だけの予定が並ぶ", {r["kind"] for r in _tl} >= {"行事", B.PRIVATE_KIND}, True)
+    check("タイムライン: 画像PNG生成", B.render_timeline_card("テスト", _s, _e, _tl, _more, "2026-10-25") is not None, True)
 
     # 🐾 いやしアルバム（見出しは文字・横の茶碗なし）
     from PIL import Image as _PI

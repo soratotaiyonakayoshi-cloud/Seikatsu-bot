@@ -237,6 +237,9 @@ CREATE TABLE IF NOT EXISTS univ_events(
   id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, kind TEXT NOT NULL, start_day TEXT NOT NULL, end_day TEXT NOT NULL,
   created_by TEXT, ts INTEGER
 );
+CREATE TABLE IF NOT EXISTS private_events(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, title TEXT NOT NULL, start_day TEXT NOT NULL, end_day TEXT NOT NULL, ts INTEGER
+);
 CREATE TABLE IF NOT EXISTS univ_event_reminded(event_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(event_id, stage));
 CREATE TABLE IF NOT EXISTS course_notes(
   id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL, text TEXT NOT NULL, user_id TEXT, ts INTEGER
@@ -5577,6 +5580,7 @@ async def remind_loop():
         print(f"fridge remind error: {e!r}", flush=True)
     try:
         await univ_event_remind()   # 🏫 大学の予定（3日前・開始日・履修登録の締切2日前）
+        await private_cleanup(day)   # 🔒 終わった自分だけの予定は消す
     except Exception as e:
         print(f"univ event remind error: {e!r}", flush=True)
     try:
@@ -6999,8 +7003,80 @@ async def univ_hub_message(user):
         v.add_item(UnivDelSelect(mine))
     return "\n".join(lines), v
 
+# ---- 🔒 自分だけの予定（だれにも共有されない・終わった翌日に自動で消える） ----
+PRIVATE_KIND = "自分だけ"
+UNIV_EMOJI[PRIVATE_KIND] = "🔒"
+
+async def private_events_between(uid, d1, d2):
+    """自分だけの予定を、大学の予定と同じ形の辞書で返す（idは負数で区別）"""
+    async with db.execute("SELECT * FROM private_events WHERE user_id=? AND end_day >= ? AND start_day <= ? ORDER BY start_day, id",
+                          (str(uid), d1, d2)) as c:
+        rows = await c.fetchall()
+    return [{"id": -r["id"], "pid": r["id"], "title": r["title"], "kind": PRIVATE_KIND, "start_day": r["start_day"],
+             "end_day": r["end_day"], "created_by": str(uid), "uname": ""} for r in rows]
+
+async def private_cleanup(today):
+    """終わった自分だけの予定は消す（毎朝）"""
+    cur = await db.execute("DELETE FROM private_events WHERE end_day < ?", (today,))
+    await db.commit()
+    return cur.rowcount
+
+class PrivateEventModal(discord.ui.Modal, title="🔒 自分だけの予定"):
+    t_in = discord.ui.TextInput(label="なにをする？（自分にしか見えません）", max_length=40, placeholder="例：バイト面接／帰省／歯医者")
+    s_in = discord.ui.TextInput(label="はじまり（例 11/3）", max_length=12)
+    e_in = discord.ui.TextInput(label="おわり（1日だけなら空欄）", max_length=12, required=False)
+
+    async def on_submit(self, interaction):
+        now = now_jst()
+        s = parse_md(str(self.s_in.value), now)
+        e = parse_md(str(self.e_in.value), now) if str(self.e_in.value).strip() else s
+        if not s or not e:
+            await interaction.response.send_message("⚠️ 日付が読めませんでした。例：`11/3` `2027-01-10`", ephemeral=True)
+            return
+        if e < s:
+            e = e.replace(year=e.year + 1)
+        if e < now.date():
+            s, e = s.replace(year=s.year + 1), e.replace(year=e.year + 1)
+        await db.execute("INSERT INTO private_events(user_id,title,start_day,end_day,ts) VALUES(?,?,?,?,?)",
+                         (str(interaction.user.id), str(self.t_in.value).strip()[:40], s.isoformat(), e.isoformat(),
+                          int(now.timestamp())))
+        await db.commit()
+        r = {"title": str(self.t_in.value).strip(), "kind": PRIVATE_KIND, "start_day": s.isoformat(), "end_day": e.isoformat()}
+        await interaction.response.send_message(
+            f"🔒 登録しました：{univ_line(r, day_str(now))}\n-# 自分にしか見えません。朝の予定・カレンダーに出て、終わった翌日に自動で消えます",
+            ephemeral=True)
+
+class PrivateDelSelect(discord.ui.Select):
+    def __init__(self, rows):
+        opts = [discord.SelectOption(label=f"{r['title']}（{univ_span_text(r)}）"[:100], value=str(r["pid"])) for r in rows[:25]]
+        super().__init__(placeholder="🗑 自分だけの予定を消す", options=opts, min_values=1, max_values=len(opts))
+
+    async def callback(self, interaction):
+        await db.executemany("DELETE FROM private_events WHERE id=? AND user_id=?",
+                             [(int(v), str(interaction.user.id)) for v in self.values])
+        await db.commit()
+        await interaction.response.edit_message(content=f"🗑 {len(self.values)} 件消しました。", view=None)
+
+class PrivateHubView(discord.ui.View):
+    def __init__(self, rows):
+        super().__init__(timeout=600)
+        if rows:
+            self.add_item(PrivateDelSelect(rows))
+
+    @discord.ui.button(label="➕ 自分だけの予定を追加", style=discord.ButtonStyle.primary, row=1)
+    async def b_add(self, interaction, button):
+        await interaction.response.send_modal(PrivateEventModal())
+
+async def send_private_hub(interaction):
+    today = day_str(now_jst())
+    rows = await private_events_between(interaction.user.id, today, "9999-12-31")
+    lines = ["🔒 **自分だけの予定**（だれにも共有されません・終わった翌日に自動で消えます）"]
+    lines += [f"・{univ_line(r, today)}" for r in rows[:20]] or ["-# まだありません"]
+    await interaction.response.send_message("\n".join(lines), view=PrivateHubView(rows), ephemeral=True)
+
 # ---- 🗓 予定カレンダー（大学の予定は帯、自分の課題・試験・実験は日付のマスに。本人にだけ表示） ----
-UNIV_COLORS = {"長期休暇": "#e8913a", "履修登録": "#3d8f83", "行事": "#8a6fae", "その他": "#5b7fa6", "試験期間": "#c2527a"}
+UNIV_COLORS = {"長期休暇": "#e8913a", "履修登録": "#3d8f83", "行事": "#8a6fae", "その他": "#5b7fa6", "試験期間": "#c2527a",
+               PRIVATE_KIND: "#9a9184"}
 
 async def calendar_data(uid, y, m):
     """月表示の材料：(グリッド開始日, 終了日, 大学の予定, {日付: [自分の予定の文字列]})"""
@@ -7008,7 +7084,8 @@ async def calendar_data(uid, y, m):
     last = date.fromisoformat(month_bounds(y, m)[1])
     gs = first - timedelta(days=first.weekday())
     ge = last + timedelta(days=6 - last.weekday())
-    events = await univ_events_between(gs.isoformat(), ge.isoformat())
+    events = list(await univ_events_between(gs.isoformat(), ge.isoformat())) \
+        + await private_events_between(uid, gs.isoformat(), ge.isoformat())
     items = {}
     uid = str(uid)
     t1 = int(datetime.combine(gs, datetime.min.time(), JST).timestamp())
@@ -7051,7 +7128,7 @@ def render_calendar_card(name, y, m, gs, ge, events, items, today):
     nrows = ((ge - gs).days + 1) // 7
     W = pad * 2 + cw * 7
     top = 150
-    H = top + 40 + nrows * rh + 130
+    H = top + 40 + nrows * rh + 160
     img = PImage.new("RGB", (W, H), CARD_CREAM)
     d = ImageDraw.Draw(img)
     d.text((pad, 52), f"{y}年{m}月の予定", font=F(54, True), fill=CARD_INK)
@@ -7127,13 +7204,13 @@ def render_calendar_card(name, y, m, gs, ge, events, items, today):
         if len(show) < len(lst):
             d.text((x + 6, iy), f"ほか{len(lst) - len(show)}件", font=F(14), fill=CARD_MUTED)
     # 凡例
-    ly = gy + nrows * rh + 26
+    ly = gy + nrows * rh + 16
     x = pad
-    for kind in ("長期休暇", "履修登録", "行事", "その他"):
+    for kind in ("長期休暇", "履修登録", "行事", "その他", PRIVATE_KIND):
         d.rounded_rectangle([x, ly + 4, x + 34, ly + 24], radius=6, fill=UNIV_COLORS[kind])
         d.text((x + 42, ly), kind, font=F(20), fill=CARD_MUTED)
         x += 42 + int(d.textlength(kind, font=F(20))) + 26
-    _draw_mixed(d, x + 10, ly, "📚課題　✅提出済み　📝試験　🧪実験", F(20), E(20), CARD_MUTED)
+    _draw_mixed(d, pad, ly + 34, "📚課題　✅提出済み　📝試験　🧪実験", F(20), E(20), CARD_MUTED)
     d.line([pad, H - 64, W - pad, H - 64], fill=CARD_LINE, width=2)
     d.text((pad, H - 50), "最低限生活リズムサークル", font=F(24, True), fill=CARD_INK)
     d.text((W - pad, H - 46), "予定は「大学の予定」ボタンから誰でも追加できます", font=F(18), fill=CARD_MUTED, anchor="ra")
@@ -7142,15 +7219,144 @@ def render_calendar_card(name, y, m, gs, ge, events, items, today):
     buf.seek(0)
     return buf
 
+# ---- 📊 タイムライン（大学の予定＋自分だけの予定を、今月から数か月先まで横並びの表に。課題は載せない） ----
+TIMELINE_MONTHS = 4        # 最低この月数ぶんは表示（今月を含む）
+TIMELINE_MAX_MONTHS = 7    # 先の予定があってもここまで
+TIMELINE_MAX_ROWS = 14
+
+async def timeline_data(uid, today):
+    t = date.fromisoformat(today)
+    start = t.replace(day=1)
+    y, m = start.year, start.month + TIMELINE_MONTHS - 1
+    y, m = y + (m - 1) // 12, (m - 1) % 12 + 1
+    end = date.fromisoformat(month_bounds(y, m)[1])
+    y2, m2 = start.year, start.month + TIMELINE_MAX_MONTHS - 1
+    y2, m2 = y2 + (m2 - 1) // 12, (m2 - 1) % 12 + 1
+    cap = date.fromisoformat(month_bounds(y2, m2)[1])
+    evs = sorted(list(await univ_events_between(today, cap.isoformat())) + await private_events_between(uid, today, cap.isoformat()),
+                 key=lambda r: (r["start_day"], r["end_day"]))
+    if evs:   # 先の予定まで届くように右端を延ばす（上限あり）
+        far = max(date.fromisoformat(r["end_day"]) for r in evs[:TIMELINE_MAX_ROWS])
+        if far > end:
+            end = min(cap, date.fromisoformat(month_bounds(far.year, far.month)[1]))
+    return start, end, evs[:TIMELINE_MAX_ROWS], max(0, len(evs) - TIMELINE_MAX_ROWS)
+
+def render_timeline_card(name, start, end, events, more, today):
+    """タイムライン（PNG bytes）。描けなければ None"""
+    try:
+        from PIL import Image as PImage, ImageDraw, ImageFont
+    except Exception:
+        return None
+    f = _find_cjk_font()
+    if not f:
+        return None
+    fb = _find_cjk_font_bold() or f
+    ef = _find_emoji_font()
+    F = lambda s, bold=False: ImageFont.truetype(fb if bold else f, s)
+    E = lambda s: ImageFont.truetype(ef, s) if ef else None
+    W, pad, label_w, row_h = 1080, 40, 330, 54
+    n = max(1, len(events))
+    top = 170
+    H = top + 44 + n * row_h + 150
+    img = PImage.new("RGB", (W, H), CARD_CREAM)
+    d = ImageDraw.Draw(img)
+    d.text((pad, 50), "これからの予定", font=F(54, True), fill=CARD_INK)
+    d.text((pad + 4, 118), f"{name} さんのタイムライン（大学の予定＋自分だけの予定・課題は除く）", font=F(20), fill=CARD_MUTED)
+    logo = _gohan_art("logo")
+    if logo:
+        _paste_art(img, logo, W - pad - round(logo.width * 90 / logo.height), 30, 90)
+    x0, x1 = pad + label_w, W - pad
+    total = (end - start).days + 1
+    X = lambda dd: x0 + (x1 - x0) * ((dd - start).days / total)
+    gy = top + 44
+    gh = n * row_h
+    # 月の区切りと月名
+    cur = start
+    i = 0
+    while cur <= end:
+        nxt = (cur + timedelta(days=32)).replace(day=1)
+        xa, xb = X(cur), X(min(nxt, end + timedelta(days=1)))
+        if i % 2 == 0:
+            d.rectangle([xa, gy, xb, gy + gh], fill="#fffaf2")
+        d.line([xa, top + 8, xa, gy + gh], fill=CARD_LINE, width=2)
+        d.text(((xa + xb) / 2, top + 10), f"{cur.month}月", font=F(22, True), fill=CARD_INK, anchor="ma")
+        if cur.month == 1 and i > 0:   # 年が変わるところに小さく年
+            d.text((xa + 4, top - 14), f"{cur.year}年", font=F(15, True), fill=CARD_ORANGE)
+        cur, i = nxt, i + 1
+    d.line([x1, top + 8, x1, gy + gh], fill=CARD_LINE, width=2)
+    # 行
+    td = date.fromisoformat(today)
+    for k, r in enumerate(events):
+        yy = gy + k * row_h
+        d.line([pad, yy + row_h, x1, yy + row_h], fill=CARD_LINE, width=1)
+        ic = UNIV_EMOJI.get(r["kind"], "📌")
+        title = r["title"]
+        lf = F(22, True)
+        while title and _mixed_w(d, f"{ic} {title}", lf, E(22)) > label_w - 16:
+            title = title[:-1]
+        if title != r["title"]:
+            title = title[:-1] + "…"
+        _draw_mixed(d, pad, yy + 6, f"{ic} {title}", lf, E(22), CARD_INK)
+        d.text((pad + 30, yy + 32), f"{univ_span_text(r)}・{univ_status(r, today)}", font=F(15), fill=CARD_MUTED)
+        s = max(date.fromisoformat(r["start_day"]), start)
+        e = min(date.fromisoformat(r["end_day"]), end)
+        bx1, bx2 = X(s), max(X(e + timedelta(days=1)), X(s) + 8)
+        d.rounded_rectangle([bx1, yy + 12, bx2, yy + row_h - 12], radius=9, fill=UNIV_COLORS.get(r["kind"], "#5b7fa6"))
+    # 今日の線
+    if start <= td <= end:
+        tx = X(td)
+        d.line([tx, top + 40, tx, gy + gh], fill=CARD_ORANGE, width=3)
+        d.text((tx, gy + gh + 6), "今日", font=F(18, True), fill=CARD_ORANGE, anchor="ma")
+    if not events:
+        d.text(((x0 + x1) / 2, gy + 14), "まだ予定がありません", font=F(22), fill=CARD_MUTED, anchor="ma")
+    if more:
+        d.text((pad, gy + gh + 8), f"ほか {more} 件（もっと先の予定は来月以降に表示されます）", font=F(16), fill=CARD_MUTED)
+    ly = H - 100
+    x = pad
+    for kind in ("長期休暇", "履修登録", "行事", "その他", PRIVATE_KIND):
+        d.rounded_rectangle([x, ly + 4, x + 34, ly + 24], radius=6, fill=UNIV_COLORS[kind])
+        d.text((x + 42, ly), kind, font=F(20), fill=CARD_MUTED)
+        x += 42 + int(d.textlength(kind, font=F(20))) + 26
+    d.line([pad, H - 58, W - pad, H - 58], fill=CARD_LINE, width=2)
+    d.text((pad, H - 46), "最低限生活リズムサークル", font=F(24, True), fill=CARD_INK)
+    d.text((W - pad, H - 42), "灰色（自分だけ）の予定はあなたにしか見えません", font=F(18), fill=CARD_MUTED, anchor="ra")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+async def send_timeline(interaction):
+    await interaction.response.defer(ephemeral=True)
+    today = day_str(now_jst())
+    start, end, evs, more = await timeline_data(interaction.user.id, today)
+    buf = await asyncio.to_thread(render_timeline_card, interaction.user.display_name, start, end, evs, more, today)
+    if not buf:
+        await interaction.followup.send("⚠️ タイムラインを作れませんでした（VMに日本語フォントが必要）。", ephemeral=True)
+        return
+    await interaction.followup.send(f"📊 **これからの予定**（{start.month}月〜{end.month}月・自分にだけ表示）",
+                                    file=discord.File(buf, filename="timeline.png"), ephemeral=True)
+
 def calendar_buttons(view, row=2):
-    """今月・来月のカレンダーボタンを view に足す"""
-    for off, lb in ((0, "🗓 今月のカレンダー"), (1, "🗓 来月のカレンダー")):
-        b = discord.ui.Button(label=lb, style=discord.ButtonStyle.primary if off == 0 else discord.ButtonStyle.secondary, row=row)
+    """📊タイムライン・🗓今月/来月のカレンダー・🔒自分だけの予定 のボタンを view に足す"""
+    b = discord.ui.Button(label="📊 タイムライン", style=discord.ButtonStyle.primary, row=row)
+
+    async def _tl(interaction):
+        await send_timeline(interaction)
+    b.callback = _tl
+    view.add_item(b)
+    for off, lb in ((0, "🗓 今月"), (1, "🗓 来月")):
+        b = discord.ui.Button(label=lb, style=discord.ButtonStyle.secondary, row=row)
 
         async def _cb(interaction, off=off):
             await send_calendar(interaction, off)
         b.callback = _cb
         view.add_item(b)
+    b = discord.ui.Button(label="🔒 自分だけの予定", style=discord.ButtonStyle.secondary, row=row)
+
+    async def _pv(interaction):
+        await send_private_hub(interaction)
+    b.callback = _pv
+    view.add_item(b)
     return view
 
 async def send_calendar(interaction, offset=0):
@@ -7562,10 +7768,13 @@ async def today_digest(uid, now, label="今日"):
     lines = []
     try:   # 🏫 大学の予定：開催中（長期休暇は下の一言で出す）と、3日以内に始まるもの
         tday = day_str(now)
-        for r in await univ_events_between(tday, (now.date() + timedelta(days=3)).isoformat()):
+        soon = (now.date() + timedelta(days=3)).isoformat()
+        for r in await univ_events_between(tday, soon):
             if r["kind"] == "長期休暇" and r["start_day"] <= tday:
                 continue
             lines.append(("🏫 いま：" if r["start_day"] <= tday else "🏫 もうすぐ：") + univ_line(r, tday))
+        for r in await private_events_between(uid, tday, soon):   # 🔒 自分だけの予定（本人の返事にしか出ない）
+            lines.append(("🔒 今日：" if r["start_day"] <= tday else "🔒 もうすぐ：") + univ_line(r, tday))
     except Exception:
         pass
     if break_on(now):   # 🌸 長期休暇中は授業がないので時間割は出さない
@@ -7686,10 +7895,12 @@ async def upcoming_digest(uid, now, days=7):
     lines = []
     try:
         tday = day_str(now)
-        ev = await univ_events_between(tday, (now.date() + timedelta(days=30)).isoformat())
+        d30 = (now.date() + timedelta(days=30)).isoformat()
+        ev = sorted(list(await univ_events_between(tday, d30)) + await private_events_between(uid, tday, d30),
+                    key=lambda r: (r["start_day"], r["end_day"]))
         if ev:
-            lines.append("🏫 **大学の予定（30日以内）**")
-            lines += [f"　{univ_line(r, tday)}" for r in ev[:8]]
+            lines.append("🏫 **大学の予定・自分だけの予定（30日以内）**")
+            lines += [f"　{univ_line(r, tday)}" for r in ev[:10]]
     except Exception:
         pass
     end = now + timedelta(days=days)
