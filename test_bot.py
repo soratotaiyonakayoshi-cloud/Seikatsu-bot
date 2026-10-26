@@ -869,6 +869,22 @@ async def main():
     _al = B.render_meal_album([(_png, "ぺんぎん　🐾5"), (_png, "たぬき")], "10月のいやしアルバム", "", 10, True, None, None)
     check("いやしアルバム: コラージュPNG生成", _al is not None, True)
 
+    # 🎤 歌詞の取り違え対策
+    _q = B.clean_track_title("YOASOBI「アイドル」Official Music Video")
+    check("歌詞照合: 曲名もアーティストも合う→2", B._lrclib_match_score({"trackName": "アイドル", "artistName": "YOASOBI"}, _q), 2)
+    check("歌詞照合: 同じ歌手の別の曲は使わない", B._lrclib_match_score({"trackName": "夜に駆ける", "artistName": "YOASOBI"}, _q), None)
+    check("歌詞照合: (Remix)などの補足は外して比べる", B._lrclib_match_score({"trackName": "アイドル (Remix)", "artistName": "誰か"}, _q), 1)
+    check("歌詞照合: 1文字の曲名はアーティスト一致が必要", B._lrclib_match_score({"trackName": "愛", "artistName": "X"}, "愛してる 某バンド"), None)
+    await B.save_custom_lyrics("マリーゴールド", "ちがう人の歌詞", "95")
+    await B.save_custom_lyrics("マリーゴールド あいみょん", "[00:01.00]正しい歌詞", "95")
+    _hit = await B.custom_lyrics_find("あいみょん「マリーゴールド」【Official Music Video】")
+    check("歌詞照合: 登録歌詞はいちばん近いもの（長く一致するほう）", _hit["text"], "[00:01.00]正しい歌詞")
+    await B.db.execute("DELETE FROM custom_lyrics WHERE title LIKE 'マリーゴールド%'"); await B.db.commit()
+    await B.db.execute("INSERT OR REPLACE INTO lyrics_block(norm_key,user_id,ts) VALUES(?, '95', 0)", (B.lyrics_norm("むかしの曲"),))
+    await B.db.commit()
+    check("歌詞照合: 🙅で記録した曲はlrclibを使わない", (await B.lyrics_blocked("むかしの曲"), await B.fetch_lyrics("むかしの曲")), (True, None))
+    check("歌詞照合: 🙅ボタンが操作画面にある", any(getattr(i, "label", "") == "🙅 違う曲の歌詞" for i in B.KaraokeCtlView().children), True)
+
     # 🧹 n日に1回の家事リマインド（今日やる日なのにまだの人だけ）
     await B.ensure_user(M(99, "らくだ"))
     await B.db.execute("UPDATE users SET kaji_wash=3, kaji_since='2026-10-20' WHERE id='99'")

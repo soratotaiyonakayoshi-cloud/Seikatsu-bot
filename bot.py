@@ -251,6 +251,7 @@ CREATE TABLE IF NOT EXISTS private_events(
 );
 CREATE TABLE IF NOT EXISTS private_event_reminded(event_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(event_id, stage));
 CREATE TABLE IF NOT EXISTS univ_event_reminded(event_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(event_id, stage));
+CREATE TABLE IF NOT EXISTS lyrics_block(norm_key TEXT PRIMARY KEY, user_id TEXT, ts INTEGER);
 CREATE TABLE IF NOT EXISTS course_notes(
   id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL, text TEXT NOT NULL, user_id TEXT, ts INTEGER
 );
@@ -4525,12 +4526,40 @@ def clean_track_title(t):
         t = t.replace(ch, " ")
     return re.sub(r"\s+", " ", t).strip()
 
+def _lrclib_match_score(d, q):
+    """lrclibの候補がいまの曲か判定。曲名が検索語（動画タイトル）に含まれなければ None＝別の曲。
+    合えばスコア（アーティスト名も含まれていれば 2、曲名だけなら 1）"""
+    qn = lyrics_norm(q)
+    raw = d.get("trackName") or ""
+    tn = lyrics_norm(re.sub(r"[\(\[（【][^)\]）】]*[\)\]）】]", " ", raw))   # 「(Remix)」などの補足は外して比べる
+    if not tn or not qn:
+        return None
+    ok = tn in qn
+    if not ok:   # 語順違い・区切り違い：曲名の各語（2文字以上）がぜんぶ入っていればOK
+        toks = [w for w in clean_track_title(raw).casefold().split() if len(w) >= 2]
+        ok = bool(toks) and all(t in qn for t in toks)
+    if not ok:
+        return None
+    an = lyrics_norm(d.get("artistName") or "")
+    artist_hit = bool(an) and an in qn
+    if len(tn) < 2 and not artist_hit:
+        return None   # 1文字の曲名は偶然含まれやすいので、アーティスト名も合うときだけ
+    return 2 if artist_hit else 1
+
+async def lyrics_blocked(title):
+    """「🙅 違う曲の歌詞」と記録された曲か（lrclibの歌詞を使わない）"""
+    k = lyrics_norm(title)
+    if not k:
+        return False
+    async with db.execute("SELECT 1 FROM lyrics_block WHERE norm_key=?", (k,)) as c:
+        return bool(await c.fetchone())
+
 async def fetch_lyrics(title):
-    """曲タイトル → {track, artist, text} または None（lrclibのsearch APIで最初の歌詞あり候補）"""
+    """曲タイトル → {track, artist, text} または None（lrclibのsearch APIで、曲名が合う候補だけから選ぶ）"""
     import aiohttp
     import urllib.parse
     q = clean_track_title(title)
-    if not q:
+    if not q or await lyrics_blocked(title):
         return None
     url = "https://lrclib.net/api/search?q=" + urllib.parse.quote(q)
     try:
@@ -4543,37 +4572,48 @@ async def fetch_lyrics(title):
     except Exception as e:
         print(f"歌詞取得失敗: {e!r}", flush=True)
         return None
+    best, best_s = None, 0
     for d in arr or []:
         if d.get("instrumental"):
             continue
         if re.search(r"(?i)\(?\b(inst(rumental)?|off vocal|karaoke)\b|\(inst", d.get("trackName") or ""):
             continue   # インスト・カラオケ版はスキップ（歌詞DB上は歌詞付きで登録されていることがある）
         txt = (d.get("plainLyrics") or "").strip()
-        if txt:
-            return {"track": d.get("trackName") or "？", "artist": d.get("artistName") or "？", "text": txt}
-    return None
+        s = _lrclib_match_score(d, q)
+        if txt and s and s > best_s:   # 曲名が合わない候補（同じ歌手の別の曲など）は使わない
+            best, best_s = {"track": d.get("trackName") or "？", "artist": d.get("artistName") or "？", "text": txt}, s
+    return best
 
 def lyrics_norm(s):
     """歌詞登録の照合キー（ノイズ除去→空白除去→小文字化）"""
     return re.sub(r"\s+", "", clean_track_title(s)).casefold()
 
 async def custom_lyrics_find(title):
-    """メンバー登録の歌詞から、いまの曲タイトルに合うものを探す。
-    キーの双方向部分一致に加え、語順違い対策で「登録タイトルの各語がすべて含まれる」でもヒット"""
+    """メンバー登録の歌詞から、いまの曲タイトルにいちばん合うものを探す（最初に見つかったものではなく、いちばん近いもの）。
+    完全一致 ＞ 登録名がタイトルに含まれる（長いほど優先）＞ タイトルが登録名に含まれる（4文字以上）＞ 登録名の各語がすべて含まれる"""
     k = lyrics_norm(title)
     if not k:
         return None
     async with db.execute("SELECT c.norm_key, c.title, c.text, COALESCE(u.name,'?') AS uname "
                           "FROM custom_lyrics c LEFT JOIN users u ON u.id=c.user_id") as c:
         rows = await c.fetchall()
+    best, best_s = None, 0
     for r in rows:
         rk = r["norm_key"] or ""
-        if rk and (rk in k or k in rk):
-            return r
-        toks = [w.casefold() for w in clean_track_title(r["title"]).split() if w]
-        if toks and all(t in k for t in toks):
-            return r
-    return None
+        s = 0
+        if rk and rk == k:
+            s = 1000
+        elif rk and len(rk) >= 2 and rk in k:
+            s = 100 + len(rk)
+        elif rk and len(k) >= 4 and k in rk:
+            s = 50 + len(k)
+        else:   # 語順違い：登録名の各語がぜんぶ入っていれば、部分一致と同じ物差し（一致した長さ）で比べる
+            toks = [w.casefold() for w in clean_track_title(r["title"]).split() if len(w) >= 2]
+            if toks and all(t in k for t in toks):
+                s = 100 + sum(len(t) for t in toks)
+        if s > best_s:
+            best, best_s = r, s
+    return best
 
 class LyricsAddModal(discord.ui.Modal, title="📝 歌詞を登録"):
     t_in = discord.ui.TextInput(label="曲名（アーティスト名も入れると確実）", max_length=120)
@@ -4587,10 +4627,34 @@ class LyricsAddModal(discord.ui.Modal, title="📝 歌詞を登録"):
 
     async def on_submit(self, interaction):
         title = str(self.t_in.value).strip()
-        if not await save_custom_lyrics(title, str(self.x_in.value).strip(), interaction.user.id):
+        text = str(self.x_in.value).strip()
+        if not await save_custom_lyrics(title, text, interaction.user.id):
             await interaction.response.send_message("⚠️ 曲名が読めませんでした。", ephemeral=True)
             return
-        await interaction.response.send_message(f"📝 「**{title}**」の歌詞を登録しました！その曲の再生中に📜で出ます。", ephemeral=True)
+        note = await apply_lyrics_to_current(title, text)
+        synced = "　🎤 タイムスタンプつきなので同期にも使われます。" if parse_lrc(text) else ""
+        await interaction.response.send_message(f"📝 「**{title}**」の歌詞を登録しました！その曲の再生中に📜で出ます。{synced}{note}",
+                                                ephemeral=True)
+
+async def apply_lyrics_to_current(title, text):
+    """いま流れている曲の歌詞を登録・修正したら、その場で同期表示を差し替える（古い間違った同期を止める）"""
+    cur = current_track_title()
+    if not cur:
+        return ""
+    hit = await custom_lyrics_find(cur)
+    if not hit or hit["norm_key"] != lyrics_norm(title):
+        return ""   # 登録したのは別の曲
+    it = _player.get("cur_item")
+    lines = parse_lrc(text)
+    k = _player.get("karaoke")
+    if lines:
+        _player["karaoke"] = {"lines": lines, "offset": 0.0, "auto": False, "item": it}
+        _player["karaoke"]["task"] = asyncio.create_task(karaoke_task())
+        return "\n-# 🎤 いま流れている曲の同期を、この歌詞に切り替えました"
+    if k and k.get("item") is it:
+        _player["karaoke"] = None   # タイムスタンプなしの歌詞に直した→間違っていた同期は止める
+        return "\n-# 🎤 いま流れていた同期表示（別の歌詞）は止めました"
+    return ""
 
 async def save_custom_lyrics(title, text, uid):
     """メンバー歌詞を保存（同じ曲名なら上書き＝修正もこの手順で）。曲名が読めなければ False"""
@@ -4736,7 +4800,7 @@ async def fetch_synced_lyrics(title, duration=None):
     import aiohttp
     import urllib.parse
     q = clean_track_title(title)
-    if not q:
+    if not q or await lyrics_blocked(title):
         return None
     url = "https://lrclib.net/api/search?q=" + urllib.parse.quote(q)
     try:
@@ -4749,18 +4813,20 @@ async def fetch_synced_lyrics(title, duration=None):
     except Exception as e:
         print(f"同期歌詞取得失敗: {e!r}", flush=True)
         return None
-    best, best_diff = None, None
+    cands = []
     for d in arr or []:
         if d.get("instrumental") or re.search(r"(?i)\(?\b(inst(rumental)?|off vocal|karaoke)\b|\(inst", d.get("trackName") or ""):
             continue
         sync = (d.get("syncedLyrics") or "").strip()
-        if not sync:
-            continue
+        s = _lrclib_match_score(d, q)
+        if not sync or not s:
+            continue   # 曲名が合わない候補は、長さが近くても使わない（同じ歌手の別の曲が選ばれる事故の対策）
         diff = abs((d.get("duration") or 0) - duration) if duration and d.get("duration") else None
-        if best is None or (diff is not None and (best_diff is None or diff < best_diff)):
-            best, best_diff = sync, diff
-    if not best:
+        cands.append((-s, diff if diff is not None else 9999, sync, diff))
+    if not cands:
         return None
+    cands.sort(key=lambda x: (x[0], x[1]))   # アーティストも合う＞曲名だけ、その中で長さが近い順
+    best, best_diff = cands[0][2], cands[0][3]
     lines = parse_lrc(best)
     return (lines, best_diff) if lines else None
 
@@ -4814,6 +4880,8 @@ async def karaoke_task():
             vc = _player.get("vc")
             if not k or not vc or not vc.is_connected() or _player.get("cur_item") is not base_item:
                 break   # OFF・切断・曲が変わったら終了（1曲リピートはcur_itemが同じなので続く＝位置も頭に戻る）
+            if k.get("task") not in (None, asyncio.current_task()):
+                break   # 同じ曲で歌詞が差し替えられた（新しい同期タスクに交代）
             pos = track_pos()
             if pos is not None:
                 t = pos + k.get("offset", 0.0)
@@ -4877,6 +4945,8 @@ async def _maybe_auto_karaoke():
         local = await custom_lyrics_find(title)
         if local:
             lines = parse_lrc(local["text"])
+            if not lines:
+                return   # メンバー登録の歌詞（タイムスタンプ無し）がある曲は、lrclibの同期歌詞に戻らない
         if not lines:
             got = await fetch_synced_lyrics(title, it.get("duration"))
             if not got:
@@ -4957,10 +5027,12 @@ class LrcTapView(discord.ui.View):
         if not self.stamps:
             await self._refresh(interaction, "⚠️ まだ1行も刻んでいません。")
             return
-        await save_custom_lyrics(self.title, lrc_format(self.stamps), interaction.user.id)
+        lrc = lrc_format(self.stamps)
+        await save_custom_lyrics(self.title, lrc, interaction.user.id)
+        note = await apply_lyrics_to_current(self.title, lrc)
         await interaction.response.edit_message(
             content=f"💾 「**{self.title}**」のLRC（{len(self.stamps)}行）を保存しました！\n"
-                    "この曲の再生中に 🎤 を押すと歌詞が同期表示されます（ズレは🎤の±2秒ボタンで微調整）。", view=None)
+                    "この曲の再生中に 🎤 を押すと歌詞が同期表示されます（ズレは🎤の±2秒ボタンで微調整）。" + note, view=None)
 
     @discord.ui.button(label="❌ 中止", style=discord.ButtonStyle.secondary)
     async def b_cancel(self, interaction, button):
@@ -5035,6 +5107,23 @@ class KaraokeCtlView(discord.ui.View):
     async def b_off(self, interaction, button):
         _player["karaoke"] = None   # タスクが次のtickで気づいて通常表示に戻す
         await interaction.response.edit_message(content="🎤 歌詞の同期表示をやめました。", view=None)
+
+    @discord.ui.button(label="🙅 違う曲の歌詞", style=discord.ButtonStyle.secondary, row=1)
+    async def b_wrong(self, interaction, button):
+        """lrclibが別の曲の歌詞を返した曲を記録して、今後その曲ではlrclibの歌詞を使わない"""
+        title = current_track_title()
+        key = lyrics_norm(title or "")
+        if not key:
+            await interaction.response.edit_message(content="いま流れている曲がありません。", view=None)
+            return
+        await db.execute("INSERT OR REPLACE INTO lyrics_block(norm_key,user_id,ts) VALUES(?,?,?)",
+                         (key, str(interaction.user.id), int(now_jst().timestamp())))
+        await db.commit()
+        _player["karaoke"] = None
+        await interaction.response.edit_message(
+            content=f"🙅 「{clean_track_title(title)[:60]}」は、今後lrclibの歌詞を出しません（同期も📜も）。\n"
+                    "-# 正しい歌詞は 📜 → 📝 で登録できます。タイムスタンプつき（[00:12.34]行）なら同期にも使われます",
+            view=LyricsHubView((), clean_track_title(title)))
 
 # ------------------------------------------------------------
 #  🎶 音楽パネル（#作業ログ🖥に常駐・よく使う操作をボタン化。返事は本人だけ＝チャンネルを汚さない）
@@ -5148,6 +5237,12 @@ class MusicPanelView(discord.ui.View):
             lines = parse_lrc(local["text"])
             if lines:
                 src = f"メンバー登録（{local['uname']}）"
+            else:   # 登録歌詞はあるがタイムスタンプが無い→lrclibの（別の曲かもしれない）同期歌詞には戻らない
+                await interaction.followup.send(
+                    f"🎤 この曲はメンバー登録の歌詞（{local['uname']}）を使っていますが、タイムスタンプが無いので同期できません。\n"
+                    "-# 下の⏺で、曲を聴きながらタイムスタンプを刻めます（📜の全文表示はそのまま使えます）",
+                    view=KaraokeMakeView(clean_track_title(title)), ephemeral=True)
+                return
         if not lines:
             got = await fetch_synced_lyrics(title, it.get("duration"))
             if not got:
