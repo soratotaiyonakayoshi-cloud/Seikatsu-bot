@@ -74,7 +74,7 @@ CH = {
              "🌙で寝た人は、☀️を押し忘れても朝の最初の発言・ボタン・VC入室で自動記録されます（押し忘れ救済）。\n"
              "🏭 夜勤の夜に押すと、翌朝の起床・睡眠・ラジオ体操は判定なし（ストリークも継続）。\n"
              "🏃 で毎朝のラジオ体操の呼び出し、⏰ で締切前の起床リマインド（自分の締切の10分前にメンション＝実質アラーム）をON/OFF。\n"
-             "📅 今日・🗓 明日・📆 今後（7日の課題＋30日の試験＋実験）の予定はボタンでいつでも確認（自分にだけ表示）。"),
+             "-# 今日・明日・今後の予定は #予定🗓 のボタンでいつでも確認できます（☀️の返事にも今日の予定が出ます）"),
     "meal": ("ごはん🍚", "🍚 食べたら押す。**写真を投げるだけ**でも時間帯から自動で記録されます。\n"
              "🧊 冷蔵庫＝期限が近い食品のメモ。登録すると期限の前日・当日の朝にお知らせ（3日過ぎたら自動で消えます）。"),
     "chore": ("家事🧹", "🧹 やった家事を押す。洗濯は5工程に分かれています。\n"
@@ -100,7 +100,8 @@ CH = {
               "毎週出るプリントや出席フォームは 🔁 毎週課題に登録すれば自動で課題化。投稿の ✅ で完了、選択式で出さない課題は 🚫 で外せます。\n"
               "🗒 科目メモ＝教室変更・持ち物などを履修者で共有（授業の日の朝に表示）。コマンド派は `/jikanwari` `/kadai` でも。\n"
               "-# 大学の予定・試験日・カレンダーは #予定🗓 にまとまっています"),
-    "yotei": ("予定🗓", "🏫 **大学の予定**＝長期休暇・履修登録期間・行事などを**だれでも**登録（朝の予定・📆今後の予定・ここでのお知らせに出ます。"
+    "yotei": ("予定🗓", "📅 **今日**・🌙 **明日**・📆 **今後**の予定＝天気・時間割・課題・試験・やること・大学の予定などのまとめ（自分にだけ表示）。\n"
+              "🏫 **大学の予定**＝長期休暇・履修登録期間・行事などを**だれでも**登録（朝の予定・📆今後の予定・ここでのお知らせに出ます。"
               "長期休暇はその期間が自動で休暇モードに）。\n"
               "🙋 **じぶんの予定**＝🔒自分だけ（だれにも見えない）か📣みんなに見せる（#えらい🌟 で宣言＋3日前・当日に声かけ）。終わったら自動で消えます。\n"
               "📝 **試験日**＝科目ごとの試験日のカウントダウン（履修者へのお知らせは #課題📚）。\n"
@@ -779,54 +780,6 @@ class WakeView(discord.ui.View):
         deg = len(await events_on(user.id, day_str(now), "nizone")) + 1  # 1回押したら「二度寝」
         await interaction.response.send_message(f"😴 {hhmm(now)}　本日 {deg} 度寝を記録しました。おかえりなさい。" + hitokoto_suffix(), ephemeral=True)
         await post_log("wake", f"😴 **{user.display_name}** {hhmm(now)} 二度寝から生還（本日 {deg} 度寝）")
-
-    @discord.ui.button(label="📅 今日の予定", style=discord.ButtonStyle.secondary, custom_id="sk_today", row=0)
-    async def today_btn(self, interaction, button):
-        """☀️の返事と同じ内容（天気＋時間割＋課題・試験・残タスク）をいつでも呼び出せる（うっかり消した用）"""
-        await ensure_user(interaction.user)
-        await interaction.response.defer(ephemeral=True, thinking=True)   # 天気の取得に少しかかる
-        now = now_jst()
-        parts = []
-        try:
-            w = await fetch_weather()
-            if w:
-                parts.append(w)
-        except Exception:
-            pass
-        digest = await today_digest(interaction.user.id, now)
-        if digest:
-            parts.append(digest)
-        else:
-            parts.append("今日の授業・課題・試験はありません。のんびりいこう")
-        await interaction.followup.send(f"📅 **{now.month}/{now.day}({DAY_CHARS[now.weekday()]}) の予定**\n" + "\n".join(parts),
-                                        ephemeral=True)
-
-    @discord.ui.button(label="🗓 明日の予定", style=discord.ButtonStyle.secondary, custom_id="sk_tomorrow", row=0)
-    async def tomorrow_btn(self, interaction, button):
-        """明日の天気＋時間割＋課題・試験を前日の夜から確認できる"""
-        await ensure_user(interaction.user)
-        await interaction.response.defer(ephemeral=True, thinking=True)   # 天気の取得に少しかかる
-        asu = now_jst() + timedelta(days=1)
-        parts = []
-        try:
-            w = await fetch_weather(1)
-            if w:
-                parts.append(w)
-        except Exception:
-            pass
-        digest = await today_digest(interaction.user.id, asu, label="明日")
-        parts.append(digest or "明日の授業・課題・試験はありません。のんびりいこう")
-        await interaction.followup.send(f"🗓 **{asu.month}/{asu.day}({DAY_CHARS[asu.weekday()]}) の予定**\n" + "\n".join(parts),
-                                        ephemeral=True)
-
-    @discord.ui.button(label="📆 今後の予定", style=discord.ButtonStyle.secondary, custom_id="sk_upcoming", row=1)
-    async def upcoming_btn(self, interaction, button):
-        """今後7日の課題・30日以内の試験・実験予定のまとめ"""
-        await ensure_user(interaction.user)
-        await interaction.response.defer(ephemeral=True)
-        text = await upcoming_digest(interaction.user.id, now_jst())
-        await interaction.followup.send("📆 **今後の予定**\n" + (text or "7日以内の課題・試験・実験はありません。のんびりいこう"),
-                                        view=calendar_buttons(discord.ui.View(timeout=600), row=0), ephemeral=True)
 
     @discord.ui.button(label="🏭 今夜は夜勤", style=discord.ButtonStyle.secondary, custom_id="sk_yakin", row=1)
     async def yakin(self, interaction, button):
@@ -7716,38 +7669,92 @@ async def send_exam_hub(interaction):
            + ("\n".join(lines) if lines else "-# 登録されている試験はまだありません"))
     await interaction.response.send_message(txt, view=view, ephemeral=True)
 
+async def send_today_plan(interaction):
+    """📅 今日の予定（☀️の返事と同じ：天気＋時間割＋課題・試験・残タスク。うっかり消した用）"""
+    await ensure_user(interaction.user)
+    await interaction.response.defer(ephemeral=True, thinking=True)   # 天気の取得に少しかかる
+    now = now_jst()
+    parts = []
+    try:
+        w = await fetch_weather()
+        if w:
+            parts.append(w)
+    except Exception:
+        pass
+    digest = await today_digest(interaction.user.id, now)
+    parts.append(digest or "今日の授業・課題・試験はありません。のんびりいこう")
+    await interaction.followup.send(f"📅 **{now.month}/{now.day}({DAY_CHARS[now.weekday()]}) の予定**\n" + "\n".join(parts),
+                                    ephemeral=True)
+
+async def send_tomorrow_plan(interaction):
+    """🗓 明日の予定（明日の天気＋時間割＋課題・試験を前日の夜から確認）"""
+    await ensure_user(interaction.user)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    asu = now_jst() + timedelta(days=1)
+    parts = []
+    try:
+        w = await fetch_weather(1)
+        if w:
+            parts.append(w)
+    except Exception:
+        pass
+    digest = await today_digest(interaction.user.id, asu, label="明日")
+    parts.append(digest or "明日の授業・課題・試験はありません。のんびりいこう")
+    await interaction.followup.send(f"🗓 **{asu.month}/{asu.day}({DAY_CHARS[asu.weekday()]}) の予定**\n" + "\n".join(parts),
+                                    ephemeral=True)
+
+async def send_upcoming_plan(interaction):
+    """📆 今後の予定（7日の課題・30日の試験・大学の予定とじぶんの予定・実験）"""
+    await ensure_user(interaction.user)
+    await interaction.response.defer(ephemeral=True)
+    text = await upcoming_digest(interaction.user.id, now_jst())
+    await interaction.followup.send("📆 **今後の予定**\n" + (text or "7日以内の課題・試験・実験はありません。のんびりいこう"),
+                                    view=calendar_buttons(discord.ui.View(timeout=600), row=0), ephemeral=True)
+
 class YoteiPanelView(discord.ui.View):
     """🗓 #予定 のパネル：大学の予定・試験日・じぶんの予定・タイムライン・カレンダー"""
 
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🏫 大学の予定", style=discord.ButtonStyle.primary, custom_id="sk_univ", row=0)
+    @discord.ui.button(label="📅 今日の予定", style=discord.ButtonStyle.success, custom_id="sk_today", row=0)
+    async def today_btn(self, interaction, button):
+        await send_today_plan(interaction)
+
+    @discord.ui.button(label="🌙 明日の予定", style=discord.ButtonStyle.success, custom_id="sk_tomorrow", row=0)
+    async def tomorrow_btn(self, interaction, button):
+        await send_tomorrow_plan(interaction)
+
+    @discord.ui.button(label="📆 今後の予定", style=discord.ButtonStyle.success, custom_id="sk_upcoming", row=0)
+    async def upcoming_btn(self, interaction, button):
+        await send_upcoming_plan(interaction)
+
+    @discord.ui.button(label="🏫 大学の予定", style=discord.ButtonStyle.primary, custom_id="sk_univ", row=1)
     async def univ_btn(self, interaction, button):
         await ensure_user(interaction.user)
         text, v = await univ_hub_message(interaction.user)
         await interaction.response.send_message(text, view=v, ephemeral=True)
 
-    @discord.ui.button(label="🙋 じぶんの予定", style=discord.ButtonStyle.primary, custom_id="sk_mine", row=0)
+    @discord.ui.button(label="🙋 じぶんの予定", style=discord.ButtonStyle.primary, custom_id="sk_mine", row=1)
     async def mine_btn(self, interaction, button):
         await ensure_user(interaction.user)
         await send_private_hub(interaction)
 
-    @discord.ui.button(label="📝 試験日", style=discord.ButtonStyle.secondary, custom_id="sk_exam", row=0)
+    @discord.ui.button(label="📝 試験日", style=discord.ButtonStyle.secondary, custom_id="sk_exam", row=1)
     async def exam_btn(self, interaction, button):
         await send_exam_hub(interaction)
 
-    @discord.ui.button(label="📊 タイムライン", style=discord.ButtonStyle.success, custom_id="sk_timeline", row=1)
+    @discord.ui.button(label="📊 タイムライン", style=discord.ButtonStyle.success, custom_id="sk_timeline", row=2)
     async def tl_btn(self, interaction, button):
         await ensure_user(interaction.user)
         await send_timeline(interaction)
 
-    @discord.ui.button(label="🗓 今月のカレンダー", style=discord.ButtonStyle.secondary, custom_id="sk_cal0", row=1)
+    @discord.ui.button(label="🗓 今月のカレンダー", style=discord.ButtonStyle.secondary, custom_id="sk_cal0", row=2)
     async def cal0_btn(self, interaction, button):
         await ensure_user(interaction.user)
         await send_calendar(interaction, 0)
 
-    @discord.ui.button(label="🗓 来月のカレンダー", style=discord.ButtonStyle.secondary, custom_id="sk_cal1", row=1)
+    @discord.ui.button(label="🗓 来月のカレンダー", style=discord.ButtonStyle.secondary, custom_id="sk_cal1", row=2)
     async def cal1_btn(self, interaction, button):
         await ensure_user(interaction.user)
         await send_calendar(interaction, 1)
@@ -8096,7 +8103,7 @@ async def today_digest(uid, now, label="今日"):
     return "\n".join(lines)
 
 async def upcoming_digest(uid, now, days=7):
-    """今後n日の課題・試験・実験＋30日以内の大学の予定のまとめ（起床パネル📆今後の予定ボタン用）"""
+    """今後n日の課題・試験・実験＋30日以内の大学の予定のまとめ（#予定🗓 の📆今後の予定ボタン用）"""
     lines = []
     try:
         tday = day_str(now)

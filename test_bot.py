@@ -48,8 +48,12 @@ check("設定パネル: 項目セレクトは14項目", len(B.SaiteiSelect().opt
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView, B.KadaiPanelView, B.GoodsPanelView, B.MusicPanelView, B.YoteiPanelView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー8種 登録OK", True, True)
-check("予定パネル: 6ボタン", {i.custom_id for i in B.YoteiPanelView().children},
-      {"sk_univ", "sk_mine", "sk_exam", "sk_timeline", "sk_cal0", "sk_cal1"})
+check("予定パネル: 9ボタン", {i.custom_id for i in B.YoteiPanelView().children},
+      {"sk_today", "sk_tomorrow", "sk_upcoming", "sk_univ", "sk_mine", "sk_exam", "sk_timeline", "sk_cal0", "sk_cal1"})
+check("予定パネル: 行割り（今日・明日・今後が1段目）",
+      {i.custom_id: i.row for i in B.YoteiPanelView().children},
+      {"sk_today": 0, "sk_tomorrow": 0, "sk_upcoming": 0, "sk_univ": 1, "sk_mine": 1, "sk_exam": 1,
+       "sk_timeline": 2, "sk_cal0": 2, "sk_cal1": 2})
 check("予定パネル: VIEW_FACTORYとチャンネル定義", (B.VIEW_FACTORY.get("yotei") is B.YoteiPanelView, B.CH["yotei"][0]), (True, "予定🗓"))
 check("音楽パネルは12ボタン", {i.custom_id for i in B.MusicPanelView().children},
       {"sk_mu_play", "sk_mu_bgm", "sk_mu_amb", "sk_mu_join", "sk_mu_pause", "sk_mu_skip", "sk_mu_queue", "sk_mu_stop",
@@ -77,11 +81,8 @@ check("音楽パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("worklog") is B.Mu
 check("ごはんパネルに🧊 2ボタン", {"sk_fridge_add", "sk_fridge_list"} <= {i.custom_id for i in B.MealView().children}, True)
 check("🧊は2段目・ごはんは1段目", sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_fridge")}) == [1]
       and sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_meal")}) == [0], True)
-check("起床パネルに📅今日の予定", any(getattr(i, "custom_id", "") == "sk_today" for i in B.WakeView().children), True)
-check("起床パネルに🗓明日・📆今後", {"sk_tomorrow", "sk_upcoming"} <= {getattr(i, "custom_id", "") for i in B.WakeView().children}, True)
-check("起床パネルの行割り: 明日は1段目・今後は2段目",
-      ([i.row for i in B.WakeView().children if getattr(i, "custom_id", "") == "sk_tomorrow"],
-       [i.row for i in B.WakeView().children if getattr(i, "custom_id", "") == "sk_upcoming"]), ([0], [1]))
+check("起床パネルから予定ボタンは外れた（#予定へ）",
+      {"sk_today", "sk_tomorrow", "sk_upcoming"} & {getattr(i, "custom_id", "") for i in B.WakeView().children}, set())
 check("課題パネルは11ボタン（予定系は#予定へ）", {i.custom_id for i in B.KadaiPanelView().children},
       {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki", "sk_jw_free", "sk_cnote", "sk_newterm"})
 check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
