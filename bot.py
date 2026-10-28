@@ -7698,12 +7698,15 @@ def render_calendar_card(name, y, m, gs, ge, events, items, today):
     buf.seek(0)
     return buf
 
-# ---- 📊 タイムライン（大学の予定＋自分だけの予定を、今月から数か月先まで横並びの表に。課題は載せない） ----
+# ---- 📊 タイムライン：種類ごとの行（スイムレーン）に、期間ものは帯・1日だけは◆で並べる（予定が増えても行は増えない） ----
 TIMELINE_MONTHS = 4        # 最低この月数ぶんは表示（今月を含む）
 TIMELINE_MAX_MONTHS = 7    # 先の予定があってもここまで
-TIMELINE_MAX_ROWS = 14
+TIMELINE_LANES = [("長期休暇", "🌸", "長期休暇"), ("履修登録", "📋", "履修登録"), ("行事", "🎪", "行事"),
+                  ("その他", "📌", "その他"), ("試験期間", "📝", "試験期間"),
+                  (SHARED_KIND, "📣", "宣言した予定"), (PRIVATE_KIND, "🔒", "自分だけ")]
 
 async def timeline_data(uid, today):
+    """(表示はじめ, おわり, 予定ぜんぶ, {(年,月): バイト・部活などの合計分})"""
     t = date.fromisoformat(today)
     start = t.replace(day=1)
     y, m = start.year, start.month + TIMELINE_MONTHS - 1
@@ -7715,12 +7718,29 @@ async def timeline_data(uid, today):
     evs = sorted(list(await univ_events_between(today, cap.isoformat())) + await private_events_between(uid, today, cap.isoformat()),
                  key=lambda r: (r["start_day"], r["end_day"]))
     if evs:   # 先の予定まで届くように右端を延ばす（上限あり）
-        far = max(date.fromisoformat(r["end_day"]) for r in evs[:TIMELINE_MAX_ROWS])
+        far = max(date.fromisoformat(r["start_day"]) for r in evs)
         if far > end:
             end = min(cap, date.fromisoformat(month_bounds(far.year, far.month)[1]))
-    return start, end, evs[:TIMELINE_MAX_ROWS], max(0, len(evs) - TIMELINE_MAX_ROWS)
+    evs = [r for r in evs if r["start_day"] <= end.isoformat()]
+    mins = {}
+    for r in await time_events_between(uid, start.isoformat(), end.isoformat()):
+        k = (int(r["day"][:4]), int(r["day"][5:7]))
+        mins[k] = mins.get(k, 0) + r["minutes"]
+    return start, end, evs, mins
 
-def render_timeline_card(name, start, end, events, more, today):
+def _pack_lanes(items, key_start, key_end, gap_days=0):
+    """重ならないように段に詰める → [[item, ...], ...]（期間が重なるものだけ下の段へ）"""
+    lanes = []
+    for it in sorted(items, key=lambda r: (key_start(r), key_end(r))):
+        for ln in lanes:
+            if key_end(ln[-1]) + timedelta(days=gap_days) < key_start(it):
+                ln.append(it)
+                break
+        else:
+            lanes.append([it])
+    return lanes
+
+def render_timeline_card(name, start, end, events, month_mins, today):
     """タイムライン（PNG bytes）。描けなければ None"""
     try:
         from PIL import Image as PImage, ImageDraw, ImageFont
@@ -7733,72 +7753,114 @@ def render_timeline_card(name, start, end, events, more, today):
     ef = _find_emoji_font()
     F = lambda s, bold=False: ImageFont.truetype(fb if bold else f, s)
     E = lambda s: ImageFont.truetype(ef, s) if ef else None
-    W, pad, label_w, row_h = 1080, 40, 330, 54
-    n = max(1, len(events))
-    top = 170
-    H = top + 44 + n * row_h + 150
-    img = PImage.new("RGB", (W, H), CARD_CREAM)
-    d = ImageDraw.Draw(img)
-    d.text((pad, 50), "これからの予定", font=F(54, True), fill=CARD_INK)
-    d.text((pad + 4, 118), f"{name} さんのタイムライン（大学の予定＋じぶんの予定・課題は除く）", font=F(20), fill=CARD_MUTED)
-    logo = _gohan_art("logo")
-    if logo:
-        _paste_art(img, logo, W - pad - round(logo.width * 90 / logo.height), 30, 90)
+    W, pad, label_w = 1080, 40, 150
     x0, x1 = pad + label_w, W - pad
     total = (end - start).days + 1
     X = lambda dd: x0 + (x1 - x0) * ((dd - start).days / total)
-    gy = top + 44
-    gh = n * row_h
-    # 月の区切りと月名
-    cur = start
-    i = 0
+    dmeasure = ImageDraw.Draw(PImage.new("RGB", (8, 8)))
+    BAR_H, BAR_GAP, PIN_ROW, TIER_H, LANE_PAD = 30, 8, 26, 24, 14
+    sd = lambda r: date.fromisoformat(r["start_day"])
+    ed = lambda r: date.fromisoformat(r["end_day"])
+    # 種類ごとに：期間ものは段に詰めた帯、1日だけは◆（名前は重ならない段に）
+    lanes = []
+    for kind, ic, label in TIMELINE_LANES:
+        evs = [r for r in events if r["kind"] == kind]
+        if not evs:
+            continue
+        spans = [r for r in evs if r["end_day"] > r["start_day"]]
+        pins = sorted([r for r in evs if r["end_day"] == r["start_day"]], key=sd)
+        bar_rows = _pack_lanes(spans, sd, ed)
+        tiers, placed = [], []
+        for r in pins:
+            px = X(max(sd(r), start) + timedelta(hours=12))
+            txt = f"{int(r['start_day'][5:7])}/{int(r['start_day'][8:])} {r['title']}"   # 年は見出しで分かるので月/日だけ
+            w = _mixed_w(dmeasure, txt, F(17, True), E(17)) + 10
+            lx = min(max(px - 7, x0), x1 - w)
+            for ti, used in enumerate(tiers):
+                if all(lx >= b + 6 or lx + w <= a - 6 for a, b in used):
+                    used.append((lx, lx + w))
+                    placed.append((r, px, lx, ti, txt))
+                    break
+            else:
+                tiers.append([(lx, lx + w)])
+                placed.append((r, px, lx, len(tiers) - 1, txt))
+        h = LANE_PAD * 2 + len(bar_rows) * (BAR_H + BAR_GAP) + (PIN_ROW + len(tiers) * TIER_H if pins else 0)
+        lanes.append({"kind": kind, "ic": ic, "label": label, "bars": bar_rows, "pins": placed, "h": max(h, 64)})
+    top = 160
+    head_h = 62 if month_mins else 44
+    gy = top + head_h
+    gh = sum(l["h"] for l in lanes) if lanes else 90
+    H = gy + gh + 112
+    img = PImage.new("RGB", (W, H), CARD_CREAM)
+    d = ImageDraw.Draw(img)
+    d.text((pad, 46), "これからの予定", font=F(54, True), fill=CARD_INK)
+    d.text((pad + 4, 114), f"{name} さんのタイムライン（大学の予定＋じぶんの予定・課題は除く）", font=F(20), fill=CARD_MUTED)
+    logo = _gohan_art("logo")
+    if logo:
+        _paste_art(img, logo, W - pad - round(logo.width * 90 / logo.height), 30, 90)
+    # 月：交互の地色・区切り線・月名（年が変わるところに年）・その月のバイト・部活の合計
+    cur, i = start, 0
     while cur <= end:
         nxt = (cur + timedelta(days=32)).replace(day=1)
         xa, xb = X(cur), X(min(nxt, end + timedelta(days=1)))
         if i % 2 == 0:
             d.rectangle([xa, gy, xb, gy + gh], fill="#fffaf2")
-        d.line([xa, top + 8, xa, gy + gh], fill=CARD_LINE, width=2)
-        d.text(((xa + xb) / 2, top + 10), f"{cur.month}月", font=F(22, True), fill=CARD_INK, anchor="ma")
-        if cur.month == 1 and i > 0:   # 年が変わるところに小さく年
-            d.text((xa + 4, top - 14), f"{cur.year}年", font=F(15, True), fill=CARD_ORANGE)
+        d.line([xa, top + 6, xa, gy + gh], fill=CARD_LINE, width=2)
+        d.text(((xa + xb) / 2, top + 6), f"{cur.month}月", font=F(24, True), fill=CARD_INK, anchor="ma")
+        if cur.month == 1 and i > 0:
+            d.text((xa + 4, top - 16), f"{cur.year}年", font=F(15, True), fill=CARD_ORANGE)
+        mm = month_mins.get((cur.year, cur.month))
+        if mm:
+            d.text(((xa + xb) / 2, top + 36), f"活動 {fmt_mins(mm)}", font=F(15, True), fill=CARD_MUTED, anchor="ma")
         cur, i = nxt, i + 1
-    d.line([x1, top + 8, x1, gy + gh], fill=CARD_LINE, width=2)
-    # 行
+    d.line([x1, top + 6, x1, gy + gh], fill=CARD_LINE, width=2)
+    # 行（種類ごと）
+    yy = gy
+    for ln in lanes:
+        col = UNIV_COLORS.get(ln["kind"], "#5b7fa6")
+        d.line([pad, yy, x1, yy], fill=CARD_LINE, width=1)
+        d.rounded_rectangle([pad, yy + ln["h"] / 2 - 18, pad + 8, yy + ln["h"] / 2 + 18], radius=4, fill=col)
+        _draw_mixed(d, pad + 18, int(yy + ln["h"] / 2 - 14), f"{ln['ic']} {ln['label']}", F(20, True), E(20), CARD_INK)
+        by = yy + LANE_PAD
+        for row in ln["bars"]:
+            for r in row:
+                s, e = max(sd(r), start), min(ed(r), end)
+                bx1, bx2 = X(s), max(X(e + timedelta(days=1)), X(s) + 10)
+                d.rounded_rectangle([bx1, by, bx2, by + BAR_H], radius=BAR_H // 2, fill=col)
+                mdt = lambda iso: f"{int(iso[5:7])}/{int(iso[8:])}"
+                txt = f"{r['title']}　{mdt(r['start_day'])}〜{mdt(r['end_day'])}"
+                tf = F(16, True)
+                if d.textlength(txt, font=tf) + 24 > bx2 - bx1:
+                    txt = r["title"]
+                if d.textlength(txt, font=tf) + 24 <= bx2 - bx1:
+                    d.text((bx1 + 12, by + 5), txt, font=tf, fill="#ffffff")
+                else:   # 帯が短くて入らない名前は帯の右に、右端からはみ出すなら帯の左に、色文字で
+                    w = d.textlength(r["title"], font=tf)
+                    lx = bx2 + 6 if bx2 + 6 + w <= x1 - 4 else max(x0 + 2, bx1 - 6 - w)
+                    d.text((lx, by + 5), r["title"], font=tf, fill=col)
+            by += BAR_H + BAR_GAP
+        if ln["pins"]:
+            py = by + 6
+            d.line([x0, py + 8, x1, py + 8], fill=CARD_LINE, width=1)
+            for r, px, lx, ti, txt in ln["pins"]:
+                d.polygon([(px, py), (px + 8, py + 8), (px, py + 16), (px - 8, py + 8)], fill=col)
+                ty = py + PIN_ROW + ti * TIER_H - 4
+                if ti:
+                    d.line([px, py + 16, px, ty + 2], fill=col, width=1)
+                _draw_mixed(d, int(lx), int(ty), txt, F(17, True), E(17), CARD_INK)
+        yy += ln["h"]
+    if not lanes:
+        d.text(((x0 + x1) / 2, gy + 30), "まだ予定がありません（#予定🗓 の 🏫 と 🙋 から登録できます）", font=F(20), fill=CARD_MUTED, anchor="ma")
+    d.line([pad, gy + gh, x1, gy + gh], fill=CARD_LINE, width=1)
     td = date.fromisoformat(today)
-    for k, r in enumerate(events):
-        yy = gy + k * row_h
-        d.line([pad, yy + row_h, x1, yy + row_h], fill=CARD_LINE, width=1)
-        ic = UNIV_EMOJI.get(r["kind"], "📌")
-        title = r["title"]
-        lf = F(22, True)
-        while title and _mixed_w(d, f"{ic} {title}", lf, E(22)) > label_w - 16:
-            title = title[:-1]
-        if title != r["title"]:
-            title = title[:-1] + "…"
-        _draw_mixed(d, pad, yy + 6, f"{ic} {title}", lf, E(22), CARD_INK)
-        d.text((pad + 30, yy + 32), f"{univ_span_text(r)}・{univ_status(r, today)}", font=F(15), fill=CARD_MUTED)
-        s = max(date.fromisoformat(r["start_day"]), start)
-        e = min(date.fromisoformat(r["end_day"]), end)
-        bx1, bx2 = X(s), max(X(e + timedelta(days=1)), X(s) + 8)
-        d.rounded_rectangle([bx1, yy + 12, bx2, yy + row_h - 12], radius=9, fill=UNIV_COLORS.get(r["kind"], "#5b7fa6"))
-    # 今日の線
-    if start <= td <= end:
-        tx = X(td)
-        d.line([tx, top + 40, tx, gy + gh], fill=CARD_ORANGE, width=3)
-        d.text((tx, gy + gh + 6), "今日", font=F(18, True), fill=CARD_ORANGE, anchor="ma")
-    if not events:
-        d.text(((x0 + x1) / 2, gy + 14), "まだ予定がありません", font=F(22), fill=CARD_MUTED, anchor="ma")
-    if more:
-        d.text((pad, gy + gh + 8), f"ほか {more} 件（もっと先の予定は来月以降に表示されます）", font=F(16), fill=CARD_MUTED)
-    ly = H - 100
-    x = pad
-    for kind in LEGEND_KINDS:
-        d.rounded_rectangle([x, ly + 4, x + 34, ly + 24], radius=6, fill=UNIV_COLORS[kind])
-        d.text((x + 42, ly), kind, font=F(20), fill=CARD_MUTED)
-        x += 42 + int(d.textlength(kind, font=F(20))) + 26
+    if start <= td <= end:   # 今日の線
+        tx = X(td) + (x1 - x0) / total / 2
+        d.line([tx, top + 30, tx, gy + gh], fill=CARD_ORANGE, width=3)
+        d.rounded_rectangle([tx - 30, gy + gh + 6, tx + 30, gy + gh + 32], radius=13, fill=CARD_ORANGE)
+        d.text((tx, gy + gh + 9), "今日", font=F(17, True), fill="#ffffff", anchor="ma")
     d.line([pad, H - 58, W - pad, H - 58], fill=CARD_LINE, width=2)
     d.text((pad, H - 46), "最低限生活リズムサークル", font=F(24, True), fill=CARD_INK)
-    d.text((W - pad, H - 42), "この画像はあなたにだけ表示されています", font=F(18), fill=CARD_MUTED, anchor="ra")
+    d.text((W - pad, H - 42), "◆＝1日だけの予定　月名の下＝その月のバイト・部活などの合計", font=F(17), fill=CARD_MUTED, anchor="ra")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
@@ -7807,8 +7869,8 @@ def render_timeline_card(name, start, end, events, more, today):
 async def send_timeline(interaction):
     await interaction.response.defer(ephemeral=True)
     today = day_str(now_jst())
-    start, end, evs, more = await timeline_data(interaction.user.id, today)
-    buf = await asyncio.to_thread(render_timeline_card, interaction.user.display_name, start, end, evs, more, today)
+    start, end, evs, mins = await timeline_data(interaction.user.id, today)
+    buf = await asyncio.to_thread(render_timeline_card, interaction.user.display_name, start, end, evs, mins, today)
     if not buf:
         await interaction.followup.send("⚠️ タイムラインを作れませんでした（VMに日本語フォントが必要）。", ephemeral=True)
         return

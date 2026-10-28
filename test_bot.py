@@ -888,10 +888,14 @@ async def main():
     # 📊 タイムライン（今月から最低4か月・課題は載せない）
     await B.db.execute("INSERT INTO private_events(user_id,title,start_day,end_day,ts) VALUES('95','帰省','2026-11-05','2026-11-07',0)")
     await B.db.commit()
-    _s, _e, _tl, _more = await B.timeline_data("95", "2026-10-25")   # 日付を固定（実行日に左右されないように）
+    _s, _e, _tl, _mins = await B.timeline_data("95", "2026-10-25")   # 日付を固定（実行日に左右されないように）
     check("タイムライン: 今月はじまり・4か月以上", (_s, (_e.year - _s.year) * 12 + _e.month - _s.month >= 3), (date(2026, 10, 1), True))
     check("タイムライン: 大学の予定と自分だけの予定が並ぶ", {r["kind"] for r in _tl} >= {"行事", B.PRIVATE_KIND}, True)
-    check("タイムライン: 画像PNG生成", B.render_timeline_card("テスト", _s, _e, _tl, _more, "2026-10-25") is not None, True)
+    check("タイムライン: 月ごとのバイト・部活の合計", _mins.get((2026, 11)), 690)
+    check("タイムライン: 画像PNG生成", B.render_timeline_card("テスト", _s, _e, _tl, _mins, "2026-10-25") is not None, True)
+    _rows = B._pack_lanes([{"s": date(2026, 1, 1), "e": date(2026, 1, 5)}, {"s": date(2026, 1, 3), "e": date(2026, 1, 8)},
+                           {"s": date(2026, 1, 10), "e": date(2026, 1, 12)}], lambda r: r["s"], lambda r: r["e"])
+    check("タイムライン: 重なる期間だけ下の段に（行は増えすぎない）", [len(r) for r in _rows], [2, 1])
 
     # 🐾 いやしアルバム（見出しは文字・横の茶碗なし）
     from PIL import Image as _PI
