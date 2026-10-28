@@ -2586,7 +2586,7 @@ async def ensure_botlog_channel(guild, cat):
         ch = await guild.create_text_channel(BOTLOG_CH_NAME, category=cat, overwrites=ow,
                                              topic="Botの不調・自動メンテの記録（管理者だけに見えます）")
         await ch.send("🔒 ここはBotの管理用チャンネルです（管理者にだけ見えます）。\n"
-                      "エラーと直し方・yt-dlpの自動更新・週1回のDBバックアップがここに届きます。詳しくは リポジトリの 保守マニュアル.md")
+                      "エラーと直し方・yt-dlpの自動更新・週1回のDBバックアップがここに届きます。詳しくは 保守マニュアル.md（音楽は PCの 保守マニュアル_音楽.md）")
     else:
         try:
             await ch.edit(overwrites=ow)   # 非公開設定が崩れていたら直す
@@ -3456,7 +3456,7 @@ async def _spotify_embed_tracks(sid):
         print("Spotify埋め込み: __NEXT_DATA__が見つからない（ページ構造変更？）", flush=True)
         await bot_alert("🟢 **Spotifyのプレイリストが読めなくなりました**（埋め込みページの仕組みが変わった可能性）。"
                         "単曲・アルバムURLは引き続き使えます。直すには `_spotify_embed_tracks` の読み取り部分の修正が必要です"
-                        "（リポジトリの 保守マニュアル.md 参照）。", key="sp_embed", cooldown_h=48)
+                        "（PCの 保守マニュアル_音楽.md 参照）。", key="sp_embed", cooldown_h=48)
         return None
     try:
         data = json.loads(m.group(1))
