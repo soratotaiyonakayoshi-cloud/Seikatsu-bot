@@ -8050,7 +8050,7 @@ def render_timeline_card(name, start, end, events, month_mins, today):
     img = PImage.new("RGB", (W, H), CARD_CREAM)
     d = ImageDraw.Draw(img)
     d.text((pad, 46), "これからの予定", font=F(54, True), fill=CARD_INK)
-    d.text((pad + 4, 114), f"{name} さんのタイムライン（大学の予定＋じぶんの予定・課題は除く）", font=F(20), fill=CARD_MUTED)
+    d.text((pad + 4, 114), f"{name} さんのタイムライン", font=F(20), fill=CARD_MUTED)
     logo = _gohan_art("logo")
     if logo:
         _paste_art(img, logo, W - pad - round(logo.width * 90 / logo.height), 30, 90)
