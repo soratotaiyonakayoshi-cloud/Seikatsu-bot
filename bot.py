@@ -2923,6 +2923,16 @@ async def kyuka_command(interaction, kaishi: str = None, owari: str = None, zura
                       + (f"、起床の締切が **{shift / 60:g}時間** 遅くなります。" if shift else "になります。")
                       + "\n-# 休み明けは自動で元に戻ります。ゆるく、でも生活リズムは崩さずにいこう")
 
+PLAY_HISTORY_KEEP_DAYS = int(os.getenv("PLAY_HISTORY_KEEP_DAYS", "20"))   # 再生履歴を残す日数（週間ヘビロテには7日あれば足りる）
+
+async def prune_play_history(now=None):
+    """古い再生履歴を消す（プレイリスト1回で最大50件たまるため）。消した件数を返す"""
+    now = now or now_jst()
+    cutoff = int((now - timedelta(days=PLAY_HISTORY_KEEP_DAYS)).timestamp())
+    cur = await db.execute("DELETE FROM play_history WHERE ts < ?", (cutoff,))
+    await db.commit()
+    return cur.rowcount
+
 async def ops_daily(now):
     """毎朝の運用タスク：火曜4時=yt-dlp更新／月曜5時=外部バックアップ（それぞれ週1回）"""
     wk = now.strftime("%G-W%V")
@@ -2933,6 +2943,12 @@ async def ops_daily(now):
         await meta_set("ops_backup_week", wk)
         await offsite_backup()
     await maybe_post_anniversary(now)   # 🎉 発足から半年・1周年…の9時に記念カード
+    day = day_str(now)
+    if now.hour == 4 and await meta_get("ops_prune_day") != day:   # 毎朝4時：古い再生履歴の掃除
+        await meta_set("ops_prune_day", day)
+        n = await prune_play_history(now)
+        if n:
+            print(f"🎵 再生履歴を{n}件削除（{PLAY_HISTORY_KEEP_DAYS}日より前）", flush=True)
 
 # ---- ⏰ 起床リマインド（オプトイン）：締切のN分前に未報告ならメンション ----
 _wakeremind_cache = {"day": None, "done": set()}
@@ -9230,6 +9246,8 @@ async def upsert_message(key, ch, embed, view=None):
     await meta_set(key, m.id)
     return m
 
+SETUP_TUTORIAL = os.getenv("SETUP_TUTORIAL", "0") == "1"   # 1にすると /setup が #はじめに📖 にBotの長いガイドを投稿・更新する
+
 def tutorial_embeds():
     gold = discord.Color.gold()
     e1 = discord.Embed(
@@ -9308,7 +9326,7 @@ async def on_member_join(member):
     haj = await get_ch("hajimeni")
     if haj:
         try:
-            await haj.send(f"👋 ようこそ {member.mention}！まずは ① #設定🔧 で `/saitei` を実行して自分の最低限を決めて、② #起床🌅 で ☀️ を押してみよう。詳しくはこのチャンネルの上のガイドを読んでね。")
+            await haj.send(f"👋 ようこそ {member.mention}！まずはこのチャンネルの説明を読んでみてね。")
         except Exception as e:
             print(f"歓迎メッセージ失敗: {e!r}", flush=True)
 
@@ -11821,8 +11839,9 @@ async def setup_command(interaction):
     haj = await get_ch("hajimeni")
     if haj:
         await make_readonly(haj, guild, "ガイド用チャンネルは読み取り専用")
-        for i, emb in enumerate(tutorial_embeds()):
-            await upsert_message(f"tutorial_{i}", haj, emb)
+        if SETUP_TUTORIAL:   # 既定オフ：#はじめに📖 は管理者が手で書いた最低限の説明を使う（Botの長い説明で上書きしない）
+            for i, emb in enumerate(tutorial_embeds()):
+                await upsert_message(f"tutorial_{i}", haj, emb)
     role_note = ""
     jik = await get_ch("jikoshokai")
     rch = await get_ch("roles")
