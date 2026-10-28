@@ -2764,19 +2764,100 @@ async def kanri_command(interaction, sousa: app_commands.Choice[str]):
              f"（大学の予定の長期休暇 {len(_UNIV_BREAKS)} 件）"]
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
-def parse_md(s, ref):
-    """'2/1' '2月1日' '2026-02-01' → date（年なしは ref の年）。読めなければ None"""
-    t = unicodedata.normalize("NFKC", (s or "")).strip()
-    m = re.fullmatch(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", t)
+def parse_md_ex(s, ref):
+    """'2/1' '2月1日' '2027/2/1' '27/2/1' '2027年2月1日' → (date, 年を書いたか)。年なしは ref の年。読めなければ (None, False)"""
+    t = unicodedata.normalize("NFKC", (s or "")).strip().replace(".", "/")
     try:
+        m = re.fullmatch(r"(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?", t)
         if m:
-            return date(int(m[1]), int(m[2]), int(m[3]))
+            return date(int(m[1]), int(m[2]), int(m[3])), True
+        m = re.fullmatch(r"(\d{2})/(\d{1,2})/(\d{1,2})", t)   # 27/2/1 → 2027年
+        if m:
+            return date(2000 + int(m[1]), int(m[2]), int(m[3])), True
         m = re.fullmatch(r"(\d{1,2})[/月](\d{1,2})日?", t)
         if m:
-            return date(ref.year, int(m[1]), int(m[2]))
+            return date(ref.year, int(m[1]), int(m[2])), False
     except ValueError:
+        return None, False
+    return None, False
+
+def parse_md(s, ref):
+    """parse_md_ex の日付だけ版"""
+    return parse_md_ex(s, ref)[0]
+
+def parse_span(spec, now, past_ok_days=1):
+    """日付1欄の入力 → (はじまり, おわり) のdate。'11/20' '2/10-4/4' '2027/2/10-4/4' '27/2/10〜27/4/4' など。
+    年を書かなければ自動：おわりがはじまりより前なら年またぎ、過ぎた日付（past_ok_days日より前）なら来年のこと。
+    年を書いたらその年のまま（おわりの年を省けば、はじまりの年から数える）。読めなければ None"""
+    parts = [p for p in re.split(r"\s*[-〜~～]\s*", unicodedata.normalize("NFKC", spec or "").strip()) if p]
+    if not parts or len(parts) > 2:
         return None
-    return None
+    s, sy = parse_md_ex(parts[0], now)
+    if not s:
+        return None
+    if len(parts) == 2:
+        e, ey = parse_md_ex(parts[1], s if sy else now)
+        if not e:
+            return None
+    else:
+        e, ey = s, sy
+    if e < s and not ey:   # 12/20〜1/10 のように年をまたぐ
+        e = e.replace(year=e.year + 1)
+    if e < s:
+        return None
+    if not sy and e < now.date() - timedelta(days=past_ok_days):
+        try:
+            s, e = s.replace(year=s.year + 1), e.replace(year=e.year + 1)
+        except ValueError:   # 2/29
+            s, e = s + timedelta(days=365), e + timedelta(days=365)
+    return s, e
+
+def fmt_full(d):
+    """2027年2月10日(水)"""
+    return f"{d.year}年{d.month}月{d.day}日({DAY_CHARS[d.weekday()]})"
+
+def fmt_full_span(s, e):
+    if s == e:
+        return fmt_full(s)
+    tail = f"{e.month}月{e.day}日({DAY_CHARS[e.weekday()]})" if e.year == s.year else fmt_full(e)
+    return f"{fmt_full(s)}〜{tail}"
+
+def shift_year(d, n):
+    try:
+        return d.replace(year=d.year + n)
+    except ValueError:   # 2/29 → 2/28
+        return d.replace(year=d.year + n, day=28)
+
+class YearShiftView(discord.ui.View):
+    """登録直後の確認に「◀ 1年前／1年後 ▶」＝年の自動判定が違ったときにワンタップで直す"""
+
+    def __init__(self, table, row_id, uid, head):
+        super().__init__(timeout=900)
+        assert table in ("univ_events", "private_events")
+        self.table, self.row_id, self.uid, self.head = table, row_id, str(uid), head
+
+    async def _shift(self, interaction, n):
+        if str(interaction.user.id) != self.uid:
+            await interaction.response.send_message("登録した本人だけが直せます。", ephemeral=True)
+            return
+        async with db.execute(f"SELECT start_day, end_day FROM {self.table} WHERE id=?", (self.row_id,)) as c:   # tableは内部定数のみ
+            r = await c.fetchone()
+        if not r:
+            await interaction.response.edit_message(content="⚠️ もう消えている予定です。", view=None)
+            return
+        s, e = shift_year(date.fromisoformat(r["start_day"]), n), shift_year(date.fromisoformat(r["end_day"]), n)
+        await db.execute(f"UPDATE {self.table} SET start_day=?, end_day=? WHERE id=?", (s.isoformat(), e.isoformat(), self.row_id))
+        await db.commit()
+        await load_break()
+        await interaction.response.edit_message(content=f"{self.head}\n📅 **{fmt_full_span(s, e)}**（年を直しました）", view=self)
+
+    @discord.ui.button(label="◀ 1年前にする", style=discord.ButtonStyle.secondary)
+    async def b_prev(self, interaction, button):
+        await self._shift(interaction, -1)
+
+    @discord.ui.button(label="1年後にする ▶", style=discord.ButtonStyle.secondary)
+    async def b_next(self, interaction, button):
+        await self._shift(interaction, +1)
 
 async def set_break(start, end, shift_min, name):
     """長期休暇モードを保存（start/end=date。start=None で解除）"""
@@ -6980,7 +7061,10 @@ UNIV_KINDS = [("長期休暇", "🌸", "期間中は時間割と毎週課題が�
 UNIV_EMOJI = {**{k: e for k, e, _ in UNIV_KINDS}, "試験期間": "📝"}
 
 def md(iso):
-    return f"{int(iso[5:7])}/{int(iso[8:])}"
+    """'2027-02-10' → '2/10'。今年以外は年つき '2027/2/10'（何年のことか分かるように）"""
+    y = int(iso[:4])
+    base = f"{int(iso[5:7])}/{int(iso[8:])}"
+    return base if y == now_jst().year else f"{y}/{base}"
 
 def univ_span_text(r):
     return md(r["start_day"]) if r["start_day"] == r["end_day"] else f"{md(r['start_day'])}〜{md(r['end_day'])}"
@@ -7063,27 +7147,25 @@ class UnivEventModal(discord.ui.Modal):
         self.kind = kind
         self.t_in = discord.ui.TextInput(label="名前", max_length=40, default=kind if kind != "その他" else None,
                                          placeholder="例：前期 履修登録／春休み／学園祭")
-        self.s_in = discord.ui.TextInput(label="はじまり（例 4/1）", max_length=12)
-        self.e_in = discord.ui.TextInput(label="おわり（例 4/10・1日だけなら空欄）", max_length=12, required=False)
-        for it in (self.t_in, self.s_in, self.e_in):
+        self.d_in = discord.ui.TextInput(label="日付（1日だけ 11/20 ／期間 2/10-4/4）", max_length=30,
+                                         placeholder="年はふつう自動。指定するなら 2027/2/10-4/4 や 27/2/10")
+        for it in (self.t_in, self.d_in):
             self.add_item(it)
 
     async def on_submit(self, interaction):
         now = now_jst()
-        s = parse_md(str(self.s_in.value), now)
-        e = parse_md(str(self.e_in.value), now) if str(self.e_in.value).strip() else s
-        if not s or not e:
-            await interaction.response.send_message("⚠️ 日付が読めませんでした。例：`4/1` `2027-04-10`", ephemeral=True)
+        span = parse_span(str(self.d_in.value), now)
+        if not span:
+            await interaction.response.send_message("⚠️ 日付が読めませんでした。例：`11/20` `2/10-4/4` `2027/2/10-4/4`", ephemeral=True)
             return
-        if e < s:   # 12/20〜1/10 のように年をまたぐ
-            e = e.replace(year=e.year + 1)
-        if e < now.date() - timedelta(days=1):   # 過ぎた日付を書いたら来年のこととみなす
-            s, e = s.replace(year=s.year + 1), e.replace(year=e.year + 1)
+        s, e = span
         title = str(self.t_in.value).strip() or self.kind
-        await add_univ_event(interaction.user.id, self.kind, title, s, e)
+        eid = await add_univ_event(interaction.user.id, self.kind, title, s, e)
         r = {"title": title, "kind": self.kind, "start_day": s.isoformat(), "end_day": e.isoformat()}
         extra = "\n-# 🌸 この期間は自動で長期休暇モードになります（時間割・毎週課題がお休み、起床締切が少し遅く）" if self.kind == "長期休暇" else ""
-        await interaction.response.send_message(f"✅ 登録しました：{univ_line(r, day_str(now))}{extra}", ephemeral=True)
+        head = f"✅ 登録しました：{UNIV_EMOJI.get(self.kind, '📌')} **{title}**{extra}"
+        await interaction.response.send_message(f"{head}\n📅 **{fmt_full_span(s, e)}**\n-# 年が違っていたら下のボタンで直せます",
+                                                view=YearShiftView("univ_events", eid, interaction.user.id, head), ephemeral=True)
         ch, key = await yotei_channel()
         if ch:
             await ch.send(f"🏫 **{interaction.user.display_name}** が大学の予定を登録しました：{univ_line(r, day_str(now))}"
@@ -7198,35 +7280,33 @@ class PrivateEventModal(discord.ui.Modal):
         self.shared = shared
         self.t_in = discord.ui.TextInput(label="なにをする？" + ("（#えらい🌟 で宣言されます）" if shared else "（自分にしか見えません）"),
                                          max_length=40, placeholder="例：TOEIC本番／レポート仕上げ" if shared else "例：バイト面接／帰省／歯医者")
-        self.s_in = discord.ui.TextInput(label="はじまり（例 11/3）", max_length=12)
-        self.e_in = discord.ui.TextInput(label="おわり（1日だけなら空欄）", max_length=12, required=False)
-        for it in (self.t_in, self.s_in, self.e_in):
+        self.d_in = discord.ui.TextInput(label="日付（1日だけ 11/3 ／期間 12/28-1/3）", max_length=30,
+                                         placeholder="年はふつう自動。指定するなら 2027/1/10 や 27/1/10")
+        for it in (self.t_in, self.d_in):
             self.add_item(it)
 
     async def on_submit(self, interaction):
         now = now_jst()
-        s = parse_md(str(self.s_in.value), now)
-        e = parse_md(str(self.e_in.value), now) if str(self.e_in.value).strip() else s
-        if not s or not e:
-            await interaction.response.send_message("⚠️ 日付が読めませんでした。例：`11/3` `2027-01-10`", ephemeral=True)
+        span = parse_span(str(self.d_in.value), now, past_ok_days=0)
+        if not span:
+            await interaction.response.send_message("⚠️ 日付が読めませんでした。例：`11/3` `12/28-1/3` `2027/1/10`", ephemeral=True)
             return
-        if e < s:
-            e = e.replace(year=e.year + 1)
-        if e < now.date():
-            s, e = s.replace(year=s.year + 1), e.replace(year=e.year + 1)
+        s, e = span
         title = str(self.t_in.value).strip()[:40]
-        await db.execute("INSERT INTO private_events(user_id,title,start_day,end_day,ts,shared) VALUES(?,?,?,?,?,?)",
-                         (str(interaction.user.id), title, s.isoformat(), e.isoformat(), int(now.timestamp()), 1 if self.shared else 0))
+        cur = await db.execute("INSERT INTO private_events(user_id,title,start_day,end_day,ts,shared) VALUES(?,?,?,?,?,?)",
+                               (str(interaction.user.id), title, s.isoformat(), e.isoformat(), int(now.timestamp()),
+                                1 if self.shared else 0))
+        pid = cur.lastrowid
         await db.commit()
         r = {"title": title, "kind": SHARED_KIND if self.shared else PRIVATE_KIND, "start_day": s.isoformat(), "end_day": e.isoformat()}
         if self.shared:
-            await interaction.response.send_message(f"📣 宣言しました：{univ_line(r, day_str(now))}\n-# #えらい🌟 に流れました。3日前と当日の朝にメンションで声をかけます",
-                                                    ephemeral=True)
-            await announce_shared_event(interaction.user, r, day_str(now))
+            head = f"📣 宣言しました：**{title}**\n-# #えらい🌟 に流れました。3日前と当日の朝にメンションで声をかけます"
         else:
-            await interaction.response.send_message(
-                f"🔒 登録しました：{univ_line(r, day_str(now))}\n-# 自分にしか見えません。朝の予定・カレンダーに出て、終わった翌日に自動で消えます",
-                ephemeral=True)
+            head = f"🔒 登録しました：**{title}**\n-# 自分にしか見えません。朝の予定・カレンダーに出て、終わった翌日に自動で消えます"
+        await interaction.response.send_message(f"{head}\n📅 **{fmt_full_span(s, e)}**",
+                                                view=YearShiftView("private_events", pid, interaction.user.id, head), ephemeral=True)
+        if self.shared:
+            await announce_shared_event(interaction.user, r, day_str(now))
 
 class PrivateToggleSelect(discord.ui.Select):
     """登録済みの予定の 🔒自分だけ⇔📣みんなに見せる を切り替える"""

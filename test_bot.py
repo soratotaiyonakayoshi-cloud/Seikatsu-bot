@@ -753,6 +753,18 @@ async def main():
     check("祝福: 全員✅で祝う", await B.maybe_celebrate(cid), True)
     check("祝福: 二度目は鳴らない", await B.maybe_celebrate(cid), False)
 
+    # 📅 日付1欄の入力（年は自動・指定もできる）
+    _rn = datetime(2026, 10, 28, 12, 0, tzinfo=JST)
+    check("日付欄: 1日だけ", B.parse_span("11/20", _rn), (date(2026, 11, 20), date(2026, 11, 20)))
+    check("日付欄: 期間（年またぎは自動）", B.parse_span("12/28-1/3", _rn), (date(2026, 12, 28), date(2027, 1, 3)))
+    check("日付欄: 過ぎた日付は来年のこと", B.parse_span("2/10-4/4", _rn), (date(2027, 2, 10), date(2027, 4, 4)))
+    check("日付欄: 年を書けばその年（おわりの年は省略可）", B.parse_span("2028/2/10〜4/4", _rn), (date(2028, 2, 10), date(2028, 4, 4)))
+    check("日付欄: 2けたの年も", B.parse_span("27/2/10", _rn), (date(2027, 2, 10), date(2027, 2, 10)))
+    check("日付欄: 年を書いた過去日はそのまま（直したいときのため）", B.parse_span("2026/4/1", _rn), (date(2026, 4, 1), date(2026, 4, 1)))
+    check("日付欄: 読めない", (B.parse_span("あした", _rn), B.parse_span("4/4-2/1", _rn) is not None), (None, True))
+    check("日付表示: 年と曜日つき", B.fmt_full_span(date(2027, 2, 10), date(2027, 4, 4)), "2027年2月10日(水)〜4月4日(日)")
+    check("日付表示: 年をずらす（うるう日は28日に）", B.shift_year(date(2028, 2, 29), 1), date(2029, 2, 28))
+
     # 🌸 長期休暇モード
     check("休暇: 日付の読み取り", (B.parse_md("2/1", date(2026, 10, 1)), B.parse_md("2027-03-31", date(2026, 10, 1)), B.parse_md("あ", date(2026, 1, 1))),
           (date(2026, 2, 1), date(2027, 3, 31), None))
