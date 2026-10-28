@@ -962,14 +962,12 @@ async def main():
     check("歌詞照合: 🙅で記録した曲はlrclibを使わない", (await B.lyrics_blocked("むかしの曲"), await B.fetch_lyrics("むかしの曲")), (True, None))
     check("歌詞照合: 🙅ボタンが操作画面にある", any(getattr(i, "label", "") == "🙅 違う曲の歌詞" for i in B.KaraokeCtlView().children), True)
 
-    # 🎵 再生履歴は20日で消す（週間ヘビロテに要る7日ぶんは残る）
-    _pn = datetime(2026, 10, 28, 4, 0, tzinfo=JST)
-    await B.db.execute("INSERT INTO play_history(user_id,title,url,ts) VALUES('95','ふるい曲','',?)", (int((_pn - B.timedelta(days=21)).timestamp()),))
-    await B.db.execute("INSERT INTO play_history(user_id,title,url,ts) VALUES('95','あたらしい曲','',?)", (int((_pn - B.timedelta(days=6)).timestamp()),))
+    # 🎵 再生履歴は新しい20曲だけ残す
+    await B.db.executemany("INSERT INTO play_history(user_id,title,url,ts) VALUES('95',?,'',0)", [(f"履歴テスト{i}",) for i in range(30)])
     await B.db.commit()
-    await B.prune_play_history(_pn)
-    _left = {r["title"] for r in await (await B.db.execute("SELECT title FROM play_history WHERE title IN ('ふるい曲','あたらしい曲')")).fetchall()}
-    check("再生履歴: 20日より前だけ消える", _left, {"あたらしい曲"})
+    await B.prune_play_history()
+    _left = [r["title"] for r in await (await B.db.execute("SELECT title FROM play_history ORDER BY id")).fetchall()]
+    check("再生履歴: 新しい20曲だけ残る", (len(_left), _left[0], _left[-1]), (20, "履歴テスト10", "履歴テスト29"))
     check("#はじめに: /setupは既定でBotの長いガイドを投稿しない", B.SETUP_TUTORIAL, False)
 
     # 🧹 n日に1回の家事リマインド（今日やる日なのにまだの人だけ）

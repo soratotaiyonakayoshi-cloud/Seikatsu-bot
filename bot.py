@@ -2923,13 +2923,12 @@ async def kyuka_command(interaction, kaishi: str = None, owari: str = None, zura
                       + (f"、起床の締切が **{shift / 60:g}時間** 遅くなります。" if shift else "になります。")
                       + "\n-# 休み明けは自動で元に戻ります。ゆるく、でも生活リズムは崩さずにいこう")
 
-PLAY_HISTORY_KEEP_DAYS = int(os.getenv("PLAY_HISTORY_KEEP_DAYS", "20"))   # 再生履歴を残す日数（週間ヘビロテには7日あれば足りる）
+PLAY_HISTORY_KEEP = int(os.getenv("PLAY_HISTORY_KEEP", "20"))   # 再生履歴は新しい順にこの曲数だけ残す
 
 async def prune_play_history(now=None):
-    """古い再生履歴を消す（プレイリスト1回で最大50件たまるため）。消した件数を返す"""
-    now = now or now_jst()
-    cutoff = int((now - timedelta(days=PLAY_HISTORY_KEEP_DAYS)).timestamp())
-    cur = await db.execute("DELETE FROM play_history WHERE ts < ?", (cutoff,))
+    """再生履歴を新しい順に PLAY_HISTORY_KEEP 件だけ残して、それより古いものを消す。消した件数を返す"""
+    cur = await db.execute("DELETE FROM play_history WHERE id NOT IN "
+                           "(SELECT id FROM play_history ORDER BY id DESC LIMIT ?)", (PLAY_HISTORY_KEEP,))
     await db.commit()
     return cur.rowcount
 
@@ -2948,7 +2947,7 @@ async def ops_daily(now):
         await meta_set("ops_prune_day", day)
         n = await prune_play_history(now)
         if n:
-            print(f"🎵 再生履歴を{n}件削除（{PLAY_HISTORY_KEEP_DAYS}日より前）", flush=True)
+            print(f"🎵 再生履歴を{n}件削除（新しい{PLAY_HISTORY_KEEP}曲だけ残す）", flush=True)
 
 # ---- ⏰ 起床リマインド（オプトイン）：締切のN分前に未報告ならメンション ----
 _wakeremind_cache = {"day": None, "done": set()}
@@ -3894,6 +3893,7 @@ async def do_play(interaction, kyoku, eph=False):
             await db.execute("INSERT INTO play_history(user_id,title,url,ts) VALUES(?,?,?,?)",
                              (str(interaction.user.id), t, u, ts0))
         await db.commit()
+        await prune_play_history()   # 再生履歴は新しい20曲だけ（プレイリストで一気に増えてもその場で整える）
         emb = discord.Embed(title="📃 プレイリストを追加" if len(tracks) > 1 else "⏭ キューに追加",
                             color=discord.Color.gold())
         name_v = f"[{pl_title}]({meta['page']})" if meta.get("page") else pl_title
@@ -3909,6 +3909,7 @@ async def do_play(interaction, kyoku, eph=False):
         await db.execute("INSERT INTO play_history(user_id,title,url,ts) VALUES(?,?,?,?)",
                          (str(interaction.user.id), single["title"], kyoku.strip() if looks_like_url(kyoku) else "", ts0))
         await db.commit()
+        await prune_play_history()
         emb = discord.Embed(title="⏭ キューに追加", color=discord.Color.gold(),
                             description=f"[{single['title']}]({single['page']})" if single.get("page") else f"**{single['title']}**")
         if single.get("duration"):
@@ -4191,6 +4192,7 @@ async def enqueue_lazy(interaction, tracks):
         await db.execute("INSERT INTO play_history(user_id,title,url,ts) VALUES(?,?,?,?)",
                          (str(interaction.user.id), t, q if looks_like_url(q) else "", ts0))
     await db.commit()
+    await prune_play_history()
     note = f"⏭ **{len(tracks)} 曲**をキューに追加"
     note += _bgm_mode_off()   # リクエストが来たらBGMモードは終了（終わったあと勝手にBGMへ戻らない）
     if not vc.is_playing():
