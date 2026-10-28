@@ -105,7 +105,8 @@ CH = {
               "長期休暇はその期間が自動で休暇モードに）。\n"
               "🙋 **じぶんの予定**＝🔒自分だけ（だれにも見えない）か📣みんなに見せる（#えらい🌟 で宣言＋3日前・当日に声かけ）。終わったら自動で消えます。\n"
               "📝 **試験日**＝科目ごとの試験日のカウントダウン（履修者へのお知らせは #課題📚）。\n"
-              "📊 **タイムライン**で数か月先までの予定を一望、🗓 **カレンダー**で月ごとに（課題・試験・実験も入ります）。画像は自分にだけ表示。"),
+              "⏱ **バイト・部活**＝タップで記録して月の合計時間を確認（よく使うシフトは「いつもの」に保存）。\n"
+              "📊 **タイムライン**で数か月先までの予定を一望、🗓 **カレンダー**で月ごとに（バイト・部活・試験・実験も入ります。課題は #課題📚 で）。画像は自分にだけ表示。"),
     "settei": ("設定🔧", "🛠 ボタンから項目を選んで自分の最低限を設定（`/saitei` でまとめて設定も可）。毎週の定休日（曜日）もここで。\n"
                "`/kojin add` で自分だけの項目を追加し、📝ボタンで毎日チェック。`/oyasumi` で単発のお休み申告。"),
 }
@@ -7386,7 +7387,7 @@ async def send_private_hub(interaction):
     await interaction.response.send_message("\n".join(lines), view=PrivateHubView(rows), ephemeral=True)
 
 # ---- ⏱ バイト・部活など「時間つきの予定」：日付×時間で登録 → 月の合計時間（本人だけ・記録は消さない） ----
-TIME_KINDS = [("アルバイト", "💼", "#b8860b"), ("部活・サークル", "🏸", "#3d8f83"), ("その他の活動", "⏱", "#8a8378")]
+TIME_KINDS = [("アルバイト", "💼", "#b8860b"), ("部活・サークル", "🏸", "#3d8f83"), ("その他の活動", "🕒", "#8a8378")]   # ⏱は画像用フォントに無いので🕒
 TIME_EMOJI = {**{k: e for k, e, _ in TIME_KINDS}, "習い事・塾": "📖"}   # 習い事・塾は選択肢から外した（記録済みの分の表示用に残す）
 TIME_COLORS = {k: c for k, _, c in TIME_KINDS}
 
@@ -7805,7 +7806,8 @@ UNIV_COLORS = {"長期休暇": "#e8913a", "履修登録": "#3d8f83", "行事": "
 LEGEND_KINDS = ("長期休暇", "履修登録", "行事", "その他", PRIVATE_KIND, SHARED_KIND)
 
 async def calendar_data(uid, y, m):
-    """月表示の材料：(グリッド開始日, 終了日, 大学の予定, {日付: [自分の予定の文字列]})"""
+    """月表示の材料：(グリッド開始日, 終了日, 大学の予定・じぶんの予定, {日付: [(文字, 色 or None), ...]})
+    マスの中身＝⏱バイト・部活など（色ラベル・いちばん上）→ 📝試験 → 🧪実験。課題は載せない（#課題📚 で見る）"""
     first = date(y, m, 1)
     last = date.fromisoformat(month_bounds(y, m)[1])
     gs = first - timedelta(days=first.weekday())
@@ -7814,35 +7816,23 @@ async def calendar_data(uid, y, m):
         + await private_events_between(uid, gs.isoformat(), ge.isoformat())
     items = {}
     uid = str(uid)
-    t1 = int(datetime.combine(gs, datetime.min.time(), JST).timestamp())
-    t2 = int(datetime.combine(ge + timedelta(days=1), datetime.min.time(), JST).timestamp())
-    async with db.execute(
-        "SELECT a.id, a.title, a.due_ts, c.name AS cname, d.skip AS skip, d.user_id AS done_by FROM assignments a "
-        "JOIN courses c ON c.code=a.code LEFT JOIN assignment_done d ON d.assignment_id=a.id AND d.user_id=? "
-        "WHERE (a.created_by=? OR a.code IN (SELECT code FROM user_courses WHERE user_id=?)) AND a.due_ts >= ? AND a.due_ts < ? "
-        "ORDER BY a.due_ts", (uid, uid, uid, t1, t2)) as c:
-        for r in await c.fetchall():
-            if r["skip"]:
-                continue   # 🚫提出しないにした課題は載せない
-            k = datetime.fromtimestamp(r["due_ts"], JST).date().isoformat()
-            items.setdefault(k, []).append(("✅" if r["done_by"] else "📚") + r["title"])
+    short = lambda hm: str(int(hm[:2])) + ("" if hm[3:] == "00" else ":" + hm[3:])
+    for r in await time_events_between(uid, gs.isoformat(), ge.isoformat()):   # ⏱ バイト・部活（例：💼17-22）
+        items.setdefault(r["day"], []).append(
+            (f"{TIME_EMOJI.get(r['kind'], '⏱')}{short(r['start_hm'])}-{short(r['end_hm'])}", TIME_COLORS.get(r["kind"], "#8a8378")))
     async with db.execute("SELECT e.title, e.exam_day, c.name AS cname FROM exams e JOIN courses c ON c.code=e.code "
                           "WHERE e.code IN (SELECT code FROM user_courses WHERE user_id=?) AND e.exam_day BETWEEN ? AND ?",
                           (uid, gs.isoformat(), ge.isoformat())) as c:
         for r in await c.fetchall():
-            items.setdefault(r["exam_day"], []).insert(0, f"📝{r['cname']}")
+            items.setdefault(r["exam_day"], []).append((f"📝{r['cname']}", None))
     for c2 in await user_course_rows(uid):
         for iso, txt in LAB_SCHEDULE.get(c2["code"], {}).items():
             if gs.isoformat() <= iso <= ge.isoformat():
-                items.setdefault(iso, []).append(f"🧪{txt}")
-    for r in await time_events_between(uid, gs.isoformat(), ge.isoformat()):   # ⏱ バイト・部活（例：💼17-22）
-        sh, eh = r["start_hm"], r["end_hm"]
-        short = lambda hm: str(int(hm[:2])) + ("" if hm[3:] == "00" else ":" + hm[3:])
-        items.setdefault(r["day"], []).append(f"{TIME_EMOJI.get(r['kind'], '⏱')}{short(sh)}-{short(eh)}")
+                items.setdefault(iso, []).append((f"🧪{txt}", None))
     return gs, ge, events, items
 
-def render_calendar_card(name, y, m, gs, ge, events, items, today):
-    """月カレンダー（PNG bytes）。描けなければ None"""
+def render_calendar_card(name, y, m, gs, ge, events, items, today, totals=None):
+    """月カレンダー（PNG bytes）。totals=その月のバイト・部活などの合計（month_time_totals）。描けなければ None"""
     try:
         from PIL import Image as PImage, ImageDraw, ImageFont
     except Exception:
@@ -7862,7 +7852,11 @@ def render_calendar_card(name, y, m, gs, ge, events, items, today):
     img = PImage.new("RGB", (W, H), CARD_CREAM)
     d = ImageDraw.Draw(img)
     d.text((pad, 52), f"{y}年{m}月の予定", font=F(54, True), fill=CARD_INK)
-    d.text((pad + 4, 118), f"{name} さんのカレンダー（大学の予定＋自分の課題・試験・実験）", font=F(20), fill=CARD_MUTED)
+    if totals:   # 見出しの下に、その月のバイト・部活などの合計
+        tt = "　".join(f"{TIME_EMOJI.get(k, '⏱')}{k} {fmt_mins(mn)}（{n}回）" for k, (mn, n) in totals.items())
+        _draw_mixed(d, pad + 4, 118, f"{name} さん　今月の合計：{tt}", F(20), E(20), CARD_MUTED)
+    else:
+        d.text((pad + 4, 118), f"{name} さんのカレンダー（大学の予定・じぶんの予定・バイト・部活・試験・実験）", font=F(20), fill=CARD_MUTED)
     logo = _gohan_art("logo")
     if logo:
         _paste_art(img, logo, W - pad - round(logo.width * 90 / logo.height), 30, 90)
@@ -7918,29 +7912,40 @@ def render_calendar_card(name, y, m, gs, ge, events, items, today):
             for k2 in range((cur - gs).days, (seg_end - gs).days + 1):
                 used[k2] = max(used.get(k2, 0), ln + 1)
             cur = seg_end + timedelta(days=1)
-    # 自分の予定（課題・試験・実験）
+    # 自分の予定（⏱バイト・部活は色ラベル、📝試験・🧪実験は文字）
     for k in range((ge - gs).days + 1):
         day = gs + timedelta(days=k)
-        lst = items.get(day.isoformat()) or []
+        lst = [it if isinstance(it, tuple) else (it, None) for it in (items.get(day.isoformat()) or [])]
         if not lst:
             continue
         x, yy = pad + (k % 7) * cw, gy + (k // 7) * rh
         iy = yy + 34 + used.get(k, 0) * (bar_h + bar_gap) + 2
-        room = (yy + rh - 6 - iy) // 22
+        room = (yy + rh - 6 - iy) // 24
         show = lst if len(lst) <= room else lst[:max(0, room - 1)]
-        for t in show:
-            _draw_mixed(d, x + 6, iy, fit(t, F(15), E(15), cw - 12), F(15), E(15), CARD_INK)
-            iy += 22
+        for t, col in show:
+            if col:
+                d.rounded_rectangle([x + 4, iy, x + cw - 4, iy + 21], radius=6, fill=col)
+                _draw_mixed(d, x + 9, iy + 1, fit(t, F(15, True), E(15), cw - 18), F(15, True), E(15), "#ffffff")
+            else:
+                _draw_mixed(d, x + 6, iy + 1, fit(t, F(15), E(15), cw - 12), F(15), E(15), CARD_INK)
+            iy += 24
         if len(show) < len(lst):
             d.text((x + 6, iy), f"ほか{len(lst) - len(show)}件", font=F(14), fill=CARD_MUTED)
-    # 凡例
+    # 凡例（1行目＝帯の色、2行目＝マスの中のラベル）
     ly = gy + nrows * rh + 16
     x = pad
     for kind in LEGEND_KINDS:
         d.rounded_rectangle([x, ly + 4, x + 34, ly + 24], radius=6, fill=UNIV_COLORS[kind])
         d.text((x + 42, ly), kind, font=F(20), fill=CARD_MUTED)
         x += 42 + int(d.textlength(kind, font=F(20))) + 26
-    _draw_mixed(d, pad, ly + 34, "📚課題　✅提出済み　📝試験　🧪実験", F(20), E(20), CARD_MUTED)
+    x = pad
+    for kind, ic, col in TIME_KINDS:
+        lb = f"{ic}{kind}"
+        w = int(_mixed_w(d, lb, F(17, True), E(17))) + 16
+        d.rounded_rectangle([x, ly + 36, x + w, ly + 60], radius=6, fill=col)
+        _draw_mixed(d, x + 8, ly + 38, lb, F(17, True), E(17), "#ffffff")
+        x += w + 14
+    _draw_mixed(d, x + 10, ly + 38, "📝試験　🧪実験", F(20), E(20), CARD_MUTED)
     d.line([pad, H - 64, W - pad, H - 64], fill=CARD_LINE, width=2)
     d.text((pad, H - 50), "最低限生活リズムサークル", font=F(24, True), fill=CARD_INK)
     d.text((W - pad, H - 46), "予定は「大学の予定」ボタンから誰でも追加できます", font=F(18), fill=CARD_MUTED, anchor="ra")
@@ -8158,7 +8163,9 @@ async def send_calendar(interaction, offset=0):
     if m > 12:
         y, m = y + 1, m - 12
     gs, ge, events, items = await calendar_data(interaction.user.id, y, m)
-    buf = await asyncio.to_thread(render_calendar_card, interaction.user.display_name, y, m, gs, ge, events, items, day_str(now))
+    totals = await month_time_totals(interaction.user.id, y, m)
+    buf = await asyncio.to_thread(render_calendar_card, interaction.user.display_name, y, m, gs, ge, events, items, day_str(now),
+                                  totals)
     if not buf:
         await interaction.followup.send("⚠️ カレンダーを作れませんでした（VMに日本語フォントが必要）。", ephemeral=True)
         return

@@ -782,7 +782,16 @@ async def main():
     check("時間: 月の合計（種類別・回数つき・ほかの月は入らない）", _tt, {"アルバイト": (570, 2), "部活・サークル": (120, 1)})
     check("時間: 合計の表示", B.time_totals_text(_tt), "💼アルバイト **9h30m**（2回）／🏸部活・サークル **2h**（1回）　計 **11h30m**")
     _c = (await B.calendar_data("95", 2026, 11))[3]
-    check("時間: カレンダーのマスに 💼17-22", "💼17-22" in _c.get("2026-11-03", []) and "💼17:30-22" in _c.get("2026-11-05", []), True)
+    _txt = lambda iso: [t for t, _col in _c.get(iso, [])]
+    check("時間: カレンダーのマスに 💼17-22（色ラベル・いちばん上）",
+          ("💼17-22" in _txt("2026-11-03"), _txt("2026-11-05")[0], _c["2026-11-03"][0][1]),
+          (True, "💼17:30-22", B.TIME_COLORS["アルバイト"]))
+    _ad = datetime(2026, 11, 3, 23, 59, tzinfo=JST)
+    await B.db.execute("INSERT INTO assignments(code,title,due_ts,created_by,created_at) VALUES('tst003','カレンダーに出ない課題',?, '95', 0)",
+                       (int(_ad.timestamp()),))
+    await B.db.commit()
+    _c = (await B.calendar_data("95", 2026, 11))[3]
+    check("カレンダー: 課題は載せない", any("カレンダーに出ない課題" in t for t in _txt("2026-11-03")), False)
     check("時間: 予定パネルに⏱ボタン", any(getattr(i, "custom_id", "") == "sk_time" for i in B.YoteiPanelView().children), True)
     check("時間: 選べる種類は3つ（習い事・塾は外した）", [o.value for o in B.TimeKindSelect().options],
           ["k:アルバイト", "k:部活・サークル", "k:その他の活動"])
