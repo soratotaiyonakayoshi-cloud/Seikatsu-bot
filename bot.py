@@ -3200,10 +3200,12 @@ async def judge_loop():
 # ------------------------------------------------------------
 #  朝のラジオ体操（指定時刻にVCへ入って音源を流す。mezamashi-bot の再生ロジックを流用）
 # ------------------------------------------------------------
+_RADIO = {"on": False}   # ラジオ体操の再生中（作業部屋の音楽プレイヤーは割り込まない）
+
 async def play_radio(guild, manual=False):
-    vc_ch = await get_ch("radio")
+    vc_ch = await _work_vc_channel()   # 専用VCはやめて作業部屋で流す
     if not vc_ch:
-        return "❌ ラジオ体操用VCが未設定です（/setup を実行してください）"
+        return "❌ 作業部屋VCが未設定です（/setup を実行してください）"
     if not os.path.exists(RADIO_MP3):
         return f"❌ 音源が見つかりません: {os.path.abspath(RADIO_MP3)}"
     wake_ch = await get_ch("wake")
@@ -3219,28 +3221,34 @@ async def play_radio(guild, manual=False):
                            + hitokoto_suffix())
     if not manual:
         await asyncio.sleep(60)
-    if vc_ch.guild.voice_client:   # BGM等が流れていたらラジオ体操を優先して止める
-        await stop_player()
+    _RADIO["on"] = True
     try:
-        vc = await vc_ch.connect(timeout=20, reconnect=False)
-    except Exception as e:
-        print(f"🔊 ラジオ体操 VC接続失敗: {e!r}", flush=True)
-        return f"❌ VC接続失敗: {e}"
-    present = {}
-    try:
-        vc.play(discord.FFmpegPCMAudio(RADIO_MP3, executable=FFMPEG_PATH))
-        while vc.is_playing():
-            for m in vc_ch.members:
-                if not m.bot:
-                    present[m.id] = m
-            await asyncio.sleep(2)
-    except Exception as e:
-        print(f"🔊 ラジオ体操 再生エラー: {e!r}", flush=True)
-    finally:
+        if vc_ch.guild.voice_client:   # BGM等が流れていたらラジオ体操を優先して止める
+            await stop_player()
+        vc = await ensure_player_vc(vc_ch)
+        if not vc:
+            return "❌ VC接続失敗"
+        present = {}
         try:
+            vc.play(discord.FFmpegPCMAudio(RADIO_MP3, executable=FFMPEG_PATH))
+            while vc.is_playing():
+                for m in vc_ch.members:
+                    if not m.bot:
+                        present[m.id] = m
+                await asyncio.sleep(2)
+        except Exception as e:
+            print(f"🔊 ラジオ体操 再生エラー: {e!r}", flush=True)
+    finally:
+        _RADIO["on"] = False
+    try:   # 終わったあとも人が残っていればそのまま待機（作業部屋の自動入室と同じ）、無人なら退出
+        if vc.is_connected() and any(not m.bot for m in vc.channel.members):
+            _player["vc"] = vc
+            if _player["queue"] or _player.get("bgm"):
+                await _play_next()   # 体操中に頼まれた曲・BGMはここから
+        else:
             await vc.disconnect(force=True)
-        except Exception:
-            pass
+    except Exception:
+        pass
     day = day_str(now_jst())
     names = []
     for m in present.values():
@@ -3624,6 +3632,8 @@ def _schedule_leave_check():
         try:
             await asyncio.sleep(60)
             vc = _player.get("vc")
+            if _RADIO["on"]:
+                return   # ラジオ体操中は誰もいなくても最後まで流す
             if vc and vc.is_connected() and not any(not m.bot for m in vc.channel.members):
                 print("🎵 無人が続いたのでVCから退出", flush=True)
                 await stop_player()
@@ -3633,8 +3643,8 @@ def _schedule_leave_check():
 
 async def _play_next():
     vc = _player.get("vc")
-    if not vc or not vc.is_connected():
-        return
+    if not vc or not vc.is_connected() or _RADIO["on"]:
+        return   # ラジオ体操中は待ってもらう（終わったら play_radio が続きを流す）
     if not any(not m.bot for m in vc.channel.members):   # 無人っぽい→60秒猶予してから撤収（再生は続ける）
         _schedule_leave_check()
     item = None
@@ -9274,11 +9284,11 @@ def tutorial_embeds():
         "`/jikanwari add kamoku:` に科目名を打つと候補が出ます（一度に5つまで）。"
         "同じ科目の誰かが課題を登録すると #課題📚 で通知が届き、期限の3日前・前日・当日朝にリマインドされます。"))
     e2.add_field(name="④ ラジオ体操に参加（任意）", inline=False, value=(
-        f"毎朝 **{RADIO_TIME}** に 🔊ラジオ体操🏃 で音源が流れます。#起床🌅 の 🏃 ボタンで呼び出しをONにすると、開始時にメンションで起こされます。"))
+        f"毎朝 **{RADIO_TIME}** に 🔊作業部屋🖥 で音源が流れます。#起床🌅 の 🏃 ボタンで呼び出しをONにすると、開始時にメンションで起こされます。"))
     e2.add_field(name="⑤ 自分だけの項目（任意）", inline=False, value=(
         "`/kojin add namae:薬を飲む` のように追加すると、☀️起床の返事と各パネルの 📝 ボタンで毎日チェックできます。未チェックは判定で叱られます。"))
     e3 = discord.Embed(title="🔁 1日の流れ", color=gold, description=(
-        f"**朝**　☀️ 起きた → {RADIO_TIME} ラジオ体操🏃\n"
+        f"**朝**　☀️ 起きた → {RADIO_TIME} ラジオ体操（🔊作業部屋🖥）\n"
         "**日中**　🍚 食べたら押す（#ごはん🍚 に写真を投げるだけでもOK）／🧹 家事をしたら押す／📚 課題に気づいたら `/kadai add`\n"
         "**夜**　🛁 お風呂・🪥 歯磨きをしたら押す → 🌙 おやすみ\n"
         f"**{JUDGE_HOUR}:00**　判定。未達は #叱責👹 で名指し、達成した人は ✨ で称えられ、連続日数 🔥 が伸びる（3・7・14・30日…でお祝い）\n"
@@ -9296,7 +9306,7 @@ def tutorial_embeds():
         "#叱責👹　毎晩の判定結果。晒される場所\n"
         "#つうしんぼ📮　週の通信簿と月間表彰\n"
         "#設定🔧　`/saitei` `/kojin` `/oyasumi` の案内。📝 今日のチェック\n"
-        "🔊ラジオ体操🏃　朝の体操VC"))
+        "🔊作業部屋🖥　もくもく作業・音楽・朝のラジオ体操のVC"))
     e5 = discord.Embed(title="⌨️ コマンド早見表", color=gold, description=(
         "**きろく**　各チャンネルのボタンが基本（☀️🌙😴／🍚／🧹／🛁🪥）。`/suimin` 寝落ちの後づけ／`/erai` 今日のがんばり\n"
         "**最低限**　`/saitei` 設定はぜんぶここ（起床・睡眠・入浴・歯磨き・食事・家事の種類別・休日ゆるめ。指定した項目だけ更新）\n"
@@ -10542,7 +10552,7 @@ async def on_voice_state_update(member, before, after):
             await work_start(member)
             asyncio.create_task(warmup_player("作業部屋入室"))   # 入室＝そのうち/playしそうなので先に温める
             try:   # 🎧 誰かが入った瞬間にBotも入室してスタンバイ（最初の/playやBGMがすぐ出る）
-                if not (_player.get("vc") and _player["vc"].is_connected()):
+                if not _RADIO["on"] and not (_player.get("vc") and _player["vc"].is_connected()):
                     vc = await ensure_player_vc(after.channel)
                     if vc:
                         _player["vc"] = vc
@@ -11834,9 +11844,7 @@ async def setup_command(interaction):
     for key, (name, _) in CH.items():
         await find_or_rename(key, name, OLD_CH_NAMES.get(key, name), guild.text_channels,
                              lambda n: guild.create_text_channel(n, category=cat))
-    vc = await find_or_rename("radio", RADIO_VC_NAME, OLD_RADIO_VC_NAME, guild.voice_channels,
-                              lambda n: guild.create_voice_channel(n, category=cat))
-    await find_or_rename("workvc", WORK_VC_NAME, WORK_VC_NAME, guild.voice_channels,
+    vc = await find_or_rename("workvc", WORK_VC_NAME, WORK_VC_NAME, guild.voice_channels,
                          lambda n: guild.create_voice_channel(n, category=cat))
     haj = await get_ch("hajimeni")
     if haj:
@@ -11883,7 +11891,7 @@ async def setup_command(interaction):
                 "・**shokuji** 1日の最低食事回数 1〜3（0で解除。間食は数えない）\n"
                 "・**ryouri / souji / sara / sentaku / gomi** 家事を種類ごとに「N日に1回」（例 `ryouri:1 sentaku:3`・0で解除・毎日判定）\n"
                 "・**rajio** 毎朝のラジオ体操に参加する（True/False）\n\n"
-                f"🏃 ラジオ体操は毎朝 **{RADIO_TIME}** に 🔊ラジオ体操🏃 で自動再生。#起床🌅 の 🏃 ボタンで呼び出し（メンション）のON/OFF。\n"
+                f"🏃 ラジオ体操は毎朝 **{RADIO_TIME}** に 🔊作業部屋🖥 で自動再生。#起床🌅 の 🏃 ボタンで呼び出し（メンション）のON/OFF。\n"
                 "📚 **課題**：`/jikanwari add` で履修科目を登録（科目名で検索・最大5つずつ）→ 気づいた人が `/kadai add` で課題を登録すると、"
                 f"同じ科目の履修者だけに #課題📚 で通知。3日前・前日・当日 {REMIND_HOUR}:00 に未完了の人へリマインド。投稿の ✅ で完了。\n\n"
                 "🔥 **連続達成**：判定で未達ゼロの日が続くと連続日数が伸びる（3・7・14・30日…で祝福）。`/kiroku` で確認。\n"
