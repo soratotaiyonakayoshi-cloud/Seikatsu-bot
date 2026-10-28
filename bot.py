@@ -3258,7 +3258,7 @@ async def play_radio(guild, manual=False):
 #  1つのキューを共有：/playの曲が優先、キューが空でBGMモードなら自前音源を補充し続ける
 # ------------------------------------------------------------
 BGM_DIR = os.getenv("BGM_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "music"))
-BENKYOKAI_BGM = os.getenv("BENKYOKAI_BGM", "1") == "1"   # 勉強会の時間に自動でBGMを流す
+BENKYOKAI_BGM = os.getenv("BENKYOKAI_BGM", "0") == "1"   # 勉強会の時間に自動でBGMを流す（既定は流さない）
 _player = {"vc": None, "queue": [], "bgm": False, "auto": False, "current": None,
            "volume": 1.0, "loop": "off", "cur_item": None}
 
