@@ -1456,9 +1456,18 @@ async def main():
     check("勉強会: ストリーク3日（61）", await B.benkyokai_streak("61", bk_day), 3)
     check("勉強会: 初参加はストリーク1（62）", await B.benkyokai_streak("62", bk_day), 1)
     ef61 = await (await B.db.execute("SELECT text FROM efforts WHERE user_id='61' AND day=?", (bk_day,))).fetchone()
-    check("勉強会: 自動えらい報告（🔥つき）", ef61["text"], "ミニ勉強会に参加した（30分・🔥3日連続）")
+    check("勉強会: 自動えらい報告（🔥つき・作業時間は書かない）", ef61["text"], "ミニ勉強会に参加した（🔥3日連続）")
     ef62 = await (await B.db.execute("SELECT text FROM efforts WHERE user_id='62' AND day=?", (bk_day,))).fetchone()
-    check("勉強会: 初参加の報告は🔥なし", ef62["text"], "ミニ勉強会に参加した（10分）")
+    check("勉強会: 初参加の報告は🔥なし", ef62["text"], "ミニ勉強会に参加した")
+    # まとめ報告：同じ msg_id の記録を1通として扱い、👏は全員ぶん（自分以外）に付く
+    ids = [r["id"] for r in await (await B.db.execute("SELECT id FROM efforts WHERE day=? AND user_id IN ('61','62') ORDER BY id", (bk_day,))).fetchall()]
+    await B.db.executemany("UPDATE efforts SET msg_id='g1' WHERE id=?", [(i,) for i in ids])
+    await B.db.commit()
+    grp = await B._group_efforts(ids[1])
+    check("勉強会まとめ: 同じメッセージの2人ぶんを拾う", [r["id"] for r in grp], ids)
+    content, prs = await B._group_state(grp)
+    check("勉強会まとめ: 本文に🔥・分数なし", ("🔥3日連続" in content, "分" in content.split("\n")[1], "📖" in content), (True, False, True))
+    check("勉強会まとめ: 1行目に日付", content.split("\n")[0], f"📖 **今夜のミニ勉強会に参加**（{B.md(bk_day)}）")
 
     # 🔊 作業部屋のVCステータス（サブタイトル）
     check("VCステータス: 勉強会中が最優先", await B.work_vc_status_text(datetime(2026, 8, 21, 22, 30, tzinfo=JST)),

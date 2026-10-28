@@ -567,7 +567,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(MusicPanelView())
         self.add_view(YoteiPanelView())
         self.add_view(IntroView())
-        self.add_dynamic_items(DoneButton, SkipButton, MealFixButton, PraiseButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
+        self.add_dynamic_items(DoneButton, SkipButton, MealFixButton, PraiseButton, GroupPraiseButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
                                MemoDoneButton, MemoCarryButton, MemoDropButton, WorkNoteButton, GoodsResetButton)
         self.add_view(EraiView())
         # コマンドの同期はグローバルではなくサーバー単位で行う（即時反映）。on_ready 参照。
@@ -9831,6 +9831,77 @@ class PraiseButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_prai
         except Exception:
             await interaction.response.send_message(note, ephemeral=True)
 
+# ---- 📖 ミニ勉強会の参加報告：#えらい🌟 へは1通にまとめる（えらいの記録は一人ずつ残す＝👏・がんばり屋賞はそのまま） ----
+async def _group_efforts(eid):
+    """同じメッセージにまとめた報告（efforts.msg_id が同じもの）を id 順で"""
+    async with db.execute("SELECT msg_id FROM efforts WHERE id=?", (eid,)) as c:
+        r = await c.fetchone()
+    if not r:
+        return []
+    if not r["msg_id"]:
+        sql, arg = "SELECT * FROM efforts WHERE id=?", (eid,)
+    else:
+        sql, arg = "SELECT * FROM efforts WHERE msg_id=? ORDER BY id", (r["msg_id"],)
+    async with db.execute(sql, arg) as c:
+        return list(await c.fetchall())
+
+def benkyokai_group_content(day, bits, praisers, names):
+    """bits＝「名前 🔥3日連続」のリスト（作業時間は #作業ログ🖥 に出るので書かない）"""
+    line = f"📖 **今夜のミニ勉強会に参加**（{md(day)}）\n> " + "／".join(bits) + "\nちょーえらい！"
+    if praisers:
+        line += f"\n👏 × {len(praisers)}　{'、'.join(names)}"
+    return line
+
+async def _group_state(rows):
+    """まとめ報告の (本文, 褒めた人のid一覧)。褒めた人＝どれか1つにでも👏した人"""
+    praisers = []
+    bits = []
+    for r in rows:
+        for u in await _praisers(r["id"]):
+            if u not in praisers:
+                praisers.append(u)
+        u = await get_user(r["user_id"])
+        stk = re.search(r"🔥(\d+)日連続", r["text"] or "")
+        bits.append(f"**{(u['name'] if u else None) or '？'}**" + (f" 🔥{stk.group(1)}日連続" if stk else ""))
+    return benkyokai_group_content(rows[0]["day"], bits, praisers, await _praiser_names(praisers)), praisers
+
+class GroupPraiseButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_praiseg:(?P<eid>\d+)"):
+    """まとめ報告の👏：押すと参加者全員（自分以外）をまとめて褒める／もう一度で取り消し"""
+    def __init__(self, eid, count=0):
+        super().__init__(discord.ui.Button(label=f"👏 えらい！（{count}）", style=discord.ButtonStyle.success,
+                                           custom_id=f"sk_praiseg:{eid}"))
+        self.eid = int(eid)
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["eid"])
+
+    async def callback(self, interaction):
+        uid = str(interaction.user.id)
+        rows = await _group_efforts(self.eid)
+        if not rows:
+            await interaction.response.send_message("この報告は見つかりませんでした。", ephemeral=True)
+            return
+        targets = [r for r in rows if r["user_id"] != uid]
+        if not targets:
+            await interaction.response.send_message("自分で自分を褒めるのは、心の中でどうぞ 🌟", ephemeral=True)
+            return
+        await ensure_user(interaction.user)
+        already = any(uid in await _praisers(r["id"]) for r in targets)
+        for r in targets:
+            if already:
+                await db.execute("DELETE FROM effort_praise WHERE effort_id=? AND user_id=?", (r["id"], uid))
+            else:
+                await db.execute("INSERT OR IGNORE INTO effort_praise(effort_id,user_id,day) VALUES(?,?,?)", (r["id"], uid, day_str(now_jst())))
+        await db.commit()
+        content, praisers = await _group_state(rows)
+        view = discord.ui.View(timeout=None)
+        view.add_item(GroupPraiseButton(self.eid, len(praisers)))
+        try:
+            await interaction.response.edit_message(content=content, view=view)
+        except Exception:
+            await interaction.response.send_message("👏 を取り消しました。" if already else "褒めました！ 👏", ephemeral=True)
+
 class EraiModal(discord.ui.Modal, title="🌟 今日のえらい"):
     what = discord.ui.TextInput(label="今日がんばったこと（最低限じゃなくてOK）", style=discord.TextStyle.paragraph,
                                 placeholder="例：授業に全部出た／課題を締切3日前に出した／散歩した", required=True, max_length=200)
@@ -10403,27 +10474,27 @@ async def benkyokai_recap(day, now):
     if not parts:
         return 0
     erai_ch = await get_ch("erai")
-    bits = []
+    bits, erai_bits, eids = [], [], []
     for uid, name, m in parts:
         await add_event(uid, "benkyokai", note=str(m), ts_dt=now)
         stk = await benkyokai_streak(uid, day)
         fire = f" 🔥{stk}日連続" if stk >= 2 else ""
         bits.append(f"**{name}** {m}分{fire}")
-        text = f"ミニ勉強会に参加した（{m}分" + (f"・🔥{stk}日連続" if stk >= 2 else "") + "）"
+        erai_bits.append(f"**{name}**{fire}")
+        text = "ミニ勉強会に参加した" + (f"（🔥{stk}日連続）" if stk >= 2 else "")
         cur = await db.execute("INSERT INTO efforts(user_id,text,day,ts) VALUES(?,?,?,?)",
                                (str(uid), text, day, int(now.timestamp())))
-        eid = cur.lastrowid
-        await db.commit()
-        if erai_ch:   # 参加しただけで🌟えらい報告→👏とがんばり屋賞に乗る（罰はなく報酬だけ）
-            try:
-                view = discord.ui.View(timeout=None)
-                view.add_item(PraiseButton(eid, 0))
-                msg = await erai_ch.send(_effort_content(name, text, [], []), view=view)
-                await db.execute("UPDATE efforts SET msg_id=? WHERE id=?", (str(msg.id), eid))
-                await db.commit()
-            except Exception as e:
-                print(f"勉強会えらい報告エラー: {e!r}", flush=True)
-    if erai_ch:
+        eids.append(cur.lastrowid)   # 参加しただけで🌟えらい（一人ずつ記録→👏とがんばり屋賞に乗る）
+    await db.commit()
+    if erai_ch and eids:   # #えらい🌟 には全員ぶんを1通で（人数が多くてもかさばらない）
+        try:
+            view = discord.ui.View(timeout=None)
+            view.add_item(GroupPraiseButton(eids[0], 0))
+            msg = await erai_ch.send(benkyokai_group_content(day, erai_bits, [], []), view=view)
+            await db.executemany("UPDATE efforts SET msg_id=? WHERE id=?", [(str(msg.id), e) for e in eids])
+            await db.commit()
+        except Exception as e:
+            print(f"勉強会えらい報告エラー: {e!r}", flush=True)
         await bump_panel("erai")
     ch = await get_ch("worklog")
     if ch:
