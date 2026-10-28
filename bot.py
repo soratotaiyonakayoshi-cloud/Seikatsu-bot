@@ -38,6 +38,7 @@ RADIO_TIME = os.getenv("RADIO_TIME", "06:30")          # ラジオ体操の開�
 RADIO_MP3 = os.getenv("RADIO_MP3", "radio.mp3")        # 音源ファイル（リポジトリには含めない。VMに直接置く）
 FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg")
 BACKUP_DIR = os.getenv("BACKUP_DIR", "backups")   # 毎晩の判定後に seikatsu.db を7世代バックアップ
+PERIOD_START_RAW = {1: "8:45", 2: "10:30", 3: "13:00", 4: "14:45", 5: "16:30", 6: "18:15"}   # 各限の開始（90分授業）
 RADIO_VC_NAME = "ラジオ体操🏃"
 WORK_VC_NAME = "作業部屋🖥"
 WORK_MIN_LOG_SEC = 600   # これ未満のセッションはログを流さない（時間は記録する）
@@ -7592,14 +7593,27 @@ class _TimeHourSelect(discord.ui.Select):
         self.view.start_h = int(self.values[0])
         await self.view.refresh(interaction)
 
+TIME_SLOTS = [("昼休み", "12:00", 60)] + [(f"{p}限", hm.zfill(5), 90) for p, hm in PERIOD_START_RAW.items()]   # 時限→(はじまり, 長さ)
+
 class _TimeMinSelect(discord.ui.Select):
+    """時限（昼休み・1〜6限）を選ぶと はじまり＋長さ がまとめて入る。細かい時刻は「分」で"""
     def __init__(self, view_):
-        opts = [discord.SelectOption(label=f"{m:02d}分", value=str(m), default=view_.start_m == m) for m in (0, 15, 30, 45)]
-        super().__init__(placeholder="はじまりの分（ふつうは 00分）", options=opts, row=2)
+        cur = view_.start_hm()
+        opts = [discord.SelectOption(label=f"{nm}（{hm}-{_hm_add(hm, mn)}）", value=f"s:{nm}", emoji="🏫",
+                                     default=cur == hm and view_.minutes == mn) for nm, hm, mn in TIME_SLOTS]
+        on_slot = any(o.default for o in opts)
+        opts += [discord.SelectOption(label=f"はじまりの分：{m:02d}分", value=f"m:{m}", default=not on_slot and view_.start_m == m)
+                 for m in (0, 15, 30, 45)]
+        super().__init__(placeholder="🏫 時限でえらぶ（昼休み・1限…）／はじまりの分", options=opts, row=2)
 
     async def callback(self, interaction):
-        self.view.start_m = int(self.values[0])
-        await self.view.refresh(interaction)
+        v, val = self.view, self.values[0]
+        if val.startswith("s:"):
+            _nm, hm, mn = next(x for x in TIME_SLOTS if x[0] == val[2:])
+            v.start_h, v.start_m, v.minutes = int(hm[:2]), int(hm[3:]), mn
+        else:
+            v.start_m = int(val[2:])
+        await v.refresh(interaction)
 
 class _TimeDurSelect(discord.ui.Select):
     def __init__(self, view_):
@@ -8247,7 +8261,7 @@ class NewTermView(discord.ui.View):
     async def b_slots(self, interaction, button):
         cur = await db.execute("DELETE FROM user_slots WHERE user_id=?", (str(interaction.user.id),))
         await db.commit()
-        await interaction.response.send_message(f"🧩 空きコマ予定を {cur.rowcount} 件消しました。新しい予定は #予定🗓 の 🧩 から。", ephemeral=True)
+        await interaction.response.send_message(f"🧩 空きコマ予定を {cur.rowcount} 件消しました。新しい予定は #予定🗓 の ⏱ から。", ephemeral=True)
 
     @discord.ui.button(label="🎓 新しい科目を登録", style=discord.ButtonStyle.primary, row=2)
     async def b_add(self, interaction, button):
@@ -8444,20 +8458,6 @@ class YoteiPanelView(discord.ui.View):
         await ensure_user(interaction.user)
         await send_calendar(interaction, 0)
 
-    @discord.ui.button(label="🧩 空きコマ予定", style=discord.ButtonStyle.secondary, custom_id="sk_jw_free", row=2)
-    async def jw_free(self, interaction, button):
-        await ensure_user(interaction.user)
-        async with db.execute("SELECT slot, label, place FROM user_slots WHERE user_id=? ORDER BY slot", (str(interaction.user.id),)) as c:
-            rows = await c.fetchall()
-        view = discord.ui.View(timeout=600)
-        view.add_item(FreeSlotAddButton())
-        if rows:
-            view.add_item(FreeSlotRemoveSelect(rows))
-        cur = "\n".join(f"・{r['slot']}　**{r['label']}**" + (f"（{r['place']}）" if r["place"] else "") for r in rows[:20])
-        await interaction.response.send_message(
-            "🧩 **空きコマの予定**（バイト・部活など。時間割画像と☀️朝の時間割に出ます・自分にだけ）\n"
-            + (cur if rows else "-# まだ登録がありません"), view=view, ephemeral=True)
-
 VIEW_FACTORY["yotei"] = YoteiPanelView
 
 class KadaiPanelView(discord.ui.View):
@@ -8595,7 +8595,7 @@ VIEW_FACTORY["kadai"] = KadaiPanelView
 #  朝の天気（Open-Meteo・キー不要）／起床時ダイジェスト／お休み申告／個人項目（カスタム最低限）
 # ============================================================
 DAY_CHARS = "月火水木金土日"
-PERIOD_START = {1: "8:45", 2: "10:30", 3: "13:00", 4: "14:45", 5: "16:30", 6: "18:15"}
+PERIOD_START = PERIOD_START_RAW
 WMO = {0: "☀️快晴", 1: "🌤晴れ", 2: "⛅晴れ時々くもり", 3: "☁️くもり", 45: "🌫霧", 48: "🌫霧", 51: "🌦霧雨", 53: "🌦霧雨", 55: "🌧霧雨",
        56: "🌧みぞれ", 57: "🌧みぞれ", 61: "🌧雨", 63: "🌧雨", 65: "🌧強い雨", 66: "🌧みぞれ", 67: "🌧みぞれ", 71: "🌨雪", 73: "🌨雪", 75: "❄️大雪",
        77: "🌨雪", 80: "🌦にわか雨", 81: "🌧にわか雨", 82: "⛈激しい雨", 85: "🌨にわか雪", 86: "🌨にわか雪", 95: "⛈雷雨", 96: "⛈雷雨", 99: "⛈雷雨"}

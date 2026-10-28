@@ -49,11 +49,12 @@ for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView, B.KadaiPanelView, B.G
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー8種 登録OK", True, True)
 check("予定パネル: 10ボタン", {i.custom_id for i in B.YoteiPanelView().children},
-      {"sk_today", "sk_tomorrow", "sk_upcoming", "sk_univ", "sk_mine", "sk_time", "sk_exam", "sk_timeline", "sk_cal0", "sk_jw_free"})
+      {"sk_today", "sk_tomorrow", "sk_upcoming", "sk_univ", "sk_mine", "sk_time", "sk_exam", "sk_timeline", "sk_cal0"})
 check("予定パネル: 行割り（今日・明日・今後が1段目）",
       {i.custom_id: i.row for i in B.YoteiPanelView().children},
       {"sk_today": 0, "sk_tomorrow": 0, "sk_upcoming": 0, "sk_univ": 1, "sk_mine": 1, "sk_time": 1, "sk_exam": 1,
-       "sk_timeline": 2, "sk_cal0": 2, "sk_jw_free": 2})
+       "sk_timeline": 2, "sk_cal0": 2})
+check("⏱ 時限の選択肢（昼休み＋1〜6限）", [(n, h, m) for n, h, m in B.TIME_SLOTS][:3], [("昼休み", "12:00", 60), ("1限", "08:45", 90), ("2限", "10:30", 90)])
 check("予定パネル: VIEW_FACTORYとチャンネル定義", (B.VIEW_FACTORY.get("yotei") is B.YoteiPanelView, B.CH["yotei"][0]), (True, "予定🗓"))
 check("音楽パネルは12ボタン", {i.custom_id for i in B.MusicPanelView().children},
       {"sk_mu_play", "sk_mu_bgm", "sk_mu_amb", "sk_mu_join", "sk_mu_pause", "sk_mu_skip", "sk_mu_queue", "sk_mu_stop",
