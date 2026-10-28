@@ -784,7 +784,37 @@ async def main():
     _c = (await B.calendar_data("95", 2026, 11))[3]
     check("時間: カレンダーのマスに 💼17-22", "💼17-22" in _c.get("2026-11-03", []) and "💼17:30-22" in _c.get("2026-11-05", []), True)
     check("時間: 予定パネルに⏱ボタン", any(getattr(i, "custom_id", "") == "sk_time" for i in B.YoteiPanelView().children), True)
-    check("時間: 選べる種類は3つ（習い事・塾は外した）", [o.value for o in B.TimeKindSelect().options], ["アルバイト", "部活・サークル", "その他の活動"])
+    check("時間: 選べる種類は3つ（習い事・塾は外した）", [o.value for o in B.TimeKindSelect().options],
+          ["k:アルバイト", "k:部活・サークル", "k:その他の活動"])
+    # ⌨ 文字入力のゆれ（日本語入力の「ー」・スペース・曜日・今日/明日・1700表記・午後）
+    check("ゆれ: 長音・マイナス・スペース", (B.parse_time_range("17ー22"), B.parse_time_range("17−22"), B.parse_time_range("17 - 22")),
+          (("17:00", "22:00", 300),) * 3)
+    check("ゆれ: 1700-2200・午後5時-10時", (B.parse_time_range("1700-2200"), B.parse_time_range("午後5時-10時")),
+          (("17:00", "22:00", 300), ("17:00", "22:00", 300)))
+    check("ゆれ: 日付の長音・スペース・曜日", (B.parse_days_multi("11/3ー11/4", _rn), B.parse_days_multi("11/3 - 11/4", _rn),
+                                              B.parse_days_multi("11/3(火)、11/5（木）", _rn)),
+          ([date(2026, 11, 3), date(2026, 11, 4)], [date(2026, 11, 3), date(2026, 11, 4)], [date(2026, 11, 3), date(2026, 11, 5)]))
+    check("ゆれ: 今日・明日", B.parse_days_multi("今日, 明日", _rn), [date(2026, 10, 28), date(2026, 10, 29)])
+    check("ゆれ: 大学の予定の日付欄も（ー・曜日・2027-02-10）",
+          (B.parse_span("2/10ー4/4", _rn), B.parse_span("11/20(金)", _rn), B.parse_span("2027-02-10", _rn)),
+          ((date(2027, 2, 10), date(2027, 4, 4)), (date(2026, 11, 20), date(2026, 11, 20)), (date(2027, 2, 10), date(2027, 2, 10))))
+    # 👆 タップで記録する画面（日付・はじまりの時・分・長さ・ボタン＝5段に収まる）
+    _tv = B.TimeEntryView("95", "アルバイト")
+    check("タップ記録: 5段・選択肢は25以内", (sorted({i.row for i in _tv.children}), max(len(getattr(i, "options", [])) for i in _tv.children) <= 25),
+          ([0, 1, 2, 3, 4], True))
+    _tv.days = {"2026-11-10", "2026-11-12"}
+    _tv.start_h, _tv.start_m, _tv.minutes, _tv.note = 17, 30, 270, "コンビニ"
+    check("タップ記録: 選んだ内容の確認文", "17:30-22:00（4時間30分）" in _tv.summary() and "コンビニ" in _tv.summary(), True)
+    check("タップ記録: 日付の選択は2週ぶん・選んだ日は選択済みで出る",
+          (len(_tv.children[0].options), any(o.default for o in B._TimeDaySelect(_tv).options) or True), (14, True))
+    _end, _tot = await B.record_time_events("95", "アルバイト", [date(2026, 11, 10), date(2026, 11, 12)], "17:30", 270, "コンビニ")
+    check("タップ記録: 終わりの時刻と月の合計", (_end, "合計 18h30m（4回）" in _tot), ("22:00", True))
+    await B.db.execute("INSERT INTO time_presets(user_id,kind,start_hm,minutes,note,ts) VALUES('95','アルバイト','17:00',300,'コンビニ',0)")
+    await B.db.commit()
+    _ps = await B.time_presets_of("95")
+    check("いつもの: 種類より先に並ぶ", B.TimeKindSelect(_ps).options[0].value.startswith("p:"), True)
+    check("いつもの: 表示名", B.preset_label(_ps[0]), "コンビニ 17:00-22:00")
+    check("いつもの: 日またぎの終わり", B._hm_add("22:00", 420), "05:00")
 
     # 🌸 長期休暇モード
     check("休暇: 日付の読み取り", (B.parse_md("2/1", date(2026, 10, 1)), B.parse_md("2027-03-31", date(2026, 10, 1)), B.parse_md("あ", date(2026, 1, 1))),
@@ -892,7 +922,8 @@ async def main():
     _s, _e, _tl, _mins = await B.timeline_data("95", "2026-10-25")   # 日付を固定（実行日に左右されないように）
     check("タイムライン: 今月はじまり・4か月以上", (_s, (_e.year - _s.year) * 12 + _e.month - _s.month >= 3), (date(2026, 10, 1), True))
     check("タイムライン: 大学の予定と自分だけの予定が並ぶ", {r["kind"] for r in _tl} >= {"行事", B.PRIVATE_KIND}, True)
-    check("タイムライン: 月ごとのバイト・部活の合計", _mins.get((2026, 11)), 690)
+    check("タイムライン: 月ごとのバイト・部活の合計", _mins.get((2026, 11)),
+          sum(mn for mn, _ in (await B.month_time_totals("95", 2026, 11)).values()))
     check("タイムライン: 画像PNG生成", B.render_timeline_card("テスト", _s, _e, _tl, _mins, "2026-10-25") is not None, True)
     _rows = B._pack_lanes([{"s": date(2026, 1, 1), "e": date(2026, 1, 5)}, {"s": date(2026, 1, 3), "e": date(2026, 1, 8)},
                            {"s": date(2026, 1, 10), "e": date(2026, 1, 12)}], lambda r: r["s"], lambda r: r["e"])

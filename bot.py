@@ -256,6 +256,10 @@ CREATE TABLE IF NOT EXISTS time_events(
   start_hm TEXT NOT NULL, end_hm TEXT NOT NULL, minutes INTEGER NOT NULL, note TEXT, ts INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_time_events_user_day ON time_events(user_id, day);
+CREATE TABLE IF NOT EXISTS time_presets(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, kind TEXT NOT NULL, start_hm TEXT NOT NULL,
+  minutes INTEGER NOT NULL, note TEXT, ts INTEGER
+);
 CREATE TABLE IF NOT EXISTS lyrics_block(norm_key TEXT PRIMARY KEY, user_id TEXT, ts INTEGER);
 CREATE TABLE IF NOT EXISTS course_notes(
   id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL, text TEXT NOT NULL, user_id TEXT, ts INTEGER
@@ -2794,7 +2798,10 @@ def parse_span(spec, now, past_ok_days=1):
     """日付1欄の入力 → (はじまり, おわり) のdate。'11/20' '2/10-4/4' '2027/2/10-4/4' '27/2/10〜27/4/4' など。
     年を書かなければ自動：おわりがはじまりより前なら年またぎ、過ぎた日付（past_ok_days日より前）なら来年のこと。
     年を書いたらその年のまま（おわりの年を省けば、はじまりの年から数える）。読めなければ None"""
-    parts = [p for p in re.split(r"\s*[-〜~～]\s*", unicodedata.normalize("NFKC", spec or "").strip()) if p]
+    t = _norm_dashes(unicodedata.normalize("NFKC", spec or "").strip())
+    t = re.sub(r"[\(（][月火水木金土日][\)）]", "", t)   # 11/3(火) の曜日は無視
+    t = re.sub(r"(\d{4})-(\d{1,2})-(\d{1,2})", r"\1/\2/\3", t)   # 2027-02-10 は区切りと紛れないよう先にスラッシュへ
+    parts = [p for p in re.split(r"\s*-\s*", t) if p]
     if not parts or len(parts) > 2:
         return None
     s, sy = parse_md_ex(parts[0], now)
@@ -7383,11 +7390,22 @@ TIME_KINDS = [("アルバイト", "💼", "#b8860b"), ("部活・サークル", 
 TIME_EMOJI = {**{k: e for k, e, _ in TIME_KINDS}, "習い事・塾": "📖"}   # 習い事・塾は選択肢から外した（記録済みの分の表示用に残す）
 TIME_COLORS = {k: c for k, _, c in TIME_KINDS}
 
+DASHES = "ー−‐‑–—―－〜～~"   # 日本語入力で「-」のつもりで出がちな記号（ー長音・−マイナス・全角など）
+
+def _norm_dashes(t):
+    for ch in DASHES:
+        t = t.replace(ch, "-")
+    return t
+
 def parse_time_range(s):
-    """'17-22' '17:30-22:00' '9時-12時半' '22-5'(日またぎ) → (開始'HH:MM', 終了'HH:MM', 長さ分)。読めなければ None"""
-    t = unicodedata.normalize("NFKC", s or "").strip().replace("時半", ":30")
+    """'17-22' '17:30-22:00' '9時-12時半' '17ー22' '1700-2200' '午後5時-10時' '22-5'(日またぎ)
+    → (開始'HH:MM', 終了'HH:MM', 長さ分)。読めなければ None"""
+    t = _norm_dashes(unicodedata.normalize("NFKC", s or "").strip()).replace("時半", ":30").replace(" ", "")
+    pm = "午後" in t
+    t = t.replace("午前", "").replace("午後", "")
     t = re.sub(r"(\d{1,2})時(?:(\d{1,2})分?)?", lambda m: f"{m[1]}:{int(m[2] or 0):02d}", t)   # 9時30分→9:30・17時→17:00
-    parts = [p for p in re.split(r"\s*[-〜~～]\s*", t) if p]
+    t = re.sub(r"(?<![\d:])(\d{1,2})(\d{2})(?![\d:])", r"\1:\2", t)   # 1700→17:00
+    parts = [p for p in t.split("-") if p]
     if len(parts) != 2:
         return None
     mins = []
@@ -7399,6 +7417,8 @@ def parse_time_range(s):
         if h > 24 or mi > 59:
             return None
         mins.append(h * 60 + mi)
+    if pm:   # 「午後5時-10時」：12時より前の数字は午後とみなす
+        mins = [x + 720 if x < 720 else x for x in mins]
     st, en = mins
     if en <= st:
         en += 1440   # 22-5 は日またぎ
@@ -7410,8 +7430,16 @@ def parse_time_range(s):
 
 def parse_days_multi(spec, now):
     """'11/3, 11/5' '11/3-11/7' '11/3、11/10-11/12' → 日付のリスト（最大31日）。過去120日までは今年の日付のまま（あとから記録できる）"""
+    t = _norm_dashes(unicodedata.normalize("NFKC", spec or "").strip())
+    t = re.sub(r"[\(（][月火水木金土日][\)）]", "", t)   # 11/3(火) の曜日は無視
+    t = re.sub(r"\s*-\s*", "-", t)                       # 11/3 - 11/7 のスペースを詰める
+    words = {"今日": 0, "きょう": 0, "明日": 1, "あした": 1, "あす": 1, "明後日": 2, "あさって": 2,
+             "昨日": -1, "きのう": -1, "おととい": -2, "一昨日": -2}
+    for w, off in sorted(words.items(), key=lambda x: -len(x[0])):
+        dd = now.date() + timedelta(days=off)
+        t = t.replace(w, f"{dd.year}/{dd.month}/{dd.day}")
     out = []
-    for part in re.split(r"[,、，\s]+", unicodedata.normalize("NFKC", spec or "").strip()):
+    for part in re.split(r"[,、，\s]+", t):
         if not part:
             continue
         span = parse_span(part, now, past_ok_days=120)
@@ -7491,10 +7519,209 @@ class TimeEventModal(discord.ui.Modal):
             f"{TIME_EMOJI[self.kind]} **{self.kind}** を {len(days)}日ぶん記録しました（{ds}　{st}-{en}・各{fmt_mins(dur)}）\n{tots}",
             ephemeral=True)
 
+PRESET_MAX = 5   # 「いつもの」は1人5つまで（古いものから入れ替え）
+
+def _hm_add(hm, minutes):
+    h, m = map(int, hm.split(":"))
+    t = (h * 60 + m + minutes) % 1440
+    return f"{t // 60:02d}:{t % 60:02d}"
+
+def dur_label(m):
+    h, mi = divmod(int(m), 60)
+    return (f"{h}時間" if h else "") + (f"{mi}分" if mi else "")
+
+async def time_presets_of(uid):
+    async with db.execute("SELECT * FROM time_presets WHERE user_id=? ORDER BY id DESC LIMIT ?", (str(uid), PRESET_MAX)) as c:
+        return await c.fetchall()
+
+def preset_label(p):
+    end = _hm_add(p["start_hm"], p["minutes"])
+    return f"{p['note'] or p['kind']} {p['start_hm']}-{end}"
+
+async def record_time_events(uid, kind, days, start_hm, minutes, note):
+    """記録して、記録した月ぶんの合計の文を返す"""
+    end_hm = _hm_add(start_hm, minutes)
+    ts0 = int(now_jst().timestamp())
+    await db.executemany("INSERT INTO time_events(user_id,kind,day,start_hm,end_hm,minutes,note,ts) VALUES(?,?,?,?,?,?,?,?)",
+                         [(str(uid), kind, d.isoformat(), start_hm, end_hm, minutes, note, ts0) for d in days])
+    await db.commit()
+    lines = []
+    for y, m in sorted({(d.year, d.month) for d in days})[:3]:
+        mn, n = (await month_time_totals(uid, y, m)).get(kind, (0, 0))
+        lines.append(f"-# {m}月の{kind}：合計 {fmt_mins(mn)}（{n}回）")
+    return end_hm, "\n".join(lines)
+
+class _TimeDaySelect(discord.ui.Select):
+    def __init__(self, view_):
+        today = now_jst().date()
+        base = today + timedelta(days=14 * view_.page)
+        self.page_days = [(base + timedelta(days=i)).isoformat() for i in range(14)]
+        opts = []
+        for iso in self.page_days:
+            d = date.fromisoformat(iso)
+            opts.append(discord.SelectOption(label=f"{d.month}/{d.day}({DAY_CHARS[d.weekday()]})" + ("　今日" if d == today else ""),
+                                             value=iso, default=iso in view_.days))
+        super().__init__(placeholder="📅 日付をえらぶ（いくつでも）", options=opts, min_values=0, max_values=len(opts), row=0)
+
+    async def callback(self, interaction):
+        v = self.view
+        v.days = (v.days - set(self.page_days)) | set(self.values)
+        await v.refresh(interaction)
+
+class _TimeHourSelect(discord.ui.Select):
+    def __init__(self, view_):
+        hours = list(range(5, 24)) + list(range(0, 5))   # 朝5時から並べる（深夜は最後）
+        opts = [discord.SelectOption(label=f"{h}時" + ("（深夜）" if h < 5 else ""), value=str(h),
+                                     default=view_.start_h == h) for h in hours]
+        super().__init__(placeholder="🕐 はじまりの時（例 17時）", options=opts, row=1)
+
+    async def callback(self, interaction):
+        self.view.start_h = int(self.values[0])
+        await self.view.refresh(interaction)
+
+class _TimeMinSelect(discord.ui.Select):
+    def __init__(self, view_):
+        opts = [discord.SelectOption(label=f"{m:02d}分", value=str(m), default=view_.start_m == m) for m in (0, 15, 30, 45)]
+        super().__init__(placeholder="はじまりの分（ふつうは 00分）", options=opts, row=2)
+
+    async def callback(self, interaction):
+        self.view.start_m = int(self.values[0])
+        await self.view.refresh(interaction)
+
+class _TimeDurSelect(discord.ui.Select):
+    def __init__(self, view_):
+        opts = [discord.SelectOption(label=dur_label(m), value=str(m), default=view_.minutes == m) for m in range(30, 721, 30)]
+        super().__init__(placeholder="⏳ 長さ（例 5時間）", options=opts, row=3)
+
+    async def callback(self, interaction):
+        self.view.minutes = int(self.values[0])
+        await self.view.refresh(interaction)
+
+class _TimeNoteModal(discord.ui.Modal, title="📝 メモ"):
+    n_in = discord.ui.TextInput(label="メモ（バイト先・部活の内容など・空欄で消す）", max_length=30, required=False)
+
+    def __init__(self, view_):
+        super().__init__()
+        self.v = view_
+        self.n_in.default = view_.note or None
+
+    async def on_submit(self, interaction):
+        self.v.note = str(self.n_in.value).strip()[:30] or None
+        await self.v.refresh(interaction)
+
+class TimeEntryView(discord.ui.View):
+    """⏱ タップだけで記録：日付（複数）・はじまり（時・分）・長さを選んで ✅"""
+
+    def __init__(self, uid, kind, start_hm=None, minutes=None, note=None):
+        super().__init__(timeout=1800)
+        self.uid, self.kind, self.note = str(uid), kind, note
+        self.start_h = int(start_hm[:2]) if start_hm else None
+        self.start_m = int(start_hm[3:]) if start_hm else 0
+        self.minutes = minutes
+        self.page = 0
+        self.days = set()
+        self._build()
+
+    def _build(self):
+        self.clear_items()
+        self.add_item(_TimeDaySelect(self))
+        self.add_item(_TimeHourSelect(self))
+        self.add_item(_TimeMinSelect(self))
+        self.add_item(_TimeDurSelect(self))
+        for label, style, cb in (("◀ 前の2週", discord.ButtonStyle.secondary, self._prev),
+                                 ("次の2週 ▶", discord.ButtonStyle.secondary, self._next),
+                                 ("📝 メモ", discord.ButtonStyle.secondary, self._memo),
+                                 ("💾 いつものに保存", discord.ButtonStyle.secondary, self._save_preset),
+                                 ("✅ 記録する", discord.ButtonStyle.success, self._commit)):
+            b = discord.ui.Button(label=label, style=style, row=4)
+            b.callback = cb
+            self.add_item(b)
+
+    def start_hm(self):
+        return None if self.start_h is None else f"{self.start_h:02d}:{self.start_m:02d}"
+
+    def summary(self):
+        ds = sorted(self.days)
+        dtxt = "・".join(f"{md(x)}({DAY_CHARS[date.fromisoformat(x).weekday()]})" for x in ds[:12]) + ("…" if len(ds) > 12 else "")
+        sh = self.start_hm()
+        ttxt = (f"{sh}-{_hm_add(sh, self.minutes)}（{dur_label(self.minutes)}）" if sh and self.minutes
+                else (f"{sh}〜（長さをえらんでね）" if sh else "（はじまりと長さをえらんでね）"))
+        page = "" if self.page == 0 else f"\n-# いま表示中：{'過去' if self.page < 0 else '先'}の2週間"
+        return (f"{TIME_EMOJI.get(self.kind, '⏱')} **{self.kind}を記録**" + (f"（{self.note}）" if self.note else "") + "\n"
+                f"📅 {dtxt or '（日付をえらんでね・いくつでも）'}\n🕐 {ttxt}{page}\n"
+                "-# ぜんぶ選んだら ✅ 記録する。よく使う時間は 💾 で「いつもの」にしておくと次から速い")
+
+    async def refresh(self, interaction):
+        self._build()
+        await interaction.response.edit_message(content=self.summary(), view=self)
+
+    async def _prev(self, interaction):
+        self.page -= 1
+        await self.refresh(interaction)
+
+    async def _next(self, interaction):
+        self.page += 1
+        await self.refresh(interaction)
+
+    async def _memo(self, interaction):
+        await interaction.response.send_modal(_TimeNoteModal(self))
+
+    async def _save_preset(self, interaction):
+        sh = self.start_hm()
+        if not sh or not self.minutes:
+            await interaction.response.send_message("先に「はじまり」と「長さ」をえらんでね。", ephemeral=True)
+            return
+        await db.execute("INSERT INTO time_presets(user_id,kind,start_hm,minutes,note,ts) VALUES(?,?,?,?,?,?)",
+                         (self.uid, self.kind, sh, self.minutes, self.note, int(now_jst().timestamp())))
+        await db.execute("DELETE FROM time_presets WHERE user_id=? AND id NOT IN "
+                         "(SELECT id FROM time_presets WHERE user_id=? ORDER BY id DESC LIMIT ?)", (self.uid, self.uid, PRESET_MAX))
+        await db.commit()
+        await interaction.response.send_message(
+            f"💾 「{(self.note or self.kind)} {sh}-{_hm_add(sh, self.minutes)}」を「いつもの」に保存しました。"
+            "次からは ⏱ の画面でえらぶだけで、日付をタップすれば記録できます。", ephemeral=True)
+
+    async def _commit(self, interaction):
+        sh = self.start_hm()
+        if not self.days or not sh or not self.minutes:
+            miss = "・".join(x for x, ok in (("日付", self.days), ("はじまりの時", sh), ("長さ", self.minutes)) if not ok)
+            await interaction.response.send_message(f"⚠️ まだ選んでいないものがあります：{miss}", ephemeral=True)
+            return
+        days = [date.fromisoformat(x) for x in sorted(self.days)]
+        end_hm, tots = await record_time_events(self.uid, self.kind, days, sh, self.minutes, self.note)
+        ds = "・".join(f"{md(d.isoformat())}({DAY_CHARS[d.weekday()]})" for d in days[:10]) + ("…" if len(days) > 10 else "")
+        await interaction.response.edit_message(
+            content=f"✅ {TIME_EMOJI.get(self.kind, '⏱')} **{self.kind}** を {len(days)}日ぶん記録しました"
+                    f"（{ds}　{sh}-{end_hm}・各{dur_label(self.minutes)}）\n{tots}", view=None)
+
+async def open_time_entry(interaction, kind, start_hm=None, minutes=None, note=None):
+    v = TimeEntryView(interaction.user.id, kind, start_hm, minutes, note)
+    await interaction.response.send_message(v.summary(), view=v, ephemeral=True)
+
 class TimeKindSelect(discord.ui.Select):
+    """⏱ の画面の「記録する」：いつもの（保存したシフト）→ 種類 の順に並べる"""
+
+    def __init__(self, presets=()):
+        opts = [discord.SelectOption(label=f"⭐ {preset_label(p)}"[:100], value=f"p:{p['id']}", emoji=TIME_EMOJI.get(p["kind"], "⏱"),
+                                     description=f"いつもの（{p['kind']}）・日付をタップするだけ") for p in presets]
+        opts += [discord.SelectOption(label=k, emoji=e, value=f"k:{k}", description="日付・時間をタップでえらぶ") for k, e, _ in TIME_KINDS]
+        super().__init__(placeholder="➕ 記録する（いつもの／種類をえらぶ）", options=opts[:25], row=0)
+
+    async def callback(self, interaction):
+        v = self.values[0]
+        if v.startswith("p:"):
+            async with db.execute("SELECT * FROM time_presets WHERE id=? AND user_id=?", (int(v[2:]), str(interaction.user.id))) as c:
+                p = await c.fetchone()
+            if not p:
+                await interaction.response.send_message("その「いつもの」は見つかりませんでした。", ephemeral=True)
+                return
+            await open_time_entry(interaction, p["kind"], p["start_hm"], p["minutes"], p["note"])
+        else:
+            await open_time_entry(interaction, v[2:])
+
+class TimeTextKindSelect(discord.ui.Select):
     def __init__(self):
         opts = [discord.SelectOption(label=k, emoji=e, value=k) for k, e, _ in TIME_KINDS]
-        super().__init__(placeholder="➕ 記録する（種類を選ぶ）", options=opts, row=0)
+        super().__init__(placeholder="⌨ 文字で入力する種類をえらぶ", options=opts)
 
     async def callback(self, interaction):
         await interaction.response.send_modal(TimeEventModal(self.values[0]))
@@ -7510,13 +7737,27 @@ class TimeDelSelect(discord.ui.Select):
         text, view = await time_hub_message(interaction.user.id, self.view.y, self.view.m)
         await interaction.response.edit_message(content=f"🗑 {len(self.values)}件消しました。\n" + text, view=view)
 
+class PresetDelSelect(discord.ui.Select):
+    def __init__(self, presets):
+        opts = [discord.SelectOption(label=preset_label(p)[:100], value=str(p["id"]), emoji=TIME_EMOJI.get(p["kind"], "⏱"))
+                for p in presets]
+        super().__init__(placeholder="🗑 「いつもの」を消す", options=opts, min_values=1, max_values=len(opts), row=3)
+
+    async def callback(self, interaction):
+        await db.executemany("DELETE FROM time_presets WHERE id=? AND user_id=?", [(int(v), str(interaction.user.id)) for v in self.values])
+        await db.commit()
+        text, view = await time_hub_message(interaction.user.id, self.view.y, self.view.m)
+        await interaction.response.edit_message(content=f"🗑 「いつもの」を {len(self.values)}件消しました。\n" + text, view=view)
+
 class TimeHubView(discord.ui.View):
-    def __init__(self, uid, y, m, rows):
+    def __init__(self, uid, y, m, rows, presets=()):
         super().__init__(timeout=900)
         self.uid, self.y, self.m = str(uid), y, m
-        self.add_item(TimeKindSelect())
+        self.add_item(TimeKindSelect(presets))
         if rows:
             self.add_item(TimeDelSelect(rows))
+        if presets:
+            self.add_item(PresetDelSelect(presets))
 
     async def _go(self, interaction, delta):
         y, m = self.y, self.m + delta
@@ -7532,15 +7773,25 @@ class TimeHubView(discord.ui.View):
     async def b_next(self, interaction, button):
         await self._go(interaction, +1)
 
+    @discord.ui.button(label="⌨ 文字で入力", style=discord.ButtonStyle.secondary, row=2)
+    async def b_text(self, interaction, button):
+        v = discord.ui.View(timeout=600)
+        v.add_item(TimeTextKindSelect())
+        await interaction.response.send_message(
+            "⌨ 文字でまとめて入力（例：日付 `11/3, 11/5` `11/3-11/7`／時間 `17-22` `17:30-22:00` `22-5`）", view=v, ephemeral=True)
+
 async def time_hub_message(uid, y, m):
     d1, d2 = month_bounds(y, m)
     rows = await time_events_between(uid, d1, d2)
     tot = await month_time_totals(uid, y, m)
+    presets = await time_presets_of(uid)
     lines = [f"⏱ **{y}年{m}月のバイト・部活など**（自分にだけ表示・記録は消えません）",
              f"**合計**：{time_totals_text(tot)}"]
     if rows:
         lines += [f"・{time_line(r)}" for r in rows[:20]] + ([f"-# ほか {len(rows) - 20} 件"] if len(rows) > 20 else [])
-    return "\n".join(lines), TimeHubView(uid, y, m, rows)
+    if not presets:
+        lines.append("-# 💡 記録の画面で 💾 を押すと、よく使うシフトを「いつもの」に保存できます（次から日付をタップするだけ）")
+    return "\n".join(lines), TimeHubView(uid, y, m, rows, presets)
 
 async def send_time_hub(interaction):
     await ensure_user(interaction.user)
