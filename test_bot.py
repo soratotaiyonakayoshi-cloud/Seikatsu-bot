@@ -48,11 +48,11 @@ check("設定パネル: 項目セレクトは14項目", len(B.SaiteiSelect().opt
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView, B.KadaiPanelView, B.GoodsPanelView, B.MusicPanelView, B.YoteiPanelView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー8種 登録OK", True, True)
-check("予定パネル: 9ボタン", {i.custom_id for i in B.YoteiPanelView().children},
-      {"sk_today", "sk_tomorrow", "sk_upcoming", "sk_univ", "sk_mine", "sk_exam", "sk_timeline", "sk_cal0", "sk_cal1"})
+check("予定パネル: 10ボタン", {i.custom_id for i in B.YoteiPanelView().children},
+      {"sk_today", "sk_tomorrow", "sk_upcoming", "sk_univ", "sk_mine", "sk_time", "sk_exam", "sk_timeline", "sk_cal0", "sk_cal1"})
 check("予定パネル: 行割り（今日・明日・今後が1段目）",
       {i.custom_id: i.row for i in B.YoteiPanelView().children},
-      {"sk_today": 0, "sk_tomorrow": 0, "sk_upcoming": 0, "sk_univ": 1, "sk_mine": 1, "sk_exam": 1,
+      {"sk_today": 0, "sk_tomorrow": 0, "sk_upcoming": 0, "sk_univ": 1, "sk_mine": 1, "sk_time": 1, "sk_exam": 1,
        "sk_timeline": 2, "sk_cal0": 2, "sk_cal1": 2})
 check("予定パネル: VIEW_FACTORYとチャンネル定義", (B.VIEW_FACTORY.get("yotei") is B.YoteiPanelView, B.CH["yotei"][0]), (True, "予定🗓"))
 check("音楽パネルは12ボタン", {i.custom_id for i in B.MusicPanelView().children},
@@ -764,6 +764,26 @@ async def main():
     check("日付欄: 読めない", (B.parse_span("あした", _rn), B.parse_span("4/4-2/1", _rn) is not None), (None, True))
     check("日付表示: 年と曜日つき", B.fmt_full_span(date(2027, 2, 10), date(2027, 4, 4)), "2027年2月10日(水)〜4月4日(日)")
     check("日付表示: 年をずらす（うるう日は28日に）", B.shift_year(date(2028, 2, 29), 1), date(2029, 2, 28))
+
+    # ⏱ バイト・部活の時間（日付は複数OK・時間は日またぎOK・月の合計）
+    check("時間: 17-22", B.parse_time_range("17-22"), ("17:00", "22:00", 300))
+    check("時間: 分つき・日またぎ", (B.parse_time_range("17:30-22:00"), B.parse_time_range("22-5")),
+          (("17:30", "22:00", 270), ("22:00", "05:00", 420)))
+    check("時間: 日本語の書き方", (B.parse_time_range("9時30分-12時"), B.parse_time_range("17時-22時半")),
+          (("09:30", "12:00", 150), ("17:00", "22:30", 330)))
+    check("時間: 読めない", (B.parse_time_range("あさ"), B.parse_time_range("25-3")), (None, None))
+    check("日付複数: カンマと期間", B.parse_days_multi("11/3, 11/5-11/6", _rn), [date(2026, 11, 3), date(2026, 11, 5), date(2026, 11, 6)])
+    check("日付複数: 先月の分もあとから記録できる（来年にしない）", B.parse_days_multi("10/1", _rn), [date(2026, 10, 1)])
+    await B.db.executemany("INSERT INTO time_events(user_id,kind,day,start_hm,end_hm,minutes,note,ts) VALUES('95',?,?,?,?,?,?,0)",
+                           [("アルバイト", "2026-11-03", "17:00", "22:00", 300, "コンビニ"), ("アルバイト", "2026-11-05", "17:30", "22:00", 270, None),
+                            ("部活・サークル", "2026-11-04", "13:00", "15:00", 120, None), ("アルバイト", "2026-12-01", "17:00", "22:00", 300, None)])
+    await B.db.commit()
+    _tt = await B.month_time_totals("95", 2026, 11)
+    check("時間: 月の合計（種類別・回数つき・ほかの月は入らない）", _tt, {"アルバイト": (570, 2), "部活・サークル": (120, 1)})
+    check("時間: 合計の表示", B.time_totals_text(_tt), "💼アルバイト **9h30m**（2回）／🏸部活・サークル **2h**（1回）　計 **11h30m**")
+    _c = (await B.calendar_data("95", 2026, 11))[3]
+    check("時間: カレンダーのマスに 💼17-22", "💼17-22" in _c.get("2026-11-03", []) and "💼17:30-22" in _c.get("2026-11-05", []), True)
+    check("時間: 予定パネルに⏱ボタン", any(getattr(i, "custom_id", "") == "sk_time" for i in B.YoteiPanelView().children), True)
 
     # 🌸 長期休暇モード
     check("休暇: 日付の読み取り", (B.parse_md("2/1", date(2026, 10, 1)), B.parse_md("2027-03-31", date(2026, 10, 1)), B.parse_md("あ", date(2026, 1, 1))),
