@@ -54,6 +54,7 @@ check("予定パネル: 行割り（今日・明日・今後が1段目）",
       {i.custom_id: i.row for i in B.YoteiPanelView().children},
       {"sk_today": 0, "sk_tomorrow": 0, "sk_upcoming": 0, "sk_univ": 1, "sk_mine": 1, "sk_time": 1, "sk_exam": 1,
        "sk_timeline": 2, "sk_cal0": 2})
+check("時報: 15時・0時はおやすみ兼用", (B.jiho_text(15), B.jiho_text(0).split("\n")[1]), ("🕒 **15時** になりました", "🌙 そろそろ寝てもいいんじゃない？"))
 check("⏱ 時限の選択肢（昼休み＋1〜6限）", [(n, h, m) for n, h, m in B.TIME_SLOTS][:3], [("昼休み", "12:00", 60), ("1限", "08:45", 90), ("2限", "10:30", 90)])
 check("予定パネル: VIEW_FACTORYとチャンネル定義", (B.VIEW_FACTORY.get("yotei") is B.YoteiPanelView, B.CH["yotei"][0]), (True, "予定🗓"))
 check("音楽パネルは12ボタン", {i.custom_id for i in B.MusicPanelView().children},

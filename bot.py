@@ -3067,6 +3067,17 @@ async def judge_loop():
         await ops_daily(now)   # 🔒 yt-dlpの週1自動更新・DBの外部バックアップ
     except Exception as e:
         await bot_alert(f"⚠️ 定期メンテでエラー：{e!r}"[:500], key="ops_err", cooldown_h=24)
+    try:   # 🕐 時報：毎時0分、作業部屋に人がいるときだけVCチャットへ（通知音なし。0時はおやすみの声かけと1通に）
+        slot = f"{day} {now.hour}"
+        if JIHO and now.minute < 3 and await meta_get("jiho_slot") != slot:   # 再起動で遅れたら出さない
+            await meta_set("jiho_slot", slot)
+            wch = await _work_vc_channel()
+            if wch and any(not m.bot for m in wch.members):
+                await wch.send(jiho_text(now.hour), silent=True)
+                if now.hour == 0:
+                    await meta_set("oyasumi_nudge_day", day)
+    except Exception as e:
+        print(f"時報エラー: {e!r}", flush=True)
     try:   # 🌙 24時をまわっても作業部屋に人がいたら、VCチャットからそっと声かけ（1日1回）
         if now.hour == 0 and await meta_get("oyasumi_nudge_day") != day:
             await meta_set("oyasumi_nudge_day", day)
@@ -3514,6 +3525,14 @@ async def spotify_tracks(kind, sid):
     except Exception as e:
         print(f"Spotify取得失敗: {e!r}", flush=True)
         return None
+
+JIHO = os.getenv("JIHO", "1") == "1"   # 作業部屋の時報（0で止める）
+_CLOCKS = "🕛🕐🕑🕒🕓🕔🕕🕖🕗🕘🕙🕚"
+
+def jiho_text(hour):
+    """時報の1行（0時は おやすみの声かけ を兼ねる）"""
+    head = f"{_CLOCKS[hour % 12]} **{hour}時** になりました"
+    return head + ("\n🌙 そろそろ寝てもいいんじゃない？" if hour == 0 else "")
 
 async def _work_vc_channel():
     wid = await meta_get("ch_workvc")
