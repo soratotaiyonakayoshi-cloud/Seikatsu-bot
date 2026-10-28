@@ -3067,7 +3067,7 @@ async def judge_loop():
         await ops_daily(now)   # 🔒 yt-dlpの週1自動更新・DBの外部バックアップ
     except Exception as e:
         await bot_alert(f"⚠️ 定期メンテでエラー：{e!r}"[:500], key="ops_err", cooldown_h=24)
-    try:   # 🕐 時報：毎時0分、作業部屋に人がいるときだけVCチャットへ（通知音なし。0時はおやすみの声かけと1通に）
+    try:   # 🕐 時報：毎時0分、作業部屋に人がいるときだけVCチャットへ（通知音なし。23時・0時はひとこと添える）
         slot = f"{day} {now.hour}"
         if JIHO and now.minute < 3 and await meta_get("jiho_slot") != slot:   # 再起動で遅れたら出さない
             await meta_set("jiho_slot", slot)
@@ -3078,12 +3078,12 @@ async def judge_loop():
                     await meta_set("oyasumi_nudge_day", day)
     except Exception as e:
         print(f"時報エラー: {e!r}", flush=True)
-    try:   # 🌙 24時をまわっても作業部屋に人がいたら、VCチャットからそっと声かけ（1日1回）
+    try:   # 🌝 0時台に作業部屋に人がいたら、VCチャットからそっと声かけ（1日1回・0時の時報で言っていれば出さない）
         if now.hour == 0 and await meta_get("oyasumi_nudge_day") != day:
             await meta_set("oyasumi_nudge_day", day)
             wch = await _work_vc_channel()
             if wch and any(not m.bot for m in wch.members):
-                await wch.send("🌙 そろそろ寝てもいいんじゃない？")
+                await wch.send(JIHO_EXTRA[0])   # 0時ちょうどに誰もいなかった→あとから入った人へ
     except Exception as e:
         print(f"おやすみ声かけエラー: {e!r}", flush=True)
     try:   # 📖ミニ勉強会：開始の合図と、終わりの参加発表（来なかった夜は何も言わない）
@@ -3528,11 +3528,12 @@ async def spotify_tracks(kind, sid):
 
 JIHO = os.getenv("JIHO", "1") == "1"   # 作業部屋の時報（0で止める）
 _CLOCKS = "🕛🕐🕑🕒🕓🕔🕕🕖🕗🕘🕙🕚"
+JIHO_EXTRA = {23: "🌙 そろそろ寝てもいいんじゃない？", 0: "🌝今日は夜ふかしさんですか？"}   # 時報に添えるひとこと
 
 def jiho_text(hour):
-    """時報の1行（0時は おやすみの声かけ を兼ねる）"""
+    """時報の1行（23時・0時はひとこと添える。0時はおやすみの声かけを兼ねる）"""
     head = f"{_CLOCKS[hour % 12]} **{hour}時** になりました"
-    return head + ("\n🌙 そろそろ寝てもいいんじゃない？" if hour == 0 else "")
+    return head + (f"\n{JIHO_EXTRA[hour]}" if hour in JIHO_EXTRA else "")
 
 async def _work_vc_channel():
     wid = await meta_get("ch_workvc")
