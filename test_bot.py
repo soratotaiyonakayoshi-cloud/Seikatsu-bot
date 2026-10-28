@@ -49,15 +49,15 @@ for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView, B.KadaiPanelView, B.G
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー8種 登録OK", True, True)
 check("予定パネル: 10ボタン", {i.custom_id for i in B.YoteiPanelView().children},
-      {"sk_today", "sk_tomorrow", "sk_upcoming", "sk_univ", "sk_mine", "sk_time", "sk_exam", "sk_timeline", "sk_cal0", "sk_cal1"})
+      {"sk_today", "sk_tomorrow", "sk_upcoming", "sk_univ", "sk_mine", "sk_time", "sk_exam", "sk_timeline", "sk_cal0", "sk_jw_free"})
 check("予定パネル: 行割り（今日・明日・今後が1段目）",
       {i.custom_id: i.row for i in B.YoteiPanelView().children},
       {"sk_today": 0, "sk_tomorrow": 0, "sk_upcoming": 0, "sk_univ": 1, "sk_mine": 1, "sk_time": 1, "sk_exam": 1,
-       "sk_timeline": 2, "sk_cal0": 2, "sk_cal1": 2})
+       "sk_timeline": 2, "sk_cal0": 2, "sk_jw_free": 2})
 check("予定パネル: VIEW_FACTORYとチャンネル定義", (B.VIEW_FACTORY.get("yotei") is B.YoteiPanelView, B.CH["yotei"][0]), (True, "予定🗓"))
 check("音楽パネルは12ボタン", {i.custom_id for i in B.MusicPanelView().children},
       {"sk_mu_play", "sk_mu_bgm", "sk_mu_amb", "sk_mu_join", "sk_mu_pause", "sk_mu_skip", "sk_mu_queue", "sk_mu_stop",
-       "sk_mu_lists", "sk_mu_recs", "sk_mu_lyrics", "sk_mu_karaoke"})
+       "sk_mu_lists", "sk_mu_recs", "sk_mu_lyrics"})
 check("LRC: 基本パース", B.parse_lrc("[00:12.50]こんにちは\n[01:02]さようなら"), [(12.5, "こんにちは"), (62.0, "さようなら")])
 check("LRC: 1行複数タイムスタンプ＋時刻順", B.parse_lrc("[01:00][00:10]サビ\n[00:05]Aメロ"), [(5.0, "Aメロ"), (10.0, "サビ"), (60.0, "サビ")])
 check("LRC: 空行は間奏として残る", B.parse_lrc("[00:01]歌\n[00:30]\n[00:40]歌2")[1], (30.0, ""))
@@ -78,13 +78,13 @@ check("おすすめ: 1人20曲まで", B.REC_MAX, 20)
 check("おすすめ: 26曲で2ページ表記", "2ページ" in B.rec_head([{}] * 26, 0), True)
 check("おすすめ: 25曲以下はページ表記なし", "ページ" in B.rec_head([{}] * 25, 0), False)
 check("音楽パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("worklog") is B.MusicPanelView, True)
-check("ごはんパネルに🧊 2ボタン", {"sk_fridge_add", "sk_fridge_list"} <= {i.custom_id for i in B.MealView().children}, True)
+check("ごはんパネルの🧊は1ボタン", [i.custom_id for i in B.MealView().children if "fridge" in str(i.custom_id)], ["sk_fridge_list"])
 check("🧊は2段目・ごはんは1段目", sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_fridge")}) == [1]
       and sorted({i.row for i in B.MealView().children if i.custom_id.startswith("sk_meal")}) == [0], True)
 check("起床パネルから予定ボタンは外れた（#予定へ）",
       {"sk_today", "sk_tomorrow", "sk_upcoming"} & {getattr(i, "custom_id", "") for i in B.WakeView().children}, set())
-check("課題パネルは11ボタン（予定系は#予定へ）", {i.custom_id for i in B.KadaiPanelView().children},
-      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki", "sk_jw_free", "sk_cnote", "sk_newterm"})
+check("課題パネルは10ボタン（予定系・🧩空きコマは#予定へ）", {i.custom_id for i in B.KadaiPanelView().children},
+      {"sk_jw_add", "sk_kd_add", "sk_jw_list", "sk_kd_list", "sk_jw_img", "sk_jw_copy", "sk_kesseki", "sk_kd_teiki", "sk_cnote", "sk_newterm"})
 check("課題パネルがVIEW_FACTORYに", B.VIEW_FACTORY.get("kadai") is B.KadaiPanelView, True)
 check("コマンド一覧", sorted(c.name for c in B.bot.tree.get_commands()), ["BGMに追加", "album", "ambient", "bgm", "erai", "hantei", "help", "jikanwari", "jikoshokai", "join", "kadai", "kanri", "kesseki", "kigen", "kiroku", "kojin", "kyuka", "loop", "nakama", "oyasumi", "pause", "play", "queue", "rajio", "reizouko", "resume", "saitei", "setup", "shiori", "shuffle", "skip", "stop", "suimin", "tips", "tsushinbo", "volume", "watashi", "レシピカードにする"])
 check("音楽: URL判定", (B.looks_like_url("https://youtu.be/x"), B.looks_like_url("lofi hiphop")), (True, False))
@@ -1207,7 +1207,10 @@ async def main():
     check("⏰: 締切の10分前", B.wake_remind_target({"wake_deadline": "07:00", "holiday_shift": 0}, wed_), "06:50")
     check("⏰: 土日の後ろ倒しに追従", B.wake_remind_target({"wake_deadline": "07:00", "holiday_shift": 120}, sat_), "08:50")
     check("⏰: 締切なしはNone", B.wake_remind_target({"wake_deadline": None, "holiday_shift": 0}, wed_), None)
-    check("起床パネルに⏰ボタン", any(i.custom_id == "sk_wake_remind" for i in B.WakeView().children), True)
+    check("⏰・🏃のON/OFFは #設定🔧 に", ([i.custom_id for i in B.WakeView().children if i.custom_id in ("sk_wake_remind", "sk_radio_toggle")],
+      {"sk_wake_remind", "sk_radio_toggle"} <= {i.custom_id for i in B.SetteiView().children}), ([], True))
+    check("課題パネル：段ごとの並び", [[i.custom_id for i in B.KadaiPanelView().children if i.row == r] for r in (0, 1, 2)],
+          [["sk_kd_add", "sk_kd_list", "sk_kd_teiki"], ["sk_jw_add", "sk_jw_list", "sk_jw_copy", "sk_jw_img"], ["sk_kesseki", "sk_cnote", "sk_newterm"]])
 
     # ☀️押し忘れ救済（自動起床）
     _orig_now_aw = B.now_jst

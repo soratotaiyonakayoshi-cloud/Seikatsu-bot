@@ -736,6 +736,32 @@ class SleepModal(discord.ui.Modal, title="🌙 昨夜は何時に寝た？"):
         await add_event(interaction.user.id, "bed", ts_dt=bed_dt)
         await record_wake(interaction, wake_dt, bed_dt)
 
+async def toggle_radio_notify(interaction):
+    user = interaction.user
+    await ensure_user(user)
+    u = await get_user(user.id)
+    new = 0 if u["radio_notify"] else 1
+    await db.execute("UPDATE users SET radio_notify=? WHERE id=?", (new, str(user.id)))
+    await db.commit()
+    state = "ON" if new else "OFF"
+    extra = "（開始時にメンションで呼びます）" if new else ""
+    await interaction.response.send_message(f"🏃 毎朝 {RADIO_TIME} のラジオ体操の呼び出し：**{state}**{extra}", ephemeral=True)
+
+async def toggle_wake_remind(interaction):
+    user = interaction.user
+    await ensure_user(user)
+    u = await get_user(user.id)
+    cur = u["wake_remind"] if "wake_remind" in u.keys() else 0
+    new = 0 if cur else 1
+    await db.execute("UPDATE users SET wake_remind=? WHERE id=?", (new, str(user.id)))
+    await db.commit()
+    if new:
+        msg = (f"⏰ 起床リマインド **ON**：☀️の締切の{WAKE_REMIND_MIN}分前に未報告ならメンションで呼びます。"
+               f"スマホの通知をONにしておけば実質アラームです（土日の後ろ倒し・夜勤・お休みは鳴りません）。")
+    else:
+        msg = "⏰ 起床リマインド **OFF** にしました。"
+    await interaction.response.send_message(msg + hitokoto_suffix(), ephemeral=True)
+
 class WakeView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -803,34 +829,6 @@ class WakeView(discord.ui.View):
         koukai = "夜勤明け" if target == day_str(now) else "今夜夜勤"
         await post_log("wake", f"🏭 **{user.display_name}** は{koukai}。ちょーえらい！")
 
-    @discord.ui.button(label="🏃 ラジオ体操の呼び出し ON/OFF", style=discord.ButtonStyle.secondary, custom_id="sk_radio_toggle", row=1)
-    async def radio_toggle(self, interaction, button):
-        user = interaction.user
-        await ensure_user(user)
-        u = await get_user(user.id)
-        new = 0 if u["radio_notify"] else 1
-        await db.execute("UPDATE users SET radio_notify=? WHERE id=?", (new, str(user.id)))
-        await db.commit()
-        state = "ON" if new else "OFF"
-        extra = "（開始時にメンションで呼びます）" if new else ""
-        await interaction.response.send_message(f"🏃 毎朝 {RADIO_TIME} のラジオ体操の呼び出し：**{state}**{extra}", ephemeral=True)
-
-    @discord.ui.button(label="⏰ 締切前リマインド ON/OFF", style=discord.ButtonStyle.secondary, custom_id="sk_wake_remind", row=1)
-    async def wake_remind(self, interaction, button):
-        user = interaction.user
-        await ensure_user(user)
-        u = await get_user(user.id)
-        cur = u["wake_remind"] if "wake_remind" in u.keys() else 0
-        new = 0 if cur else 1
-        await db.execute("UPDATE users SET wake_remind=? WHERE id=?", (new, str(user.id)))
-        await db.commit()
-        if new:
-            msg = (f"⏰ 起床リマインド **ON**：☀️の締切の{WAKE_REMIND_MIN}分前に未報告ならメンションで呼びます。"
-                   f"スマホの通知をONにしておけば実質アラームです（土日の後ろ倒し・夜勤・お休みは鳴りません）。")
-        else:
-            msg = "⏰ 起床リマインド **OFF** にしました。"
-        await interaction.response.send_message(msg + hitokoto_suffix(), ephemeral=True)
-
 # ------------------------------------------------------------
 #  食事
 # ------------------------------------------------------------
@@ -892,11 +890,7 @@ class MealView(discord.ui.View):
         for sub, emoji in MEALS:
             self.add_item(MealButton(sub, emoji))
 
-    @discord.ui.button(label="🧊 冷蔵庫に登録", style=discord.ButtonStyle.primary, custom_id="sk_fridge_add", row=1)
-    async def fridge_add(self, interaction, button):
-        await interaction.response.send_modal(FridgeAddModal())
-
-    @discord.ui.button(label="🧊 冷蔵庫を見る・食べた", style=discord.ButtonStyle.secondary, custom_id="sk_fridge_list", row=1)
+    @discord.ui.button(label="🧊 冷蔵庫", style=discord.ButtonStyle.secondary, custom_id="sk_fridge_list", row=1)
     async def fridge_list(self, interaction, button):
         await fridge_show(interaction)
 
@@ -904,7 +898,7 @@ class MealView(discord.ui.View):
     async def recipe_btn(self, interaction, button):
         await interaction.response.send_modal(RecipeModal())
 
-    @discord.ui.button(label="📖 じぶんの食卓", style=discord.ButtonStyle.secondary, custom_id="sk_gohan_album", row=1)
+    @discord.ui.button(label="🍴 じぶんの食卓", style=discord.ButtonStyle.secondary, custom_id="sk_gohan_album", row=1)
     async def meal_album_btn(self, interaction, button):
         await ensure_user(interaction.user)
         await interaction.response.defer(ephemeral=True, thinking=True)   # 写真の取り直しに数秒かかる
@@ -914,7 +908,7 @@ class MealView(discord.ui.View):
         if not buf:
             await interaction.followup.send("この30日に写真つきのごはん記録がまだありません。#ごはん🍚 に写真を投げると、ここに並んでいきます 📸", ephemeral=True)
             return
-        await interaction.followup.send("📖 この30日のあなたの食卓です。ちゃんと食べててえらい！",
+        await interaction.followup.send("🍴 この30日のあなたの食卓です。ちゃんと食べててえらい！",
                                         file=discord.File(buf, filename="my_meals.png"), ephemeral=True)
 
 # ------------------------------------------------------------
@@ -4611,7 +4605,7 @@ class RecHubView(discord.ui.View):
         uid = str(interaction.user.id)
         cands = [r for r in await rec_all() if r["kind"] == "artist" or r["user_id"] == uid][:25]
         if not cands:
-            await interaction.response.send_message("編集できるものがまだありません。まずは⭐か🎤で登録してね。", ephemeral=True)
+            await interaction.response.send_message("編集できるものがまだありません。まずは⭐か📜で登録してね。", ephemeral=True)
             return
         v = discord.ui.View(timeout=300)
         v.add_item(RecManagePickSelect(cands))
@@ -4807,7 +4801,7 @@ async def send_current_lyrics(interaction):
                                     view=LyricsHubView((), clean_track_title(title)))
 
 class LyricsMenuView(discord.ui.View):
-    """📜を押したときの分岐：再生中の曲の歌詞を見る or 任意の曲に歌詞を追加・編集"""
+    """📜を押したときの分岐：再生中の曲の歌詞を見る・同期する or 任意の曲に歌詞を追加・編集"""
 
     def __init__(self):
         super().__init__(timeout=600)
@@ -4823,6 +4817,10 @@ class LyricsMenuView(discord.ui.View):
         cur = clean_track_title(current_track_title() or "")
         await interaction.followup.send("📝 歌詞を登録・修正する曲を選んでね（リストにない曲は⌨で入力）",
                                         view=LyricsHubView(await lyrics_candidate_titles(), cur), ephemeral=True)
+
+    @discord.ui.button(label="🎤 歌詞を同期", style=discord.ButtonStyle.secondary)
+    async def b_karaoke(self, interaction, button):   # パネルの📜にまとめた（前は🎤ボタンが別にあった）
+        await karaoke_open(interaction)
 
 async def lyrics_candidate_titles():
     """歌詞登録の候補曲：いまの曲→キュー→最近の再生履歴（重複除去・25件）"""
@@ -5148,7 +5146,7 @@ class LrcTapView(discord.ui.View):
         await interaction.response.edit_message(content="❌ 打ち込みを中止しました（保存していません）。", view=None)
 
 class KaraokeMakeView(discord.ui.View):
-    """🎤で同期歌詞が無かったときの「⏺打ち込みでカラオケ化」入口"""
+    """📜→🎤歌詞を同期で同期歌詞が無かったときの「⏺打ち込みでカラオケ化」入口"""
 
     def __init__(self, title):
         super().__init__(timeout=600)
@@ -5189,7 +5187,7 @@ class KaraokeCtlView(discord.ui.View):
             if cur_on:
                 _player["karaoke"] = None   # いまの曲の表示も止める
                 await interaction.response.edit_message(
-                    content="🚫 自動同期をOFFにしました（出したい曲だけ🎤で手動起動できます）", view=None)
+                    content="🚫 自動同期をOFFにしました（出したい曲だけ📜→🎤で手動起動できます）", view=None)
             else:
                 await interaction.response.edit_message(
                     content="🔁 自動同期をONに戻しました（同期歌詞がある曲は自動で表示されます）", view=None)
@@ -5325,53 +5323,52 @@ class MusicPanelView(discord.ui.View):
         await interaction.followup.send("いま曲は流れていませんが、歌詞の登録・修正はできます。",
                                         view=LyricsHubView(await lyrics_candidate_titles()), ephemeral=True)
 
-    @discord.ui.button(label="歌詞を同期", emoji="🎤", style=discord.ButtonStyle.secondary, custom_id="sk_mu_karaoke", row=2)
-    async def b_karaoke(self, interaction, button):
-        """いまの曲の歌詞をVCサブタイトルに1行ずつ流す（曲ごとにオン・曲が終わると自動オフ）"""
-        if _player.get("karaoke"):   # すでにオン→補正・OFF・自動切替のコントロールを出す
-            k = _player["karaoke"]
-            await interaction.response.send_message(f"🎤 歌詞同期中（ずれ補正：歌詞を {k.get('offset', 0.0):+.0f} 秒）",
-                                                    view=KaraokeCtlView(await karaoke_auto_enabled()), ephemeral=True)
-            return
-        it = _player.get("cur_item") or {}
-        title = current_track_title()
-        vc = _player.get("vc")
-        if not title or not vc or not (vc.is_playing() or vc.is_paused()):
-            await interaction.response.send_message("いま歌詞を同期できる曲が流れていません。", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-        lines, diff, src = [], None, "lrclib"
-        local = await custom_lyrics_find(title)   # メンバー歌詞がLRC形式なら最優先でカラオケ化
-        if local:
-            lines = parse_lrc(local["text"])
-            if lines:
-                src = f"メンバー登録（{local['uname']}）"
-            else:   # 登録歌詞はあるがタイムスタンプが無い→lrclibの（別の曲かもしれない）同期歌詞には戻らない
-                await interaction.followup.send(
-                    f"🎤 この曲はメンバー登録の歌詞（{local['uname']}）を使っていますが、タイムスタンプが無いので同期できません。\n"
-                    "-# 下の⏺で、曲を聴きながらタイムスタンプを刻めます（📜の全文表示はそのまま使えます）",
-                    view=KaraokeMakeView(clean_track_title(title)), ephemeral=True)
-                return
-        if not lines:
-            got = await fetch_synced_lyrics(title, it.get("duration"))
-            if not got:
-                await interaction.followup.send(
-                    "🎤 タイムスタンプ付きの歌詞が見つかりませんでした（📜の全文表示なら出るかも）。\n"
-                    "-# 下の⏺＝曲を聴きながらボタンを押してタイムスタンプを刻む打ち込みモード。全文歌詞（📝登録かlrclib）があれば使えます",
-                    view=KaraokeMakeView(clean_track_title(title)), ephemeral=True)
-                return
-            lines, diff = got
-        _player["karaoke"] = {"lines": lines, "offset": 0.0, "auto": False, "item": _player.get("cur_item")}
-        _player["karaoke"]["task"] = asyncio.create_task(karaoke_task())
-        warn = ""
-        if diff is not None and diff > 3:
-            warn = f"\n⚠️ 歌詞の元音源と動画の長さが {diff:.0f} 秒違います（MVのイントロ等）。ずれたら下のボタンで補正してね"
-        elif diff is None and src == "lrclib":
-            warn = "\n-# 動画の長さと照合できませんでした。ずれたら下のボタンで補正してね"
-        await interaction.followup.send(f"🎤 歌詞の同期表示をはじめました（歌詞: {src}・曲が終わると自動で戻ります）{warn}",
-                                        view=KaraokeCtlView(await karaoke_auto_enabled()), ephemeral=True)
-
 VIEW_FACTORY["worklog"] = MusicPanelView
+
+async def karaoke_open(interaction):
+    """いまの曲の歌詞をVCサブタイトルに1行ずつ流す（曲ごとにオン・曲が終わると自動オフ）"""
+    if _player.get("karaoke"):   # すでにオン→補正・OFF・自動切替のコントロールを出す
+        k = _player["karaoke"]
+        await interaction.response.send_message(f"🎤 歌詞同期中（ずれ補正：歌詞を {k.get('offset', 0.0):+.0f} 秒）",
+                                                view=KaraokeCtlView(await karaoke_auto_enabled()), ephemeral=True)
+        return
+    it = _player.get("cur_item") or {}
+    title = current_track_title()
+    vc = _player.get("vc")
+    if not title or not vc or not (vc.is_playing() or vc.is_paused()):
+        await interaction.response.send_message("いま歌詞を同期できる曲が流れていません。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    lines, diff, src = [], None, "lrclib"
+    local = await custom_lyrics_find(title)   # メンバー歌詞がLRC形式なら最優先でカラオケ化
+    if local:
+        lines = parse_lrc(local["text"])
+        if lines:
+            src = f"メンバー登録（{local['uname']}）"
+        else:   # 登録歌詞はあるがタイムスタンプが無い→lrclibの（別の曲かもしれない）同期歌詞には戻らない
+            await interaction.followup.send(
+                f"🎤 この曲はメンバー登録の歌詞（{local['uname']}）を使っていますが、タイムスタンプが無いので同期できません。\n"
+                "-# 下の⏺で、曲を聴きながらタイムスタンプを刻めます（📜の全文表示はそのまま使えます）",
+                view=KaraokeMakeView(clean_track_title(title)), ephemeral=True)
+            return
+    if not lines:
+        got = await fetch_synced_lyrics(title, it.get("duration"))
+        if not got:
+            await interaction.followup.send(
+                "🎤 タイムスタンプ付きの歌詞が見つかりませんでした（📜の全文表示なら出るかも）。\n"
+                "-# 下の⏺＝曲を聴きながらボタンを押してタイムスタンプを刻む打ち込みモード。全文歌詞（📝登録かlrclib）があれば使えます",
+                view=KaraokeMakeView(clean_track_title(title)), ephemeral=True)
+            return
+        lines, diff = got
+    _player["karaoke"] = {"lines": lines, "offset": 0.0, "auto": False, "item": _player.get("cur_item")}
+    _player["karaoke"]["task"] = asyncio.create_task(karaoke_task())
+    warn = ""
+    if diff is not None and diff > 3:
+        warn = f"\n⚠️ 歌詞の元音源と動画の長さが {diff:.0f} 秒違います（MVのイントロ等）。ずれたら下のボタンで補正してね"
+    elif diff is None and src == "lrclib":
+        warn = "\n-# 動画の長さと照合できませんでした。ずれたら下のボタンで補正してね"
+    await interaction.followup.send(f"🎤 歌詞の同期表示をはじめました（歌詞: {src}・曲が終わると自動で戻ります）{warn}",
+                                    view=KaraokeCtlView(await karaoke_auto_enabled()), ephemeral=True)
 
 @tasks.loop(minutes=1)
 async def radio_loop():
@@ -6081,7 +6078,7 @@ class CopyTrimSelect(discord.ui.Select):
         left = len(await user_course_rows(uid))
         await interaction.response.edit_message(
             content=f"🗑 {len(removed)}科目を外しました（{('、'.join(removed))[:150]}）。現在 {left} 科目。\n"
-                    f"仕上がりは 🗓 時間割画像で確認、さらに外すなら `/jikanwari remove` で。", view=None)
+                    f"仕上がりは 🖼 時間割画像で確認、さらに外すなら `/jikanwari remove` で。", view=None)
 
 async def do_copy_timetable(interaction, src_uid):
     me = str(interaction.user.id)
@@ -8250,7 +8247,7 @@ class NewTermView(discord.ui.View):
     async def b_slots(self, interaction, button):
         cur = await db.execute("DELETE FROM user_slots WHERE user_id=?", (str(interaction.user.id),))
         await db.commit()
-        await interaction.response.send_message(f"🧩 空きコマ予定を {cur.rowcount} 件消しました。新しい予定は 🧩 から。", ephemeral=True)
+        await interaction.response.send_message(f"🧩 空きコマ予定を {cur.rowcount} 件消しました。新しい予定は #予定🗓 の 🧩 から。", ephemeral=True)
 
     @discord.ui.button(label="🎓 新しい科目を登録", style=discord.ButtonStyle.primary, row=2)
     async def b_add(self, interaction, button):
@@ -8433,7 +8430,7 @@ class YoteiPanelView(discord.ui.View):
     async def time_btn(self, interaction, button):
         await send_time_hub(interaction)
 
-    @discord.ui.button(label="📝 試験日", style=discord.ButtonStyle.secondary, custom_id="sk_exam", row=1)
+    @discord.ui.button(label="✏️ 試験日", style=discord.ButtonStyle.secondary, custom_id="sk_exam", row=1)
     async def exam_btn(self, interaction, button):
         await send_exam_hub(interaction)
 
@@ -8442,21 +8439,35 @@ class YoteiPanelView(discord.ui.View):
         await ensure_user(interaction.user)
         await send_timeline(interaction)
 
-    @discord.ui.button(label="🗓 今月のカレンダー", style=discord.ButtonStyle.secondary, custom_id="sk_cal0", row=2)
-    async def cal0_btn(self, interaction, button):
+    @discord.ui.button(label="🗓 カレンダー", style=discord.ButtonStyle.secondary, custom_id="sk_cal0", row=2)
+    async def cal0_btn(self, interaction, button):   # 来月は開いた画像の 🗓来月 ボタンから
         await ensure_user(interaction.user)
         await send_calendar(interaction, 0)
 
-    @discord.ui.button(label="🗓 来月のカレンダー", style=discord.ButtonStyle.secondary, custom_id="sk_cal1", row=2)
-    async def cal1_btn(self, interaction, button):
+    @discord.ui.button(label="🧩 空きコマ予定", style=discord.ButtonStyle.secondary, custom_id="sk_jw_free", row=2)
+    async def jw_free(self, interaction, button):
         await ensure_user(interaction.user)
-        await send_calendar(interaction, 1)
+        async with db.execute("SELECT slot, label, place FROM user_slots WHERE user_id=? ORDER BY slot", (str(interaction.user.id),)) as c:
+            rows = await c.fetchall()
+        view = discord.ui.View(timeout=600)
+        view.add_item(FreeSlotAddButton())
+        if rows:
+            view.add_item(FreeSlotRemoveSelect(rows))
+        cur = "\n".join(f"・{r['slot']}　**{r['label']}**" + (f"（{r['place']}）" if r["place"] else "") for r in rows[:20])
+        await interaction.response.send_message(
+            "🧩 **空きコマの予定**（バイト・部活など。時間割画像と☀️朝の時間割に出ます・自分にだけ）\n"
+            + (cur if rows else "-# まだ登録がありません"), view=view, ephemeral=True)
 
 VIEW_FACTORY["yotei"] = YoteiPanelView
 
 class KadaiPanelView(discord.ui.View):
+    ORDER = ["sk_kd_add", "sk_kd_list", "sk_kd_teiki",                 # 課題
+             "sk_jw_add", "sk_jw_list", "sk_jw_copy", "sk_jw_img",    # 履修
+             "sk_kesseki", "sk_cnote", "sk_newterm"]                   # その他
+
     def __init__(self):
         super().__init__(timeout=None)
+        self._children.sort(key=lambda i: self.ORDER.index(i.custom_id) if i.custom_id in self.ORDER else 99)
 
     @discord.ui.button(label="🌱 新学期の準備", style=discord.ButtonStyle.secondary, custom_id="sk_newterm", row=2)
     async def newterm_btn(self, interaction, button):
@@ -8488,7 +8499,7 @@ class KadaiPanelView(discord.ui.View):
             "🗒 **科目メモ**：履修者みんなで共有するメモ（教室変更・持ち物・テスト範囲など）。授業がある日の朝の予定にも出ます",
             view=v, ephemeral=True)
 
-    @discord.ui.button(label="🎓 履修科目を登録", style=discord.ButtonStyle.primary, custom_id="sk_jw_add", row=0)
+    @discord.ui.button(label="🎓 履修科目を登録", style=discord.ButtonStyle.primary, custom_id="sk_jw_add", row=1)
     async def jw_add(self, interaction, button):
         await interaction.response.send_modal(CourseSearchModal())
 
@@ -8516,7 +8527,7 @@ class KadaiPanelView(discord.ui.View):
             title=f"📚 {interaction.user.display_name} の履修科目（{len(rows)}）",
             description="\n".join(lines)[:4000], color=discord.Color.gold()), ephemeral=True)
 
-    @discord.ui.button(label="📚 課題一覧", style=discord.ButtonStyle.secondary, custom_id="sk_kd_list", row=1)
+    @discord.ui.button(label="📚 課題一覧", style=discord.ButtonStyle.secondary, custom_id="sk_kd_list", row=0)
     async def kd_list(self, interaction, button):
         emb = await kadai_list_embed(str(interaction.user.id))
         if not emb:
@@ -8525,7 +8536,7 @@ class KadaiPanelView(discord.ui.View):
         view = await kadai_list_view(str(interaction.user.id))
         await interaction.response.send_message(embed=emb, view=view or discord.ui.View(), ephemeral=True)
 
-    @discord.ui.button(label="🗓 時間割画像", style=discord.ButtonStyle.secondary, custom_id="sk_jw_img", row=1)
+    @discord.ui.button(label="🖼 時間割画像", style=discord.ButtonStyle.secondary, custom_id="sk_jw_img", row=1)
     async def jw_img(self, interaction, button):
         await ensure_user(interaction.user)
         await send_timetable(interaction)
@@ -8546,20 +8557,6 @@ class KadaiPanelView(discord.ui.View):
             + "-# 落単ラインは既定4回。`/kesseki set` で科目ごとに変更、間違えたら `/kesseki add kaisu:-1`",
             view=view, ephemeral=True)
 
-    @discord.ui.button(label="🧩 空きコマ予定", style=discord.ButtonStyle.secondary, custom_id="sk_jw_free", row=2)
-    async def jw_free(self, interaction, button):
-        await ensure_user(interaction.user)
-        async with db.execute("SELECT slot, label, place FROM user_slots WHERE user_id=? ORDER BY slot", (str(interaction.user.id),)) as c:
-            rows = await c.fetchall()
-        view = discord.ui.View(timeout=600)
-        view.add_item(FreeSlotAddButton())
-        if rows:
-            view.add_item(FreeSlotRemoveSelect(rows))
-        cur = "\n".join(f"・{r['slot']}　**{r['label']}**" + (f"（{r['place']}）" if r["place"] else "") for r in rows[:20])
-        await interaction.response.send_message(
-            "🧩 **空きコマの予定**（バイト・部活など。時間割画像と☀️朝の時間割に出ます・自分にだけ）\n"
-            + (cur if rows else "-# まだ登録がありません"), view=view, ephemeral=True)
-
     @discord.ui.button(label="🔁 毎週課題", style=discord.ButtonStyle.success, custom_id="sk_kd_teiki", row=0)
     async def kd_teiki(self, interaction, button):
         await ensure_user(interaction.user)
@@ -8579,7 +8576,7 @@ class KadaiPanelView(discord.ui.View):
                + "\n-# 「今週はなし」のときは、その週の課題だけを `/kadai delete` で取り下げればOK（ルールは残って来週また出ます）")
         await interaction.response.send_message(txt, view=view, ephemeral=True)
 
-    @discord.ui.button(label="👥 時間割をコピー", style=discord.ButtonStyle.secondary, custom_id="sk_jw_copy", row=0)
+    @discord.ui.button(label="👥 時間割をコピー", style=discord.ButtonStyle.secondary, custom_id="sk_jw_copy", row=1)
     async def jw_copy(self, interaction, button):
         await ensure_user(interaction.user)
         cands = await timetable_owners(interaction.user.id)
@@ -9139,6 +9136,14 @@ class SetteiView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
+    @discord.ui.button(label="🏃 ラジオ体操の呼び出し ON/OFF", style=discord.ButtonStyle.secondary, custom_id="sk_radio_toggle", row=1)
+    async def radio_toggle(self, interaction, button):   # 毎日押すものではないので #起床🌅 から #設定🔧 へ
+        await toggle_radio_notify(interaction)
+
+    @discord.ui.button(label="⏰ 起床の締切前リマインド ON/OFF", style=discord.ButtonStyle.secondary, custom_id="sk_wake_remind", row=1)
+    async def wake_remind(self, interaction, button):
+        await toggle_wake_remind(interaction)
+
     @discord.ui.button(label="🛠 最低限を設定", style=discord.ButtonStyle.success, custom_id="sk_saitei")
     async def saitei_btn(self, interaction, button):
         await ensure_user(interaction.user)
@@ -9266,7 +9271,7 @@ def tutorial_embeds():
         "`/jikanwari add kamoku:` に科目名を打つと候補が出ます（一度に5つまで）。"
         "同じ科目の誰かが課題を登録すると #課題📚 で通知が届き、期限の3日前・前日・当日朝にリマインドされます。"))
     e2.add_field(name="④ ラジオ体操に参加（任意）", inline=False, value=(
-        f"毎朝 **{RADIO_TIME}** に 🔊作業部屋🖥 で音源が流れます。#起床🌅 の 🏃 ボタンで呼び出しをONにすると、開始時にメンションで起こされます。"))
+        f"毎朝 **{RADIO_TIME}** に 🔊作業部屋🖥 で音源が流れます。#設定🔧 の 🏃 ボタンで呼び出しをONにすると、開始時にメンションで起こされます。"))
     e2.add_field(name="⑤ 自分だけの項目（任意）", inline=False, value=(
         "`/kojin add namae:薬を飲む` のように追加すると、☀️起床の返事と #えらい🌟 の 📝 ボタンで毎日チェックできます。未チェックは判定で叱られます。"))
     e3 = discord.Embed(title="🔁 1日の流れ", color=gold, description=(
@@ -9280,14 +9285,14 @@ def tutorial_embeds():
         "#暮らしのtips📚　レシピ・お得情報・家事ハックの知恵袋（フォーラム。🔖で自分のTIPS帳へ）\n"
         "#自己紹介🙋　📝 自己紹介カード\n"
         "#ロール🏷　リアクションで学部・学年・生活形態のロール\n"
-        "#起床🌅　☀️起きた／🌙おやすみ／🏃ラジオ体操の呼び出しON/OFF\n"
+        "#起床🌅　☀️起きた／🌙おやすみ／😴二度寝／🏭夜勤\n"
         "#ごはん🍚　🍚朝 🍱昼 🍽️夜 🍩間食（写真でも記録）\n"
         "#家事🧹　🍳料理 🧹掃除 🍽️皿洗い ＋ 洗濯5工程\n"
         "#おふろ🛁　🛁お風呂入った／🪥歯磨きした\n"
         "#課題📚　課題の通知とリマインド。✅で完了\n"
         "#叱責👹　毎晩の判定結果。晒される場所\n"
         "#つうしんぼ📮　週の通信簿と月間表彰\n"
-        "#設定🔧　`/saitei` `/kojin` `/oyasumi` の案内\n"
+        "#設定🔧　🛠最低限の設定／🏃ラジオ体操の呼び出し・⏰起床リマインドのON/OFF\n"
         "🔊作業部屋🖥　もくもく作業・音楽・朝のラジオ体操のVC"))
     e5 = discord.Embed(title="⌨️ コマンド早見表", color=gold, description=(
         "**きろく**　各チャンネルのボタンが基本（☀️🌙😴／🍚／🧹／🛁🪥）。`/suimin` 寝落ちの後づけ／`/erai` 今日のがんばり\n"
@@ -10885,16 +10890,26 @@ class FridgeEatSelect(discord.ui.Select):
         await interaction.response.edit_message(
             content="🍽 " + "、".join(f"**{n}**" for n in names) + " を使い切りました。フードロスゼロ、えらい！" + hitokoto_suffix(), view=None)
 
+class FridgeAddButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="➕ 登録する", style=discord.ButtonStyle.primary, row=1)
+
+    async def callback(self, interaction):
+        await interaction.response.send_modal(FridgeAddModal())
+
 async def fridge_show(interaction):
-    """一覧＋「食べた」プルダウン（パネルの🧊ボタンと /reizouko list の共通処理）"""
+    """一覧＋「食べた」プルダウン＋➕登録（パネルの🧊ボタンと /reizouko list の共通処理）"""
     today = day_str(now_jst())
     rows = await fridge_items_of(interaction.user.id)
+    view = discord.ui.View(timeout=300)
     if not rows:
-        await interaction.response.send_message("いま登録されている食品はありません。「🧊 冷蔵庫に登録」ボタンか `/reizouko add` でどうぞ。期限の前日と当日の朝にお知らせします。", ephemeral=True)
+        view.add_item(FridgeAddButton())
+        await interaction.response.send_message("いま登録されている食品はありません。下の ➕ から登録できます。期限の前日と当日の朝にお知らせします。",
+                                                view=view, ephemeral=True)
         return
     lines = [f"・**{r['name']}**　期限 {fridge_due_fmt(r['due_day'])}（{fridge_label(r['due_day'], today)}）" for r in rows]
-    view = discord.ui.View(timeout=300)
     view.add_item(FridgeEatSelect(rows, today))
+    view.add_item(FridgeAddButton())
     await interaction.response.send_message("🧊 **冷蔵庫メモ**\n" + "\n".join(lines) +
                                             "\n\n食べたものは下のプルダウンで消せます（期限3日過ぎは自動で消えます）",
                                             view=view, ephemeral=True)
@@ -11878,7 +11893,7 @@ async def setup_command(interaction):
                 "・**shokuji** 1日の最低食事回数 1〜3（0で解除。間食は数えない）\n"
                 "・**ryouri / souji / sara / sentaku / gomi** 家事を種類ごとに「N日に1回」（例 `ryouri:1 sentaku:3`・0で解除・毎日判定）\n"
                 "・**rajio** 毎朝のラジオ体操に参加する（True/False）\n\n"
-                f"🏃 ラジオ体操は毎朝 **{RADIO_TIME}** に 🔊作業部屋🖥 で自動再生。#起床🌅 の 🏃 ボタンで呼び出し（メンション）のON/OFF。\n"
+                f"🏃 ラジオ体操は毎朝 **{RADIO_TIME}** に 🔊作業部屋🖥 で自動再生。#設定🔧 の 🏃 ボタンで呼び出し（メンション）のON/OFF。\n"
                 "📚 **課題**：`/jikanwari add` で履修科目を登録（科目名で検索・最大5つずつ）→ 気づいた人が `/kadai add` で課題を登録すると、"
                 f"同じ科目の履修者だけに #課題📚 で通知。3日前・前日・当日 {REMIND_HOUR}:00 に未完了の人へリマインド。投稿の ✅ で完了。\n\n"
                 "🔥 **連続達成**：判定で未達ゼロの日が続くと連続日数が伸びる（3・7・14・30日…で祝福）。`/kiroku` で確認。\n"
