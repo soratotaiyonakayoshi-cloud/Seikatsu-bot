@@ -7379,9 +7379,8 @@ async def send_private_hub(interaction):
     await interaction.response.send_message("\n".join(lines), view=PrivateHubView(rows), ephemeral=True)
 
 # ---- ⏱ バイト・部活など「時間つきの予定」：日付×時間で登録 → 月の合計時間（本人だけ・記録は消さない） ----
-TIME_KINDS = [("アルバイト", "💼", "#b8860b"), ("部活・サークル", "🏸", "#3d8f83"),
-              ("習い事・塾", "📖", "#5b7fa6"), ("その他の活動", "⏱", "#8a8378")]
-TIME_EMOJI = {k: e for k, e, _ in TIME_KINDS}
+TIME_KINDS = [("アルバイト", "💼", "#b8860b"), ("部活・サークル", "🏸", "#3d8f83"), ("その他の活動", "⏱", "#8a8378")]
+TIME_EMOJI = {**{k: e for k, e, _ in TIME_KINDS}, "習い事・塾": "📖"}   # 習い事・塾は選択肢から外した（記録済みの分の表示用に残す）
 TIME_COLORS = {k: c for k, _, c in TIME_KINDS}
 
 def parse_time_range(s):
@@ -7442,7 +7441,8 @@ async def month_time_totals(uid, y, m):
     for r in await time_events_between(uid, d1, d2):
         a, b = tot.get(r["kind"], (0, 0))
         tot[r["kind"]] = (a + r["minutes"], b + 1)
-    return {k: tot[k] for k, _, _ in TIME_KINDS if k in tot}
+    order = [k for k, _, _ in TIME_KINDS]
+    return {k: tot[k] for k in sorted(tot, key=lambda k: order.index(k) if k in order else len(order))}
 
 def time_totals_text(tot):
     if not tot:

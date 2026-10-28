@@ -784,6 +784,7 @@ async def main():
     _c = (await B.calendar_data("95", 2026, 11))[3]
     check("時間: カレンダーのマスに 💼17-22", "💼17-22" in _c.get("2026-11-03", []) and "💼17:30-22" in _c.get("2026-11-05", []), True)
     check("時間: 予定パネルに⏱ボタン", any(getattr(i, "custom_id", "") == "sk_time" for i in B.YoteiPanelView().children), True)
+    check("時間: 選べる種類は3つ（習い事・塾は外した）", [o.value for o in B.TimeKindSelect().options], ["アルバイト", "部活・サークル", "その他の活動"])
 
     # 🌸 長期休暇モード
     check("休暇: 日付の読み取り", (B.parse_md("2/1", date(2026, 10, 1)), B.parse_md("2027-03-31", date(2026, 10, 1)), B.parse_md("あ", date(2026, 1, 1))),
