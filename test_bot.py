@@ -612,7 +612,9 @@ async def main():
         grows = await c.fetchall()
     gc_content2, gc_view2 = await B.memo_group_payload(grows, None)
     check("メモ: 全完了で祝い文＋ボタンなし", "ぜんぶやりきった" in gc_content2 and gc_view2 is None, True)
-    check("えらいパネルに📌 2ボタン", {"sk_memo_add", "sk_memo_list"} <= {i.custom_id for i in B.EraiView().children}, True)
+    check("📌は #やること📌 のパネルに（えらいは褒め合い専用）", ({"sk_memo_add", "sk_memo_list", "sk_mycheck"} <= {i.custom_id for i in B.YarukotoView().children},
+          [i.custom_id for i in B.EraiView().children]), (True, ["sk_erai"]))
+    check("#やること📌 のチャンネル定義", (B.CH["yarukoto"][0], B.VIEW_FACTORY.get("yarukoto") is B.YarukotoView), ("やること📌", True))
     check("起床パネルに🏭", any(i.custom_id == "sk_yakin" for i in B.WakeView().children), True)
 
     # 作業部屋🖥
@@ -1151,8 +1153,8 @@ async def main():
 
     # 📝チェックリストの導線（#えらい🌟 だけに置く＋☀️返事の行差し替え）
     _has_chk = lambda V: any(str(getattr(i, "custom_id", "")).startswith("sk_mycheck") for i in V().children)
-    check("📝チェックは #えらい🌟 のパネルだけ",
-          [_has_chk(V) for V in (B.EraiView, B.WakeView, B.MealView, B.ChoreView, B.BathView, B.SetteiView)],
+    check("📝チェックは #やること📌 のパネルだけ",
+          [_has_chk(V) for V in (B.YarukotoView, B.WakeView, B.MealView, B.ChoreView, B.BathView, B.SetteiView)],
           [True, False, False, False, False, False])
     check("行差し替え: 単独リストは丸ごと更新", B.mycheck_replace_line("📝 **今日のチェック**（x）　✅ 0/2", "NEW"), "NEW")
     check("行差し替え: ☀️返事は本文を保持", B.mycheck_replace_line("✅ 6:30 起床\n📅 今日の授業：数学\n📝 **今日のチェック**（x）　✅ 0/2\n-# 💡 豆", "NEW"),

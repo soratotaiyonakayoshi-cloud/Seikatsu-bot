@@ -74,7 +74,8 @@ CH = {
     "wake": ("起床🌅", "☀️ 起きたら・🌙 寝る前に押す。😴 二度寝・🏭 今夜は夜勤 もここから。"),
     "meal": ("ごはん🍚", "🍚 食べたら押す（写真を投げるだけでもOK）。🧊 冷蔵庫で食品の期限メモ。"),
     "chore": ("家事🧹", "やった家事を押す。洗濯は工程ごとに。「n日に1回」の家事は毎晩20時にここでお知らせ。"),
-    "erai": ("えらい🌟", "🌟 今日がんばったことを報告して褒め合う場所（判定なし）。📌 やること宣言・📝 自分の項目のチェックもここから。"),
+    "erai": ("えらい🌟", "🌟 今日がんばったことを報告して褒め合う場所（判定なし）。"),
+    "yarukoto": ("やること📌", "📌 やることを宣言して見守ってもらう場所。📝 自分の項目のチェックもここから。"),
     "worklog": ("作業ログ🖥", f"🔊{WORK_VC_NAME} に入ると作業時間を計測。🎶 音楽の操作はこのパネルから。"),
     "animal": ("どうぶつ🐄", "癒しの写真・動画をどうぞ（判定なし）。月末に 🐾 いやしアルバムができます。"),
     "bath": ("おふろ🛁", "🛁 お風呂に入ったら押す。🪥 歯磨きも（1日に何回でも）。"),
@@ -7213,7 +7214,7 @@ async def univ_hub_message(user):
         v.add_item(UnivDelSelect(mine))
     return "\n".join(lines), v
 
-# ---- 🙋 じぶんの予定：🔒自分だけ（だれにも見えない）／📣みんなに見せる（#えらい🌟で宣言＋3日前と当日に声かけ） ----
+# ---- 🙋 じぶんの予定：🔒自分だけ（だれにも見えない）／📣みんなに見せる（#やること📌で宣言＋3日前と当日に声かけ） ----
 #      どちらも終わった翌日に自動で消える
 PRIVATE_KIND = "自分だけ"
 SHARED_KIND = "みんなに宣言"
@@ -7237,22 +7238,22 @@ async def private_cleanup(today):
     return cur.rowcount
 
 async def announce_shared_event(member, r, today):
-    """📣みんなに見せる予定を #えらい🌟 で宣言"""
-    ch = await get_ch("erai")
+    """📣みんなに見せる予定を #やること📌 で宣言"""
+    ch = await get_ch("yarukoto")
     if ch:
         await ch.send(f"📣 **{member.display_name}** の宣言：{univ_line(r, today)}\n-# みんなで見守ろう。3日前と当日の朝にBotが声をかけます",
                       silent=True)
-        await bump_panel("erai")
+        await bump_panel("yarukoto")
 
 async def shared_event_remind(now=None):
-    """📣みんなに見せる予定：3日前と開始日の朝に #えらい🌟 で本人にメンション（各1回）"""
+    """📣みんなに見せる予定：3日前と開始日の朝に #やること📌 で本人にメンション（各1回）"""
     now = now or now_jst()
     today = day_str(now)
     t = now.date()
     async with db.execute("SELECT * FROM private_events WHERE shared=1 AND start_day BETWEEN ? AND ?",
                           (today, (t + timedelta(days=3)).isoformat())) as c:
         rows = await c.fetchall()
-    ch = await get_ch("erai")
+    ch = await get_ch("yarukoto")
     if not ch:
         return 0
     n = 0
@@ -7271,14 +7272,14 @@ async def shared_event_remind(now=None):
         await ch.send(f"{head} <@{r['user_id']}>：{univ_line(ev, today)}" + ("　がんばれ！🔥" if stage == "day" else "　準備はどう？"))
         n += 1
     if n:
-        await bump_panel("erai")
+        await bump_panel("yarukoto")
     return n
 
 class PrivateEventModal(discord.ui.Modal):
     def __init__(self, shared=False):
         super().__init__(title="📣 みんなに見せる予定" if shared else "🔒 自分だけの予定")
         self.shared = shared
-        self.t_in = discord.ui.TextInput(label="なにをする？" + ("（#えらい🌟 で宣言されます）" if shared else "（自分にしか見えません）"),
+        self.t_in = discord.ui.TextInput(label="なにをする？" + ("（#やること📌 で宣言されます）" if shared else "（自分にしか見えません）"),
                                          max_length=40, placeholder="例：TOEIC本番／レポート仕上げ" if shared else "例：バイト面接／帰省／歯医者")
         self.d_in = discord.ui.TextInput(label="日付（1日だけ 11/3 ／期間 12/28-1/3）", max_length=30,
                                          placeholder="年はふつう自動。指定するなら 2027/1/10 や 27/1/10")
@@ -7300,7 +7301,7 @@ class PrivateEventModal(discord.ui.Modal):
         await db.commit()
         r = {"title": title, "kind": SHARED_KIND if self.shared else PRIVATE_KIND, "start_day": s.isoformat(), "end_day": e.isoformat()}
         if self.shared:
-            head = f"📣 宣言しました：**{title}**\n-# #えらい🌟 に流れました。3日前と当日の朝にメンションで声をかけます"
+            head = f"📣 宣言しました：**{title}**\n-# #やること📌 に流れました。3日前と当日の朝にメンションで声をかけます"
         else:
             head = f"🔒 登録しました：**{title}**\n-# 自分にしか見えません。朝の予定・カレンダーに出て、終わった翌日に自動で消えます"
         await interaction.response.send_message(f"{head}\n📅 **{fmt_full_span(s, e)}**",
@@ -7331,7 +7332,7 @@ class PrivateToggleSelect(discord.ui.Select):
         ev = {"title": r["title"], "kind": SHARED_KIND if new else PRIVATE_KIND, "start_day": r["start_day"], "end_day": r["end_day"]}
         today = day_str(now_jst())
         if new:
-            await interaction.response.edit_message(content=f"📣 みんなに見せる予定にしました：{univ_line(ev, today)}（#えらい🌟 で宣言）", view=None)
+            await interaction.response.edit_message(content=f"📣 みんなに見せる予定にしました：{univ_line(ev, today)}（#やること📌 で宣言）", view=None)
             await announce_shared_event(interaction.user, ev, today)
         else:
             await interaction.response.edit_message(content=f"🔒 自分だけの予定に戻しました：{univ_line(ev, today)}（今後の声かけはしません）",
@@ -7368,7 +7369,7 @@ async def send_private_hub(interaction):
     today = day_str(now_jst())
     rows = await private_events_between(interaction.user.id, today, "9999-12-31")
     lines = ["🙋 **じぶんの予定**",
-             "-# 🔒自分だけ＝だれにも見えない／📣みんなに見せる＝#えらい🌟 で宣言して、3日前と当日の朝に声かけ（緊張感がほしい予定に）",
+             "-# 🔒自分だけ＝だれにも見えない／📣みんなに見せる＝#やること📌 で宣言して、3日前と当日の朝に声かけ（緊張感がほしい予定に）",
              "-# どちらも終わった翌日に自動で消えます"]
     lines += [f"・{univ_line(r, today)}" for r in rows[:20]] or ["-# まだありません"]
     await interaction.response.send_message("\n".join(lines), view=PrivateHubView(rows), ephemeral=True)
@@ -9151,7 +9152,7 @@ async def kojin_add(interaction, namae: str):
         return
     await db.execute("INSERT INTO custom_items(user_id,name,created_at) VALUES(?,?,?)", (str(user.id), nm, int(now_jst().timestamp())))
     await db.commit()
-    await interaction.response.send_message(f"📝 「{nm}」を追加しました（{len(items) + 1}件）。☀️起床の返事にチェックリストが出ます。#えらい🌟 の 📝 ボタンからも開けるよ。", ephemeral=True)
+    await interaction.response.send_message(f"📝 「{nm}」を追加しました（{len(items) + 1}件）。☀️起床の返事にチェックリストが出ます。#やること📌 の 📝 ボタンからも開けるよ。", ephemeral=True)
 
 @kojin.command(name="remove", description="自分の項目を削除")
 @app_commands.describe(koumoku="削除する項目")
@@ -9247,7 +9248,7 @@ def tutorial_embeds():
     e2.add_field(name="④ ラジオ体操に参加（任意）", inline=False, value=(
         f"毎朝 **{RADIO_TIME}** に 🔊作業部屋🖥 で音源が流れます。#設定🔧 の 🏃 ボタンで呼び出しをONにすると、開始時にメンションで起こされます。"))
     e2.add_field(name="⑤ 自分だけの項目（任意）", inline=False, value=(
-        "`/kojin add namae:薬を飲む` のように追加すると、☀️起床の返事と #えらい🌟 の 📝 ボタンで毎日チェックできます。未チェックは判定で叱られます。"))
+        "`/kojin add namae:薬を飲む` のように追加すると、☀️起床の返事と #やること📌 の 📝 ボタンで毎日チェックできます。未チェックは判定で叱られます。"))
     e3 = discord.Embed(title="🔁 1日の流れ", color=gold, description=(
         f"**朝**　☀️ 起きた → {RADIO_TIME} ラジオ体操（🔊作業部屋🖥）\n"
         "**日中**　🍚 食べたら押す（#ごはん🍚 に写真を投げるだけでもOK）／🧹 家事をしたら押す／📚 課題に気づいたら `/kadai add`\n"
@@ -9264,6 +9265,9 @@ def tutorial_embeds():
         "#家事🧹　🍳料理 🧹掃除 🍽️皿洗い ＋ 洗濯5工程\n"
         "#おふろ🛁　🛁お風呂入った／🪥歯磨きした\n"
         "#課題📚　課題の通知とリマインド。✅で完了\n"
+        "#予定🗓　今日・明日・今後の予定／大学の予定・じぶんの予定・バイト・試験日・カレンダー\n"
+        "#えらい🌟　今日がんばったことを報告して褒め合う\n"
+        "#やること📌　📌やること宣言／📝自分の項目のチェック\n"
         "#叱責👹　毎晩の判定結果。晒される場所\n"
         "#つうしんぼ📮　週の通信簿と月間表彰\n"
         "#設定🔧　🛠最低限の設定／🏃ラジオ体操の呼び出し・⏰起床リマインドのON/OFF\n"
@@ -9939,21 +9943,28 @@ class EraiView(discord.ui.View):
     async def erai(self, interaction, button):
         await interaction.response.send_modal(EraiModal())
 
-    @discord.ui.button(label="📝 今日のチェック（自分の項目）", style=discord.ButtonStyle.secondary, custom_id="sk_mycheck")
-    async def mycheck(self, interaction, button):   # 個人項目のチェックは #えらい🌟 だけに置く
-        await ensure_user(interaction.user)
-        await send_mycheck(interaction)
+VIEW_FACTORY["erai"] = EraiView
 
-    @discord.ui.button(label="📌 やること宣言", style=discord.ButtonStyle.secondary, custom_id="sk_memo_add", row=1)
+class YarukotoView(discord.ui.View):
+    """#やること📌：やること宣言（見守ってもらう）と自分の項目のチェック。#えらい🌟 は褒め合い専用に"""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="📌 やること宣言", style=discord.ButtonStyle.primary, custom_id="sk_memo_add")
     async def memo_add(self, interaction, button):
         await interaction.response.send_modal(MemoModal())
 
-    @discord.ui.button(label="📌 やること一覧", style=discord.ButtonStyle.secondary, custom_id="sk_memo_list", row=1)
+    @discord.ui.button(label="📋 やること一覧", style=discord.ButtonStyle.secondary, custom_id="sk_memo_list")
     async def memo_list(self, interaction, button):
         await ensure_user(interaction.user)
         await send_memo_list(interaction)
 
-VIEW_FACTORY["erai"] = EraiView
+    @discord.ui.button(label="📝 今日のチェック（自分の項目）", style=discord.ButtonStyle.secondary, custom_id="sk_mycheck", row=1)
+    async def mycheck(self, interaction, button):   # 個人項目のチェックはここだけに置く
+        await ensure_user(interaction.user)
+        await send_mycheck(interaction)
+
+VIEW_FACTORY["yarukoto"] = YarukotoView
 
 @bot.tree.command(name="erai", description="今日がんばったことを報告する（最低限とは別・判定なし・褒め合い用）")
 async def erai_command(interaction):
@@ -9962,7 +9973,7 @@ async def erai_command(interaction):
 # ------------------------------------------------------------
 #  やることメモ📌
 #  「さっき何したかったんだっけ」対策の今日限りメモ。日時指定なし。
-#  宣言が #えらい🌟 に流れて緊張を生み、✅でみんなに見える形で完了。
+#  宣言が #やること📌 に流れて緊張を生み、✅でみんなに見える形で完了。
 #  23時の判定後に引き継ぎ確認、放置すれば翌朝自動で消える（叱責はしない）。
 # ------------------------------------------------------------
 async def open_memos(uid, day):
@@ -10002,17 +10013,27 @@ def parse_memo_deadline(spec, now):
         return None
     return s.isoformat(), (e.isoformat() if e > today or s > today else None)
 
-async def memo_delete_public_by_id(msg_id):
+async def memo_fetch(msg_id):
+    """やること関連のメッセージを探す（#やること📌 → 移す前の分は #えらい🌟）。無ければ None"""
     if not msg_id:
-        return
-    ch = await get_ch("erai")
-    if not ch:
-        return
-    try:
-        m = await ch.fetch_message(int(msg_id))
-        await m.delete()
-    except Exception:
-        pass
+        return None
+    for key in ("yarukoto", "erai"):
+        ch = await get_ch(key)
+        if not ch:
+            continue
+        try:
+            return await ch.fetch_message(int(msg_id))
+        except Exception:
+            continue
+    return None
+
+async def memo_delete_public_by_id(msg_id):
+    m = await memo_fetch(msg_id)
+    if m:
+        try:
+            await m.delete()
+        except Exception:
+            pass
 
 def memo_done_text(name, text, guild):
     return f"✅ **{name}**：~~{text}~~　やりきった！{erai_emoji(guild)}"
@@ -10042,17 +10063,16 @@ async def refresh_memo_message(msg_id):
     """宣言メッセージをDBの今の状態で描き直す。メモが1件も残っていなければメッセージごと消す"""
     if not msg_id:
         return
-    ch = await get_ch("erai")
-    if not ch:
-        return
     async with db.execute("SELECT * FROM memos WHERE msg_id=? ORDER BY id", (str(msg_id),)) as c:
         rows = await c.fetchall()
     if not rows:
         await memo_delete_public_by_id(msg_id)
         return
-    content, view = await memo_group_payload(rows, ch.guild)
+    m = await memo_fetch(msg_id)
+    if not m:
+        return
+    content, view = await memo_group_payload(rows, m.guild)
     try:
-        m = await ch.fetch_message(int(msg_id))
         await m.edit(content=content, view=view)
     except Exception:
         pass
@@ -10120,7 +10140,7 @@ class MemoModal(discord.ui.Modal, title="📌 やることメモ"):
                                    (str(user.id), t, start_day, int(now.timestamp()), until_day))
             ids.append(cur.lastrowid)
         await db.commit()
-        ch = await get_ch("erai")
+        ch = await get_ch("yarukoto")
         if ch:
             q = ",".join("?" * len(ids))
             async with db.execute(f"SELECT * FROM memos WHERE id IN ({q}) ORDER BY id", ids) as c:
@@ -10138,7 +10158,7 @@ class MemoModal(discord.ui.Modal, title="📌 やることメモ"):
             tail = "終わったら ✅ を。23時に残っていたら引き継ぐか聞きます（放置すると翌朝ひっそり消えます）"
         await interaction.response.send_message(f"📌 {head}を宣言しました。{tail}" + hitokoto_suffix(), ephemeral=True)
         if ch:
-            await bump_panel("erai")
+            await bump_panel("yarukoto")
 
 class MemoListButton(discord.ui.Button):
     def __init__(self, row_):
@@ -10224,7 +10244,7 @@ class MemoDropButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_me
 
 async def memo_carry_prompts(day):
     """判定後、未完了メモがある人へ引き継ぎ確認（1人1日1回・手動判定でも二重投稿しない）"""
-    ch = await get_ch("erai")
+    ch = await get_ch("yarukoto")
     if not ch:
         return
     async with db.execute("SELECT DISTINCT user_id FROM memos WHERE day=?", (day,)) as c:
@@ -10246,7 +10266,7 @@ async def memo_carry_prompts(day):
         await db.commit()
         posted = True
     if posted:
-        await bump_panel("erai")
+        await bump_panel("yarukoto")
 
 async def memo_cleanup(today):
     """引き継がれなかった昨日以前のメモを自動削除し、宣言・確認メッセージも畳む。古い夜勤記録も掃除。
@@ -10263,7 +10283,6 @@ async def memo_cleanup(today):
             by_msg.setdefault(r["msg_id"], []).append(r)
     await db.execute("DELETE FROM memos WHERE day<?", (today,))
     await db.commit()
-    ch = await get_ch("erai")
     for mid, group in by_msg.items():
         async with db.execute("SELECT 1 FROM memos WHERE msg_id=? LIMIT 1", (mid,)) as c:
             survivors = await c.fetchone()
@@ -10271,9 +10290,8 @@ async def memo_cleanup(today):
         open_rows = [r for r in group if not r["done"]]
         if survivors:
             await refresh_memo_message(mid)   # 引き継がれた分が残っている→描き直し（流れた行は消える）
-        elif done_rows and open_rows and ch:
+        elif done_rows and open_rows and (m := await memo_fetch(mid)):
             try:                              # 一部だけ✅→✅だけ残す形に固定
-                m = await ch.fetch_message(int(mid))
                 u = await get_user(group[0]["user_id"])
                 nm = u["name"] if u else "？"
                 await m.edit(content=f"✅ **{nm}** のやること\n" + "\n".join(f"✅ ~~{r['text']}~~" for r in done_rows), view=None)
@@ -10282,13 +10300,11 @@ async def memo_cleanup(today):
         elif not done_rows:
             await memo_delete_public_by_id(mid)   # 何も達成されず流れた→宣言ごと消す
         # 全部✅のメッセージはそのまま歴史として残す
-    ch = await get_ch("erai")
     async with db.execute("SELECT * FROM memo_prompts WHERE day<?", (today,)) as c:
         prows = await c.fetchall()
     for p in prows:
-        if ch and p["msg_id"]:
+        if m := await memo_fetch(p["msg_id"]):
             try:
-                m = await ch.fetch_message(int(p["msg_id"]))
                 await m.edit(content="🌫 引き継がれなかったやることは、朝の風で消えました。", view=None)
             except Exception:
                 pass
@@ -11944,7 +11960,7 @@ async def setup_command(interaction):
                 "🔥 **連続達成**：判定で未達ゼロの日が続くと連続日数が伸びる（3・7・14・30日…で祝福）。`/kiroku` で確認。\n"
                 "📮 **通信簿**：毎週日曜の判定後に #つうしんぼ📮 へ達成率ランキング・各賞・起床/睡眠グラフ。月末は月間表彰（MVP）。\n"
                 "🛌 **お休み申告**：`/oyasumi riyuu:帰省 hi:10/15-10/17` → その日は判定されず、連続達成も途切れない。\n"
-                "📝 **自分だけの項目**：`/kojin add namae:薬を飲む` → ☀️起床の返事に出るチェックリストか、#えらい🌟 の 📝 ボタンで毎日チェック。未チェックは判定対象。\n"
+                "📝 **自分だけの項目**：`/kojin add namae:薬を飲む` → ☀️起床の返事に出るチェックリストか、#やること📌 の 📝 ボタンで毎日チェック。未チェックは判定対象。\n"
                 "🛌 **休日設定**：`/saitei kyujitsu:2` で土日は起床締切を2時間遅らせる。\n"
                 f"{'🎮 達成した日は みんなで暗記！！ で 🎫メダル（連続ボーナスあり）。🌅生活ランキングにも反映。' if GAKUSHU_SECRET else ''}\n"
                 f"毎晩 **{JUDGE_HOUR}:00** に判定し、守れなかった人は #叱責👹 に名指しで晒されます。\n"
