@@ -1148,9 +1148,11 @@ async def main():
     rows9 = await B.events_on(90, bad_day, "sleep")
     check("過去日の睡眠上書き: 1本に置き換わる", (len(rows9), float(rows9[0]["note"])), (1, 7.0))
 
-    # 📝チェックリストの導線（各パネルのショートカット＋☀️返事の行差し替え）
-    check("📝ショートカットが4パネル全部に", all(any(str(getattr(i, "custom_id", "")).startswith("sk_mycheck_") for i in V().children)
-                                             for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView)), True)
+    # 📝チェックリストの導線（#えらい🌟 だけに置く＋☀️返事の行差し替え）
+    _has_chk = lambda V: any(str(getattr(i, "custom_id", "")).startswith("sk_mycheck") for i in V().children)
+    check("📝チェックは #えらい🌟 のパネルだけ",
+          [_has_chk(V) for V in (B.EraiView, B.WakeView, B.MealView, B.ChoreView, B.BathView, B.SetteiView)],
+          [True, False, False, False, False, False])
     check("行差し替え: 単独リストは丸ごと更新", B.mycheck_replace_line("📝 **今日のチェック**（x）　✅ 0/2", "NEW"), "NEW")
     check("行差し替え: ☀️返事は本文を保持", B.mycheck_replace_line("✅ 6:30 起床\n📅 今日の授業：数学\n📝 **今日のチェック**（x）　✅ 0/2\n-# 💡 豆", "NEW"),
           "✅ 6:30 起床\n📅 今日の授業：数学\nNEW\n-# 💡 豆")

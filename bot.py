@@ -108,7 +108,7 @@ CH = {
               "⏱ **バイト・部活**＝タップで記録して月の合計時間を確認（よく使うシフトは「いつもの」に保存）。\n"
               "📊 **タイムライン**で数か月先までの予定を一望、🗓 **カレンダー**で月ごとに（バイト・部活・試験・実験も入ります。課題は #課題📚 で）。画像は自分にだけ表示。"),
     "settei": ("設定🔧", "🛠 ボタンから項目を選んで自分の最低限を設定（`/saitei` でまとめて設定も可）。毎週の定休日（曜日）もここで。\n"
-               "`/kojin add` で自分だけの項目を追加し、📝ボタンで毎日チェック。`/oyasumi` で単発のお休み申告。"),
+               "`/kojin add` で自分だけの項目を追加し、#えらい🌟 の📝ボタンで毎日チェック。`/oyasumi` で単発のお休み申告。"),
 }
 CHORES = [  # (key, ラベル, 絵文字, 行)
     ("cook", "料理", "🍳", 0), ("clean", "掃除", "🧹", 0), ("dish", "皿洗い", "🍽️", 0), ("trash", "ごみ捨て", "🗑", 0),
@@ -685,15 +685,6 @@ async def post_log(key, text):
         await ch.send(text)
         await bump_panel(key)
 
-class MyCheckShortcut(discord.ui.Button):
-    """どの報告パネルからでも、自分の個人項目チェックリストを1タップで開く小ボタン"""
-    def __init__(self, key, row=None):
-        super().__init__(label="📝 チェック", style=discord.ButtonStyle.secondary, custom_id=f"sk_mycheck_{key}", row=row)
-
-    async def callback(self, interaction):
-        await ensure_user(interaction.user)
-        await send_mycheck(interaction)
-
 # ------------------------------------------------------------
 #  起床・睡眠
 # ------------------------------------------------------------
@@ -748,7 +739,6 @@ class SleepModal(discord.ui.Modal, title="🌙 昨夜は何時に寝た？"):
 class WakeView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-        self.add_item(MyCheckShortcut("wake", row=1))
 
     @discord.ui.button(label="☀️ 起きた", style=discord.ButtonStyle.success, custom_id="sk_wake")
     async def wake(self, interaction, button):
@@ -901,7 +891,6 @@ class MealView(discord.ui.View):
         super().__init__(timeout=None)
         for sub, emoji in MEALS:
             self.add_item(MealButton(sub, emoji))
-        self.add_item(MyCheckShortcut("meal", row=1))
 
     @discord.ui.button(label="🧊 冷蔵庫に登録", style=discord.ButtonStyle.primary, custom_id="sk_fridge_add", row=1)
     async def fridge_add(self, interaction, button):
@@ -951,7 +940,6 @@ class ChoreView(discord.ui.View):
         super().__init__(timeout=None)
         for key, label, emoji, row in CHORES:
             self.add_item(ChoreButton(key, label, emoji, row))
-        self.add_item(MyCheckShortcut("chore", row=3))
 
 # ------------------------------------------------------------
 #  入浴
@@ -959,7 +947,6 @@ class ChoreView(discord.ui.View):
 class BathView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-        self.add_item(MyCheckShortcut("bath"))
 
     @discord.ui.button(label="🛁 お風呂入った", style=discord.ButtonStyle.primary, custom_id="sk_bath")
     async def bath(self, interaction, button):
@@ -9152,11 +9139,6 @@ class SetteiView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="📝 今日のチェック（自分の項目）", style=discord.ButtonStyle.primary, custom_id="sk_mycheck")
-    async def mycheck(self, interaction, button):
-        await ensure_user(interaction.user)
-        await send_mycheck(interaction)
-
     @discord.ui.button(label="🛠 最低限を設定", style=discord.ButtonStyle.success, custom_id="sk_saitei")
     async def saitei_btn(self, interaction, button):
         await ensure_user(interaction.user)
@@ -9190,7 +9172,7 @@ async def kojin_add(interaction, namae: str):
         return
     await db.execute("INSERT INTO custom_items(user_id,name,created_at) VALUES(?,?,?)", (str(user.id), nm, int(now_jst().timestamp())))
     await db.commit()
-    await interaction.response.send_message(f"📝 「{nm}」を追加しました（{len(items) + 1}件）。☀️起床の返事にチェックリストが出ます。どのパネルの 📝 ボタンからも開けるよ。", ephemeral=True)
+    await interaction.response.send_message(f"📝 「{nm}」を追加しました（{len(items) + 1}件）。☀️起床の返事にチェックリストが出ます。#えらい🌟 の 📝 ボタンからも開けるよ。", ephemeral=True)
 
 @kojin.command(name="remove", description="自分の項目を削除")
 @app_commands.describe(koumoku="削除する項目")
@@ -9286,7 +9268,7 @@ def tutorial_embeds():
     e2.add_field(name="④ ラジオ体操に参加（任意）", inline=False, value=(
         f"毎朝 **{RADIO_TIME}** に 🔊作業部屋🖥 で音源が流れます。#起床🌅 の 🏃 ボタンで呼び出しをONにすると、開始時にメンションで起こされます。"))
     e2.add_field(name="⑤ 自分だけの項目（任意）", inline=False, value=(
-        "`/kojin add namae:薬を飲む` のように追加すると、☀️起床の返事と各パネルの 📝 ボタンで毎日チェックできます。未チェックは判定で叱られます。"))
+        "`/kojin add namae:薬を飲む` のように追加すると、☀️起床の返事と #えらい🌟 の 📝 ボタンで毎日チェックできます。未チェックは判定で叱られます。"))
     e3 = discord.Embed(title="🔁 1日の流れ", color=gold, description=(
         f"**朝**　☀️ 起きた → {RADIO_TIME} ラジオ体操（🔊作業部屋🖥）\n"
         "**日中**　🍚 食べたら押す（#ごはん🍚 に写真を投げるだけでもOK）／🧹 家事をしたら押す／📚 課題に気づいたら `/kadai add`\n"
@@ -9305,7 +9287,7 @@ def tutorial_embeds():
         "#課題📚　課題の通知とリマインド。✅で完了\n"
         "#叱責👹　毎晩の判定結果。晒される場所\n"
         "#つうしんぼ📮　週の通信簿と月間表彰\n"
-        "#設定🔧　`/saitei` `/kojin` `/oyasumi` の案内。📝 今日のチェック\n"
+        "#設定🔧　`/saitei` `/kojin` `/oyasumi` の案内\n"
         "🔊作業部屋🖥　もくもく作業・音楽・朝のラジオ体操のVC"))
     e5 = discord.Embed(title="⌨️ コマンド早見表", color=gold, description=(
         "**きろく**　各チャンネルのボタンが基本（☀️🌙😴／🍚／🧹／🛁🪥）。`/suimin` 寝落ちの後づけ／`/erai` 今日のがんばり\n"
@@ -9906,6 +9888,11 @@ class EraiView(discord.ui.View):
     @discord.ui.button(label="🌟 今日がんばったことを報告", style=discord.ButtonStyle.primary, custom_id="sk_erai")
     async def erai(self, interaction, button):
         await interaction.response.send_modal(EraiModal())
+
+    @discord.ui.button(label="📝 今日のチェック（自分の項目）", style=discord.ButtonStyle.secondary, custom_id="sk_mycheck")
+    async def mycheck(self, interaction, button):   # 個人項目のチェックは #えらい🌟 だけに置く
+        await ensure_user(interaction.user)
+        await send_mycheck(interaction)
 
     @discord.ui.button(label="📌 やること宣言", style=discord.ButtonStyle.secondary, custom_id="sk_memo_add", row=1)
     async def memo_add(self, interaction, button):
@@ -11897,7 +11884,7 @@ async def setup_command(interaction):
                 "🔥 **連続達成**：判定で未達ゼロの日が続くと連続日数が伸びる（3・7・14・30日…で祝福）。`/kiroku` で確認。\n"
                 "📮 **通信簿**：毎週日曜の判定後に #つうしんぼ📮 へ達成率ランキング・各賞・起床/睡眠グラフ。月末は月間表彰（MVP）。\n"
                 "🛌 **お休み申告**：`/oyasumi riyuu:帰省 hi:10/15-10/17` → その日は判定されず、連続達成も途切れない。\n"
-                "📝 **自分だけの項目**：`/kojin add namae:薬を飲む` → ☀️起床の返事に出るチェックリストか、各パネルの 📝 ボタンで毎日チェック。未チェックは判定対象。\n"
+                "📝 **自分だけの項目**：`/kojin add namae:薬を飲む` → ☀️起床の返事に出るチェックリストか、#えらい🌟 の 📝 ボタンで毎日チェック。未チェックは判定対象。\n"
                 "🛌 **休日設定**：`/saitei kyujitsu:2` で土日は起床締切を2時間遅らせる。\n"
                 f"{'🎮 達成した日は みんなで暗記！！ で 🎫メダル（連続ボーナスあり）。🌅生活ランキングにも反映。' if GAKUSHU_SECRET else ''}\n"
                 f"毎晩 **{JUDGE_HOUR}:00** に判定し、守れなかった人は #叱責👹 に名指しで晒されます。\n"
