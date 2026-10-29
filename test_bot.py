@@ -566,16 +566,43 @@ async def main():
                                      {"day": "2026-09-02", "wake": 460, "sleep": 5.0, "ach": 0, "nizone": 1}], "テスト")
     check("個人グラフ生成", chart is not None and len(chart.getvalue()) > 10000, True)
 
-    # 📖 勉強（みんなで暗記！！連携）
+    # 📖 勉強（自己申告の記録が中心。みんなで暗記！！で解いた日も達成）
     b1 = M(61, "勉強する人"); await B.ensure_user(b1)
     b2 = M(62, "サボる人"); await B.ensure_user(b2)
     await B.db.execute("UPDATE users SET benkyou_min=1 WHERE id IN ('61','62')"); await B.db.commit()
-    check("勉強: 連携未設定なら判定しない（冤罪防止）", await B.build_misses(await B.get_user(62), day, d1, d2, False), [])
+    check("勉強: 連携なしでも記録がなければ未達", await B.build_misses(await B.get_user(62), day, d1, d2, False), ["📖 勉強 未達（今日は記録なし）"])
+    await B.db.execute("INSERT INTO study_logs(user_id,day,subject,minutes) VALUES('62',?,'英語',20)", (day,)); await B.db.commit()
+    check("勉強: 1（前の設定）は記録1つでOK", await B.build_misses(await B.get_user(62), day, d1, d2, False), [])
+    await B.db.execute("UPDATE users SET benkyou_min=30 WHERE id='62'"); await B.db.commit()
+    check("勉強: 分数に足りなければ未達（20/30分）", await B.build_misses(await B.get_user(62), day, d1, d2, False), ["📖 勉強 20/30分"])
+    await B.db.execute("INSERT INTO study_logs(user_id,day,subject,minutes) VALUES('62',?,'数学',15)", (day,)); await B.db.commit()
+    check("勉強: 合計で足りれば達成（35/30分）", await B.build_misses(await B.get_user(62), day, d1, d2, False), [])
+    await B.db.execute("DELETE FROM study_logs WHERE user_id='62'"); await B.db.execute("UPDATE users SET benkyou_min=1 WHERE id='62'"); await B.db.commit()
+    # 📖 勉強記録の部品
+    check("勉強記録: 時間の表示", [B.study_dur(m) for m in (45, 60, 90, 125)], ["45分", "1時間", "1時間30分", "2時間5分"])
+    sm = M(65, "記録係"); await B.ensure_user(sm)
+    await B.db.execute("INSERT INTO study_subjects(user_id,name) VALUES('65','英検準1級 単語帳')")
+    r1 = await B.record_study(sm, "TOEIC 公式問題集", 30, "Part5", day)
+    await B.record_study(sm, "基本情報", 45, None, day)
+    opts = await B.study_subject_options(65)
+    check("勉強記録: 教材の候補は最近使った順→自分の教材", opts[:3], ["基本情報", "TOEIC 公式問題集", "英検準1級 単語帳"])
+    check("勉強記録: 合計分数", await B.study_minutes_on(65, day), 75)
+    _ts = int(datetime(2026, 8, 20, 21, 0, tzinfo=JST).timestamp())
+    _r = lambda d: {"subject": "TOEIC 公式問題集", "minutes": 30, "note": "Part5", "day": d, "ts": _ts}
+    check("勉強記録: 投稿の1行", B.study_post_content("記録係", _r("2026-08-20")).split("\n"), ["📖 **記録係**　TOEIC 公式問題集　**30分**", "> Part5"])
+    check("勉強記録: 昨日の分は記録した日と比べる（日がたっても変わらない）", B.study_post_content("記録係", _r("2026-08-19")).split("\n")[0].endswith("（昨日の分）"), True)
+    v = B.StudyEntryView(65, opts)
+    check("勉強記録: 入力画面（前回の教材が選ばれた状態・3段）", (v.subject, sorted({c.row for c in v.children})), ("基本情報", [0, 1, 2]))
+    check("勉強記録: パネルの3ボタン", [c.custom_id for c in B.StudyPanelView().children], ["sk_study_add", "sk_study_today", "sk_study_subj"])
+    check("勉強記録: チャンネル定義", (B.CH["benkyou"][0], B.VIEW_FACTORY.get("benkyou") is B.StudyPanelView), ("勉強記録📖", True))
+    check("勉強の設定: 分で入れる", (await B.apply_saitei_item(65, "benkyou", "30分"), (await B.get_user(65))["benkyou_min"]), (None, 30))
+    check("勉強の設定: はい＝記録1つでOK（1）", (await B.apply_saitei_item(65, "benkyou", "はい"), (await B.get_user(65))["benkyou_min"]), (None, 1))
+    check("勉強の設定: 表示", B.settings_text(await B.get_user(65)).split("\n")[6], "📖 勉強 毎日（何か1つ記録）（みんなで暗記！！で1問解いた日もOK）")
     B.GAKUSHU_SECRET = "test"
     B._study_cache.update(day=day, ids={"61"}, ts=int(B.now_jst().timestamp()))
-    check("勉強: 解いた人は未達なし", await B.build_misses(await B.get_user(61), day, d1, d2, False), [])
-    check("勉強: 解いてない人は未達", await B.build_misses(await B.get_user(62), day, d1, d2, False),
-          ["📖 勉強 未達（みんなで暗記！！で今日1問も解いてない）"])
+    check("勉強: みんなで暗記！！で解いた人は記録なしでも達成", await B.build_misses(await B.get_user(61), day, d1, d2, False), [])
+    check("勉強: 解いてない・記録なしなら未達", await B.build_misses(await B.get_user(62), day, d1, d2, False),
+          ["📖 勉強 未達（今日は記録なし）"])
     B._study_cache.update(day=day, ids=None, ts=int(B.now_jst().timestamp()))
     check("勉強: API不通の日は判定しない", await B.build_misses(await B.get_user(62), day, d1, d2, False), [])
     B.GAKUSHU_SECRET = ""

@@ -75,6 +75,7 @@ CH = {
     "meal": ("ごはん🍚", "🍚 食べたら押す（写真を投げるだけでもOK）。🧊 冷蔵庫で食品の期限メモ。"),
     "chore": ("家事🧹", "やった家事を押す。洗濯は工程ごとに。「n日に1回」の家事は毎朝6:30にここでお知らせ。"),
     "erai": ("えらい🌟", "🌟 今日がんばったことを報告して褒め合う場所（判定なし）。"),
+    "benkyou": ("勉強記録📖", "✏️ 勉強したら記録（教材×時間）。仲間の記録には 👏 を。"),
     "yarukoto": ("やること📌", "📌 やることを宣言して見守ってもらう場所。📝 自分の項目のチェックもここから。"),
     "worklog": ("作業ログ🖥", f"🔊{WORK_VC_NAME} に入ると作業時間を計測。🎶 音楽の操作はこのパネルから。"),
     "animal": ("どうぶつ🐄", "癒しの写真・動画をどうぞ（判定なし）。月末に 🐾 いやしアルバムができます。"),
@@ -228,6 +229,14 @@ CREATE TABLE IF NOT EXISTS private_events(
 );
 CREATE TABLE IF NOT EXISTS private_event_reminded(event_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(event_id, stage));
 CREATE TABLE IF NOT EXISTS univ_event_reminded(event_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(event_id, stage));
+CREATE TABLE IF NOT EXISTS study_logs(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, day TEXT NOT NULL, subject TEXT NOT NULL,
+  minutes INTEGER NOT NULL, note TEXT, source TEXT NOT NULL DEFAULT 'manual', msg_id TEXT, ts INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_study_logs_user_day ON study_logs(user_id, day);
+CREATE TABLE IF NOT EXISTS study_subjects(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, name TEXT NOT NULL, ts INTEGER,
+  UNIQUE(user_id, name));
+CREATE TABLE IF NOT EXISTS study_praise(log_id INTEGER NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY(log_id, user_id));
 CREATE TABLE IF NOT EXISTS time_events(
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, kind TEXT NOT NULL, day TEXT NOT NULL,
   start_hm TEXT NOT NULL, end_hm TEXT NOT NULL, minutes INTEGER NOT NULL, note TEXT, ts INTEGER
@@ -415,10 +424,13 @@ async def build_misses(u, day, d1, d2, is_sunday):
         n = len(await events_on(uid, day, "teeth"))
         if n < u["teeth_min"]:
             misses.append(f"🪥 歯磨き {n}/{u['teeth_min']} 回")
-    if u["benkyou_min"] and u["benkyou_set_day"] != day:
-        studied = await fetch_studied(day)   # None=連携未設定/API不通→この項目は判定しない
-        if studied is not None and str(uid) not in studied:
-            misses.append("📖 勉強 未達（みんなで暗記！！で今日1問も解いてない）")
+    if u["benkyou_min"] and u["benkyou_set_day"] != day:   # 📖 記録した時間（分）で判定。みんなで暗記！！で1問解いた日も達成
+        need = u["benkyou_min"]
+        got = await study_minutes_on(uid, day)
+        if got < need:
+            studied = await fetch_studied(day)
+            if not (GAKUSHU_SECRET and studied is None) and not (studied and str(uid) in studied):   # 連携先が不通の日は判定しない（冤罪防止）
+                misses.append(f"📖 勉強 {got}/{need}分" if need > 1 else "📖 勉強 未達（今日は記録なし）")
     # 家事の種類ごとの頻度（/kaji）
     for st in await kaji_status(u, day):
         if st["due"]:
@@ -539,7 +551,9 @@ def settings_text(u):
     parts.append(f"🪥 歯磨き 1日{u['teeth_min']}回" if u["teeth_min"] else "🪥 歯磨き —")
     parts.append("🏃 ラジオ体操 毎日" if u["radio_daily"] else "🏃 ラジオ体操 —")
     parts.append(f"🍚 食事 1日{u['meals_min']}回" if u["meals_min"] else "🍚 食事 —")
-    parts.append("📖 勉強 毎日（みんなで暗記！！で1問以上）" if u["benkyou_min"] else "📖 勉強 —")
+    bm = u["benkyou_min"] or 0
+    parts.append(("📖 勉強 毎日（何か1つ記録）" if bm == 1 else f"📖 勉強 1日{bm}分以上") + "（みんなで暗記！！で1問解いた日もOK）"
+                 if bm else "📖 勉強 —")
     kaji = [f"{e} {lb} {kaji_interval_text(u[col])}" for col, lb, e, _ in KAJI_CATS if u[col]]
     parts.append(("🧹 家事 " + "／".join(kaji)) if kaji else "🧹 家事 —")
     return "\n".join(parts)
@@ -568,7 +582,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(MusicPanelView())
         self.add_view(YoteiPanelView())
         self.add_view(IntroView())
-        self.add_dynamic_items(DoneButton, SkipButton, MealFixButton, PraiseButton, GroupPraiseButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
+        self.add_dynamic_items(DoneButton, SkipButton, MealFixButton, PraiseButton, GroupPraiseButton, StudyPraiseButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
                                MemoDoneButton, MemoCarryButton, MemoDropButton, WorkNoteButton, GoodsResetButton)
         self.add_view(EraiView())
         registered = {type(v) for v in self.persistent_views}
@@ -9022,7 +9036,7 @@ SAITEI_ITEMS = [
     ("hamigaki", "🪥 歯磨き（回/日）",         "例 2（0で解除）"),
     ("shokuji",  "🍚 食事（回/日）",           "例 2（0で解除）"),
     ("rajio",    "🏃 ラジオ体操",             "はい／いいえ"),
-    ("benkyou",  "📖 勉強（みんなで暗記1日1問）", "はい／いいえ"),
+    ("benkyou",  "📖 勉強（分/日）",           "例 30（1なら記録1つでOK・0で解除）"),
     ("ryouri",   "🍳 料理（n日に1回）",        "例 1（0で解除）"),
     ("souji",    "🧹 掃除（n日に1回）",        "例 3（0で解除）"),
     ("sara",     "🍽️ 皿洗い（n日に1回）",      "例 1（0で解除）"),
@@ -9070,16 +9084,23 @@ async def apply_saitei_item(uid, key, raw, now=None):
             await db.execute("INSERT OR IGNORE INTO off_days(day,user_id,reason) VALUES(?,?,'定休')", (today, uid))
         else:   # 逆に今日が定休でなくなったら、0時に実体化済みの「定休」だけ取り消す（/oyasumiの手動申告は残す）
             await db.execute("DELETE FROM off_days WHERE day=? AND user_id=? AND reason='定休'", (today, uid))
-    elif key in ("nyuyoku", "rajio", "benkyou"):
+    elif key in ("nyuyoku", "rajio"):
         if t in _YES:
             v = 1
         elif t in _NO:
             v = 0
         else:
             return "⚠️ 「はい」か「いいえ」で入れてください"
-        col, sd = {"nyuyoku": ("bath_daily", "bath_set_day"), "rajio": ("radio_daily", "radio_set_day"),
-                   "benkyou": ("benkyou_min", "benkyou_set_day")}[key]
+        col, sd = {"nyuyoku": ("bath_daily", "bath_set_day"), "rajio": ("radio_daily", "radio_set_day")}[key]
         await db.execute(f"UPDATE users SET {col}=?, {sd}=? WHERE id=?", (v, today, uid))
+    elif key == "benkyou":   # 1日の勉強時間（分）。1＝何か1つ記録すればOK（前の「みんなで暗記で1問」設定の引き継ぎ）
+        v = 1 if t in _YES else 0 if t in _NO else None
+        if v is None:
+            try:
+                v = int(float(t.replace("分", "") or "0"))
+            except ValueError:
+                return "⚠️ 分で入れてください（例 30。0で解除）"
+        await db.execute("UPDATE users SET benkyou_min=?, benkyou_set_day=? WHERE id=?", (max(0, min(600, v)), today, uid))
     elif key in ("hamigaki", "shokuji"):
         try:
             v = int(float(t or "0"))
@@ -9131,6 +9152,347 @@ class SaiteiSelect(discord.ui.Select):
         _k, label, hint = next(x for x in SAITEI_ITEMS if x[0] == key)
         await interaction.response.send_modal(SaiteiModal(key, label, hint))
 
+# ============================================================
+#  📖 勉強記録（自己申告：教材×時間×メモ。#勉強記録📖 に1行で流して👏）
+#  最低限の📖は記録した分数で判定し、みんなで暗記！！で1問解いた日も達成にする（連携はそのまま残す）
+# ============================================================
+STUDY_MINUTES = [10, 15, 20, 30, 40, 45, 50, 60, 75, 90, 105, 120, 150, 180, 210, 240, 300]
+STUDY_NEW = "__new__"
+
+def study_dur(m):
+    m = int(m or 0)
+    return f"{m // 60}時間{m % 60}分" if m >= 60 and m % 60 else (f"{m // 60}時間" if m >= 60 else f"{m}分")
+
+async def study_minutes_on(uid, day):
+    async with db.execute("SELECT COALESCE(SUM(minutes),0) AS m FROM study_logs WHERE user_id=? AND day=?", (str(uid), day)) as c:
+        return (await c.fetchone())["m"]
+
+async def study_logs_on(uid, day):
+    async with db.execute("SELECT * FROM study_logs WHERE user_id=? AND day=? ORDER BY id", (str(uid), day)) as c:
+        return list(await c.fetchall())
+
+async def study_subject_options(uid):
+    """教材の候補：最近使った順 → 自分で足した教材 → 履修科目（重複なし・24件まで）"""
+    uid = str(uid)
+    out = []
+
+    def add(n):
+        n = (n or "").strip()
+        if n and n not in out:
+            out.append(n)
+    async with db.execute("SELECT subject, MAX(id) AS last FROM study_logs WHERE user_id=? GROUP BY subject ORDER BY last DESC LIMIT 8",
+                          (uid,)) as c:
+        for r in await c.fetchall():
+            add(r["subject"])
+    async with db.execute("SELECT name FROM study_subjects WHERE user_id=? ORDER BY id", (uid,)) as c:
+        for r in await c.fetchall():
+            add(r["name"])
+    for r in await user_course_rows(uid):
+        add(r["name"])
+    return out[:24]
+
+def study_post_content(name, r, praisers=(), names=()):
+    made = day_str(datetime.fromtimestamp(r["ts"], JST)) if r["ts"] else r["day"]   # 記録した日（👏で描き直しても変わらない）
+    line = f"📖 **{name}**　{r['subject']}　**{study_dur(r['minutes'])}**" + ("（昨日の分）" if r["day"] < made else "")
+    if r["note"]:
+        line += f"\n> {r['note']}"
+    if praisers:
+        line += f"\n👏 × {len(praisers)}　{'、'.join(names)}"
+    return line
+
+async def _study_praisers(log_id):
+    async with db.execute("SELECT user_id FROM study_praise WHERE log_id=?", (log_id,)) as c:
+        return [r["user_id"] for r in await c.fetchall()]
+
+class StudyPraiseButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_spraise:(?P<lid>\d+)"):
+    def __init__(self, log_id, count=0):
+        super().__init__(discord.ui.Button(label=f"👏（{count}）", style=discord.ButtonStyle.secondary, custom_id=f"sk_spraise:{log_id}"))
+        self.log_id = int(log_id)
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["lid"])
+
+    async def callback(self, interaction):
+        uid = str(interaction.user.id)
+        async with db.execute("SELECT * FROM study_logs WHERE id=?", (self.log_id,)) as c:
+            r = await c.fetchone()
+        if not r:
+            await interaction.response.send_message("この記録は見つかりませんでした（取り消された？）", ephemeral=True)
+            return
+        if r["user_id"] == uid:
+            await interaction.response.send_message("自分の記録には押せません。よくがんばりました 📖", ephemeral=True)
+            return
+        await ensure_user(interaction.user)
+        if uid in await _study_praisers(self.log_id):
+            await db.execute("DELETE FROM study_praise WHERE log_id=? AND user_id=?", (self.log_id, uid))
+        else:
+            await db.execute("INSERT OR IGNORE INTO study_praise(log_id,user_id) VALUES(?,?)", (self.log_id, uid))
+        await db.commit()
+        praisers = await _study_praisers(self.log_id)
+        author = await get_user(r["user_id"])
+        view = discord.ui.View(timeout=None)
+        view.add_item(StudyPraiseButton(self.log_id, len(praisers)))
+        await interaction.response.edit_message(
+            content=study_post_content((author["name"] if author else "？"), r, praisers, await _praiser_names(praisers)), view=view)
+
+async def record_study(member, subject, minutes, note, day, source="manual"):
+    """記録して #勉強記録📖 に1行で流す。記録の行を返す"""
+    uid = str(member.id)
+    cur = await db.execute("INSERT INTO study_logs(user_id,day,subject,minutes,note,source,ts) VALUES(?,?,?,?,?,?,?)",
+                           (uid, day, subject[:40], int(minutes), (note or None), source, int(now_jst().timestamp())))
+    lid = cur.lastrowid
+    await db.commit()
+    async with db.execute("SELECT * FROM study_logs WHERE id=?", (lid,)) as c:
+        r = await c.fetchone()
+    ch = await get_ch("benkyou")
+    if ch:
+        try:
+            view = discord.ui.View(timeout=None)
+            view.add_item(StudyPraiseButton(lid, 0))
+            msg = await ch.send(study_post_content(member.display_name, r), view=view, silent=True)
+            await db.execute("UPDATE study_logs SET msg_id=? WHERE id=?", (str(msg.id), lid))
+            await db.commit()
+            await bump_panel("benkyou")
+        except Exception as e:
+            print(f"勉強記録の投稿エラー: {e!r}", flush=True)
+    return r
+
+async def study_goal_note(uid, day):
+    """「今日の合計 ○分（最低限 30分 達成！）」の1行"""
+    u = await get_user(uid)
+    got = await study_minutes_on(uid, day)
+    need = (u["benkyou_min"] or 0) if u else 0
+    tail = ""
+    if need:
+        tail = "　🎉 最低限達成！" if got >= need else f"　（最低限まであと {study_dur(need - got)}）" if need > 1 else ""
+    return f"今日の合計 **{study_dur(got)}**{tail}"
+
+class _StudySubjectSelect(discord.ui.Select):
+    def __init__(self, view_):
+        opts = [discord.SelectOption(label=s[:100], value=s[:100], emoji="📘", default=s == view_.subject) for s in view_.subjects]
+        opts.append(discord.SelectOption(label="一覧にない教材を入れる", value=STUDY_NEW, emoji="✏️"))
+        super().__init__(placeholder="📘 教材・科目をえらぶ", options=opts, row=0)
+
+    async def callback(self, interaction):
+        if self.values[0] == STUDY_NEW:
+            await interaction.response.send_modal(_StudyNewSubjectModal(self.view))
+            return
+        self.view.subject = self.values[0]
+        await self.view.refresh(interaction)
+
+class _StudyMinSelect(discord.ui.Select):
+    def __init__(self, view_):
+        mins = sorted(set(STUDY_MINUTES) | ({view_.minutes} if view_.minutes else set()))
+        opts = [discord.SelectOption(label=study_dur(m), value=str(m), default=m == view_.minutes) for m in mins][:25]
+        super().__init__(placeholder="⏳ 勉強した時間（📝 から1分単位でも入れられます）", options=opts, row=1)
+
+    async def callback(self, interaction):
+        self.view.minutes = int(self.values[0])
+        await self.view.refresh(interaction)
+
+class _StudyNewSubjectModal(discord.ui.Modal, title="✏️ 教材を入れる"):
+    n_in = discord.ui.TextInput(label="教材・科目の名前（例 英検準1級 単語帳）", max_length=40)
+
+    def __init__(self, view_):
+        super().__init__()
+        self.v = view_
+
+    async def on_submit(self, interaction):
+        nm = str(self.n_in.value).strip()
+        await db.execute("INSERT OR IGNORE INTO study_subjects(user_id,name,ts) VALUES(?,?,?)",
+                         (self.v.uid, nm, int(now_jst().timestamp())))   # 次からは一覧に出る
+        await db.commit()
+        if nm not in self.v.subjects:
+            self.v.subjects = ([nm] + self.v.subjects)[:24]
+        self.v.subject = nm
+        await self.v.refresh(interaction)
+
+class _StudyNoteModal(discord.ui.Modal, title="📝 メモ・時間"):
+    m_in = discord.ui.TextInput(label="時間（分）※プルダウンにない時間のとき", required=False, max_length=4, placeholder="例 25")
+    n_in = discord.ui.TextInput(label="メモ（どこまでやった・感想など。空欄OK）", style=discord.TextStyle.paragraph,
+                                required=False, max_length=120)
+
+    def __init__(self, view_):
+        super().__init__()
+        self.v = view_
+        self.n_in.default = view_.note or None
+
+    async def on_submit(self, interaction):
+        t = unicodedata.normalize("NFKC", str(self.m_in.value)).replace("分", "").strip()
+        if t:
+            if not t.isdigit() or not 1 <= int(t) <= 720:
+                await interaction.response.send_message("⚠️ 時間は1〜720の数字（分）で入れてください。", ephemeral=True)
+                return
+            self.v.minutes = int(t)
+        self.v.note = str(self.n_in.value).strip()[:120] or None
+        await self.v.refresh(interaction)
+
+class StudyEntryView(discord.ui.View):
+    """✏️ 勉強を記録：教材 → 時間（→ メモ）→ ✅。前回の教材が先頭に来るので2回目からはほぼ2タップ"""
+
+    def __init__(self, uid, subjects):
+        super().__init__(timeout=1800)
+        self.uid, self.subjects = str(uid), subjects
+        self.subject = subjects[0] if subjects else None
+        self.minutes, self.note, self.yesterday = None, None, False
+        self._build()
+
+    def _build(self):
+        self.clear_items()
+        self.add_item(_StudySubjectSelect(self))
+        self.add_item(_StudyMinSelect(self))
+        for label, style, cb in (("📅 昨日の分にする" if not self.yesterday else "📅 今日の分にもどす", discord.ButtonStyle.secondary, self._toggle_day),
+                                 ("📝 メモ・時間", discord.ButtonStyle.secondary, self._memo),
+                                 ("✅ 記録する", discord.ButtonStyle.success, self._commit)):
+            b = discord.ui.Button(label=label, style=style, row=2)
+            b.callback = cb
+            self.add_item(b)
+
+    def day(self):
+        return day_str(now_jst() - timedelta(days=1 if self.yesterday else 0))
+
+    def summary(self):
+        when = "昨日" if self.yesterday else "今日"
+        return (f"📖 **勉強を記録**（{when}・{md(self.day())}）\n"
+                f"📘 {self.subject or '（教材をえらんでね）'}　⏳ {study_dur(self.minutes) if self.minutes else '（時間をえらんでね）'}"
+                + (f"\n📝 {self.note}" if self.note else "")
+                + "\n-# 一覧にない教材は ✏️ から。入れた教材は次から一覧に出ます")
+
+    async def refresh(self, interaction):
+        self._build()
+        await interaction.response.edit_message(content=self.summary(), view=self)
+
+    async def _toggle_day(self, interaction):
+        self.yesterday = not self.yesterday
+        await self.refresh(interaction)
+
+    async def _memo(self, interaction):
+        await interaction.response.send_modal(_StudyNoteModal(self))
+
+    async def _commit(self, interaction):
+        if not self.subject or not self.minutes:
+            miss = "・".join(x for x, ok in (("教材", self.subject), ("時間", self.minutes)) if not ok)
+            await interaction.response.send_message(f"⚠️ まだ選んでいないものがあります：{miss}", ephemeral=True)
+            return
+        day = self.day()
+        await record_study(interaction.user, self.subject, self.minutes, self.note, day)
+        await interaction.response.edit_message(
+            content=f"✅ 📖 **{self.subject}** {study_dur(self.minutes)} を記録しました（{md(day)}）\n{await study_goal_note(self.uid, day)}"
+                    + hitokoto_suffix(), view=None)
+
+async def open_study_entry(interaction):
+    await ensure_user(interaction.user)
+    v = StudyEntryView(interaction.user.id, await study_subject_options(interaction.user.id))
+    await interaction.response.send_message(v.summary(), view=v, ephemeral=True)
+
+class StudyDelSelect(discord.ui.Select):
+    def __init__(self, rows):
+        opts = [discord.SelectOption(label=f"{r['subject']} {study_dur(r['minutes'])}"[:100], value=str(r["id"]),
+                                     description=(r["note"] or "")[:100] or None) for r in rows[:25]]
+        super().__init__(placeholder="🗑 取り消す記録をえらぶ", options=opts)
+
+    async def callback(self, interaction):
+        lid = int(self.values[0])
+        async with db.execute("SELECT * FROM study_logs WHERE id=? AND user_id=?", (lid, str(interaction.user.id))) as c:
+            r = await c.fetchone()
+        if not r:
+            await interaction.response.edit_message(content="その記録は見つかりませんでした。", view=None)
+            return
+        await db.execute("DELETE FROM study_logs WHERE id=?", (lid,))
+        await db.execute("DELETE FROM study_praise WHERE log_id=?", (lid,))
+        await db.commit()
+        ch = await get_ch("benkyou")
+        if ch and r["msg_id"]:
+            try:
+                await (await ch.fetch_message(int(r["msg_id"]))).delete()
+            except Exception:
+                pass
+        await interaction.response.edit_message(content=f"🗑 「{r['subject']} {study_dur(r['minutes'])}」を取り消しました。", view=None)
+
+async def send_study_today(interaction):
+    """📋 今日の記録（一覧・合計・今週・みんなで暗記！！・取り消し）"""
+    await ensure_user(interaction.user)
+    await interaction.response.defer(ephemeral=True)
+    uid = str(interaction.user.id)
+    now = now_jst()
+    day = day_str(now)
+    rows = await study_logs_on(uid, day)
+    d1, _d2 = week_range(now)
+    async with db.execute("SELECT COALESCE(SUM(minutes),0) AS m FROM study_logs WHERE user_id=? AND day BETWEEN ? AND ?", (uid, d1, day)) as c:
+        week = (await c.fetchone())["m"]
+    lines = [f"📋 **今日の勉強**（{md(day)}）"]
+    lines += [f"・{r['subject']}　{study_dur(r['minutes'])}" + (f"　…{r['note']}" if r["note"] else "") for r in rows] or ["-# まだ記録がありません"]
+    if GAKUSHU_SECRET:
+        studied = await fetch_studied(day)
+        if studied is not None:
+            lines.append("🎮 みんなで暗記！！：" + ("今日解いた ✅" if uid in studied else "まだ"))
+    lines.append(await study_goal_note(uid, day))
+    lines.append(f"-# 今週の合計 {study_dur(week)}")
+    view = discord.ui.View(timeout=600)
+    if rows:
+        view.add_item(StudyDelSelect(rows))
+    await interaction.followup.send("\n".join(lines), view=view, ephemeral=True)
+
+class StudySubjectDelSelect(discord.ui.Select):
+    def __init__(self, rows):
+        super().__init__(placeholder="🗑 外す教材をえらぶ（記録は消えません）",
+                         options=[discord.SelectOption(label=r["name"][:100], value=str(r["id"])) for r in rows[:25]])
+
+    async def callback(self, interaction):
+        await db.execute("DELETE FROM study_subjects WHERE id=? AND user_id=?", (int(self.values[0]), str(interaction.user.id)))
+        await db.commit()
+        await interaction.response.edit_message(content="🗑 教材を外しました（これまでの記録はそのまま残ります）。", view=None)
+
+class _StudySubjectAddModal(discord.ui.Modal, title="📚 教材を足す"):
+    n_in = discord.ui.TextInput(label="教材・科目（1行に1つ・まとめてOK）", style=discord.TextStyle.paragraph, max_length=400,
+                                placeholder="例：\n英検準1級 単語帳\nTOEIC 公式問題集\n基本情報技術者")
+
+    async def on_submit(self, interaction):
+        names = [x.strip()[:40] for x in str(self.n_in.value).splitlines() if x.strip()]
+        for nm in names:
+            await db.execute("INSERT OR IGNORE INTO study_subjects(user_id,name,ts) VALUES(?,?,?)",
+                             (str(interaction.user.id), nm, int(now_jst().timestamp())))
+        await db.commit()
+        await interaction.response.send_message("📚 足しました：" + "、".join(names), ephemeral=True)
+
+async def send_study_subjects(interaction):
+    await ensure_user(interaction.user)
+    async with db.execute("SELECT * FROM study_subjects WHERE user_id=? ORDER BY id", (str(interaction.user.id),)) as c:
+        rows = list(await c.fetchall())
+    view = discord.ui.View(timeout=600)
+    b = discord.ui.Button(label="➕ 教材を足す", style=discord.ButtonStyle.primary)
+
+    async def _add(i):
+        await i.response.send_modal(_StudySubjectAddModal())
+    b.callback = _add
+    view.add_item(b)
+    if rows:
+        view.add_item(StudySubjectDelSelect(rows))
+    await interaction.response.send_message(
+        "📚 **自分の教材**（記録するときの一覧に出ます。履修科目は足さなくても出ます）\n"
+        + ("\n".join(f"・{r['name']}" for r in rows) if rows else "-# まだありません。英検・資格の本など、授業以外の勉強を足しておくと速い"),
+        view=view, ephemeral=True)
+
+class StudyPanelView(discord.ui.View):
+    """#勉強記録📖 のパネル"""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="✏️ 勉強を記録", style=discord.ButtonStyle.success, custom_id="sk_study_add")
+    async def add_btn(self, interaction, button):
+        await open_study_entry(interaction)
+
+    @discord.ui.button(label="📋 今日の記録", style=discord.ButtonStyle.secondary, custom_id="sk_study_today")
+    async def today_btn(self, interaction, button):
+        await send_study_today(interaction)
+
+    @discord.ui.button(label="📚 教材", style=discord.ButtonStyle.secondary, custom_id="sk_study_subj")
+    async def subj_btn(self, interaction, button):
+        await send_study_subjects(interaction)
+
+VIEW_FACTORY["benkyou"] = StudyPanelView
+
 # ---- 📊 みんなの最低限（設定の一覧表を1枚の画像に。押した人にだけ表示） ----
 SAITEI_COLS = ([("☀", "起床"), ("😴", "睡眠"), ("🛁", "入浴"), ("🪥", "歯磨き"), ("🍚", "食事"), ("🏃", "体操"), ("📖", "勉強")]
                + [(e.replace("\ufe0f", ""), lb) for _c, lb, e, _s in KAJI_CATS]   # 家事の列は KAJI_CATS の順（saitei_cells と揃える）
@@ -9149,7 +9511,7 @@ def saitei_cells(u, n_custom=0):
         (f"{u['teeth_min']}回", None) if u["teeth_min"] else no,
         (f"{u['meals_min']}回", None) if u["meals_min"] else no,
         yes if u["radio_daily"] else no,
-        yes if u["benkyou_min"] else no,
+        (("記録" if u["benkyou_min"] == 1 else f"{u['benkyou_min']}分"), None) if u["benkyou_min"] else no,
     ]
     for col, _lb, _e, _subs in KAJI_CATS:
         n = u[col] or 0
@@ -9400,6 +9762,7 @@ def tutorial_embeds():
         "#予定🗓　今日・明日・今後の予定／大学の予定・じぶんの予定・バイト・試験日・カレンダー\n"
         "#えらい🌟　今日がんばったことを報告して褒め合う\n"
         "#やること📌　📌やること宣言／📝自分の項目のチェック\n"
+        "#勉強記録📖　✏️勉強の記録（教材×時間）。最低限の📖はここの時間で判定\n"
         "#叱責👹　毎晩の判定結果。晒される場所\n"
         "#つうしんぼ📮　週の通信簿と月間表彰\n"
         "#設定🔧　🛠最低限の設定／🏃ラジオ体操の呼び出し・⏰起床リマインドのON/OFF\n"
@@ -12118,12 +12481,12 @@ async def nakama_of(uid, wake_deadline):
                        nyuyoku="毎日入浴する", shokuji="1日の最低食事回数 1〜3（0で解除）",
                        rajio="毎朝のラジオ体操に参加する", kyujitsu="土日は起床締切を何時間遅らせるか 例 2（0で解除）",
                        hamigaki="1日の最低歯磨き回数 例 2（0で解除）",
-                       benkyou="毎日みんなで暗記！！で勉強する（1問でも解けばOK。Falseで解除）",
+                       benkyou="1日の勉強時間(分) 例 30（1なら記録1つでOK・みんなで暗記で1問解いた日も達成・0で解除）",
                        ryouri="料理：何日に1回 例 1=毎日（0で解除）", souji="掃除：何日に1回 例 7", sara="皿洗い：何日に1回 例 1",
                        sentaku="洗濯：何日に1回 例 3（5工程のどれかでOK）", gomi="ごみ捨て：何日に1回 例 3")
 async def saitei_command(interaction, kishou: str = None, suimin: float = None, nyuyoku: bool = None,
                          shokuji: int = None, rajio: bool = None, kyujitsu: float = None, hamigaki: int = None,
-                         benkyou: bool = None,
+                         benkyou: int = None,
                          ryouri: int = None, souji: int = None, sara: int = None, sentaku: int = None, gomi: int = None):
     user = interaction.user
     await ensure_user(user)
@@ -12148,7 +12511,7 @@ async def saitei_command(interaction, kishou: str = None, suimin: float = None, 
     if kyujitsu is not None:
         await db.execute("UPDATE users SET holiday_shift=?, wake_set_day=? WHERE id=?", (int(max(0.0, min(12.0, kyujitsu)) * 60), today, str(user.id)))
     if benkyou is not None:
-        await db.execute("UPDATE users SET benkyou_min=?, benkyou_set_day=? WHERE id=?", (1 if benkyou else 0, today, str(user.id)))
+        await db.execute("UPDATE users SET benkyou_min=?, benkyou_set_day=? WHERE id=?", (max(0, min(600, benkyou)), today, str(user.id)))
     if shokuji is not None:
         await db.execute("UPDATE users SET meals_min=?, meals_set_day=? WHERE id=?", (min(3, shokuji) if shokuji > 0 else None, today, str(user.id)))
     kaji_changed = False
