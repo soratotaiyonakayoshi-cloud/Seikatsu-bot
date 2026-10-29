@@ -593,7 +593,37 @@ async def main():
     check("勉強記録: 昨日の分は記録した日と比べる（日がたっても変わらない）", B.study_post_content("記録係", _r("2026-08-19")).split("\n")[0].endswith("（昨日の分）"), True)
     v = B.StudyEntryView(65, opts)
     check("勉強記録: 入力画面（前回の教材が選ばれた状態・3段）", (v.subject, sorted({c.row for c in v.children})), ("基本情報", [0, 1, 2]))
-    check("勉強記録: パネルの3ボタン", [c.custom_id for c in B.StudyPanelView().children], ["sk_study_add", "sk_study_today", "sk_study_subj"])
+    check("勉強記録: パネル（1段目＝記録・タイマー／2段目＝今日・グラフ・教材）", [(c.custom_id, c.row) for c in B.StudyPanelView().children],
+          [("sk_study_add", None), ("sk_study_timer", None), ("sk_study_today", 1), ("sk_study_chart", 1), ("sk_study_subj", 1)])
+    # ⏱ タイマーの止め忘れ：5時間こえたら1回だけ声かけ
+    _now = B.now_jst()
+    await B.db.execute("INSERT OR REPLACE INTO study_timers(user_id,subject,start_ts,warned) VALUES('65','英語',?,0)", (int(_now.timestamp()) - 301 * 60,))
+    await B.db.execute("INSERT OR REPLACE INTO study_timers(user_id,subject,start_ts,warned) VALUES('66','数学',?,0)", (int(_now.timestamp()) - 30 * 60,))
+    await B.db.commit()
+    check("勉強タイマー: 5時間こえた人だけ声かけ・2回目はなし", (await B.study_timer_warn(_now), await B.study_timer_warn(_now)), (1, 0))
+    await B.db.execute("DELETE FROM study_timers"); await B.db.commit()
+    # 🖥 作業部屋→📖：0時をまたいで分かれたセッションも合計・二重記録しない
+    _t0 = int(datetime(2026, 8, 20, 23, 0, tzinfo=JST).timestamp())
+    _mid = int(datetime(2026, 8, 21, 0, 0, tzinfo=JST).timestamp())
+    cur = await B.db.execute("INSERT INTO work_sessions(user_id,start_ts,end_ts,day) VALUES('65',?,?,'2026-08-20')", (_t0, _mid))
+    _sid = cur.lastrowid
+    await B.db.execute("INSERT INTO work_sessions(user_id,start_ts,end_ts,day) VALUES('65',?,?,'2026-08-21')", (_mid, _mid + 1800))
+    await B.db.commit()
+    _ws = await (await B.db.execute("SELECT * FROM work_sessions WHERE id=?", (_sid,))).fetchone()
+    check("作業→勉強: 0時をまたいでも合計（90分）", await B.work_session_total(_ws) // 60, 90)
+    check("作業→勉強: まだ記録していない", await B.work_study_done(_sid), False)
+    await B.record_study(sm, "基本情報", 90, None, "2026-08-20", source=f"workvc:{_sid}")
+    check("作業→勉強: 記録したら二重に記録しない", await B.work_study_done(_sid), True)
+    _ev = B.StudyEntryView(65, opts, minutes=90, fixed_day="2026-08-20", work_sid=_sid)
+    check("作業→勉強: 入力画面は日付固定（昨日ボタンなし）・時間入り", (_ev.day(), _ev.minutes, any("昨日" in (getattr(c, "label", "") or "") for c in _ev.children)),
+          ("2026-08-20", 90, False))
+    # 📊 グラフ・/watashi・通信簿
+    _d7, _pd, _tot = await B.study_chart_data(65, day)
+    check("勉強グラフ: 7日ぶん・教材は多い順", (len(_d7), _d7[-1], _tot[0][0]), (7, day, "基本情報"))
+    check("勉強グラフ: PNG生成", B.render_study_chart("記録係", day, _d7, _pd, _tot).read(4), b"\x89PNG")
+    check("勉強グラフ: 記録なしでもPNG", B.render_study_chart("記録係", day, _d7, {}, []).read(4), b"\x89PNG")
+    _ps = await B.personal_stats(65, day, day)
+    check("/watashi: 勉強の合計と教材別", (_ps["study_min"], _ps["study_subj"][0]), (75, ("基本情報", 45)))
     check("勉強記録: チャンネル定義", (B.CH["benkyou"][0], B.VIEW_FACTORY.get("benkyou") is B.StudyPanelView), ("勉強記録📖", True))
     check("勉強の設定: 分で入れる", (await B.apply_saitei_item(65, "benkyou", "30分"), (await B.get_user(65))["benkyou_min"]), (None, 30))
     check("勉強の設定: はい＝記録1つでOK（1）", (await B.apply_saitei_item(65, "benkyou", "はい"), (await B.get_user(65))["benkyou_min"]), (None, 1))

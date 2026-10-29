@@ -237,6 +237,7 @@ CREATE INDEX IF NOT EXISTS idx_study_logs_user_day ON study_logs(user_id, day);
 CREATE TABLE IF NOT EXISTS study_subjects(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, name TEXT NOT NULL, ts INTEGER,
   UNIQUE(user_id, name));
 CREATE TABLE IF NOT EXISTS study_praise(log_id INTEGER NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY(log_id, user_id));
+CREATE TABLE IF NOT EXISTS study_timers(user_id TEXT PRIMARY KEY, subject TEXT NOT NULL, start_ts INTEGER NOT NULL, warned INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS time_events(
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, kind TEXT NOT NULL, day TEXT NOT NULL,
   start_hm TEXT NOT NULL, end_hm TEXT NOT NULL, minutes INTEGER NOT NULL, note TEXT, ts INTEGER
@@ -582,7 +583,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(MusicPanelView())
         self.add_view(YoteiPanelView())
         self.add_view(IntroView())
-        self.add_dynamic_items(DoneButton, SkipButton, MealFixButton, PraiseButton, GroupPraiseButton, StudyPraiseButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
+        self.add_dynamic_items(DoneButton, SkipButton, MealFixButton, PraiseButton, GroupPraiseButton, StudyPraiseButton, WorkStudyButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
                                MemoDoneButton, MemoCarryButton, MemoDropButton, WorkNoteButton, GoodsResetButton)
         self.add_view(EraiView())
         registered = {type(v) for v in self.persistent_views}
@@ -2257,9 +2258,12 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
         eff = {r["user_id"]: r["n"] for r in await c.fetchall()}
     async with db.execute("SELECT user_id, COUNT(*) AS n FROM effort_praise WHERE day BETWEEN ? AND ? GROUP BY user_id", (d1, d2)) as c:
         pr = {r["user_id"]: r["n"] for r in await c.fetchall()}
+    async with db.execute("SELECT user_id, SUM(minutes) AS m FROM study_logs WHERE day BETWEEN ? AND ? GROUP BY user_id", (d1, d2)) as c:
+        stm = {r["user_id"]: r["m"] for r in await c.fetchall()}
     for x in stats:
         x["efforts"] = eff.get(x["uid"], 0)
         x["praises"] = pr.get(x["uid"], 0)
+        x["study"] = stm.get(x["uid"], 0)
     label = "今週" if kind == "week" else f"{int(d1[5:7])}月"
     if not stats:
         await ch.send(f"📮 {label}（{d1}〜{d2}）は記録がありませんでした。")
@@ -2297,6 +2301,7 @@ async def period_summary(guild, d1, d2, kind="week", manual=False):
         award("🌟", "がんばり屋賞", "efforts", fmt=lambda v: f"{v}件"),
         award("👏", "ほめ上手賞", "praises", fmt=lambda v: f"{v}回"),
         award("🏃", "ラジオ体操賞", "radio", fmt=lambda v: f"{v}回"),
+        award("📖", "勉強時間賞", "study", fmt=study_dur),
         award("🐷", "寝坊賞", "late", fmt=lambda v: f"{v}回"),
         award("😴", "二度寝賞", "nizone", fmt=lambda v: f"{v}回"),
         award("👹", "こら賞", "miss_n", fmt=lambda v: f"未達 {v}件"),
@@ -3085,6 +3090,10 @@ async def judge_loop():
         await ops_daily(now)   # 🔒 yt-dlpの週1自動更新・DBの外部バックアップ
     except Exception as e:
         await bot_alert(f"⚠️ 定期メンテでエラー：{e!r}"[:500], key="ops_err", cooldown_h=24)
+    try:
+        await study_timer_warn(now)   # ⏱ 止め忘れの勉強タイマー
+    except Exception as e:
+        print(f"勉強タイマーエラー: {e!r}", flush=True)
     try:   # 🕐 時報：毎時0分、作業部屋に人がいるときだけVCチャットへ（通知音なし。23時・0時はひとこと添える）
         slot = f"{day} {now.hour}"
         if JIHO and now.minute < 3 and await meta_get("jiho_slot") != slot:   # 再起動で遅れたら出さない
@@ -9329,31 +9338,34 @@ class _StudyNoteModal(discord.ui.Modal, title="📝 メモ・時間"):
         await self.v.refresh(interaction)
 
 class StudyEntryView(discord.ui.View):
-    """✏️ 勉強を記録：教材 → 時間（→ メモ）→ ✅。前回の教材が先頭に来るので2回目からはほぼ2タップ"""
+    """✏️ 勉強を記録：教材 → 時間（→ メモ）→ ✅。前回の教材が先頭に来るので2回目からはほぼ2タップ
+    作業部屋の「📖 勉強として記録」からは 日付・時間が入った状態で開く（fixed_day・work_sid）"""
 
-    def __init__(self, uid, subjects):
+    def __init__(self, uid, subjects, minutes=None, fixed_day=None, work_sid=None):
         super().__init__(timeout=1800)
         self.uid, self.subjects = str(uid), subjects
         self.subject = subjects[0] if subjects else None
-        self.minutes, self.note, self.yesterday = None, None, False
+        self.minutes, self.note, self.yesterday = minutes, None, False
+        self.fixed_day, self.work_sid = fixed_day, work_sid
         self._build()
 
     def _build(self):
         self.clear_items()
         self.add_item(_StudySubjectSelect(self))
         self.add_item(_StudyMinSelect(self))
-        for label, style, cb in (("📅 昨日の分にする" if not self.yesterday else "📅 今日の分にもどす", discord.ButtonStyle.secondary, self._toggle_day),
-                                 ("📝 メモ・時間", discord.ButtonStyle.secondary, self._memo),
-                                 ("✅ 記録する", discord.ButtonStyle.success, self._commit)):
+        btns = [("📝 メモ・時間", discord.ButtonStyle.secondary, self._memo), ("✅ 記録する", discord.ButtonStyle.success, self._commit)]
+        if not self.fixed_day:
+            btns.insert(0, ("📅 昨日の分にする" if not self.yesterday else "📅 今日の分にもどす", discord.ButtonStyle.secondary, self._toggle_day))
+        for label, style, cb in btns:
             b = discord.ui.Button(label=label, style=style, row=2)
             b.callback = cb
             self.add_item(b)
 
     def day(self):
-        return day_str(now_jst() - timedelta(days=1 if self.yesterday else 0))
+        return self.fixed_day or day_str(now_jst() - timedelta(days=1 if self.yesterday else 0))
 
     def summary(self):
-        when = "昨日" if self.yesterday else "今日"
+        when = "作業部屋" if self.work_sid else ("昨日" if self.yesterday else "今日")
         return (f"📖 **勉強を記録**（{when}・{md(self.day())}）\n"
                 f"📘 {self.subject or '（教材をえらんでね）'}　⏳ {study_dur(self.minutes) if self.minutes else '（時間をえらんでね）'}"
                 + (f"\n📝 {self.note}" if self.note else "")
@@ -9376,7 +9388,14 @@ class StudyEntryView(discord.ui.View):
             await interaction.response.send_message(f"⚠️ まだ選んでいないものがあります：{miss}", ephemeral=True)
             return
         day = self.day()
-        await record_study(interaction.user, self.subject, self.minutes, self.note, day)
+        if self.work_sid:
+            if await work_study_done(self.work_sid):
+                await interaction.response.edit_message(content="この作業はもう勉強として記録済みです。", view=None)
+                return
+            await record_study(interaction.user, self.subject, self.minutes, self.note, day, source=f"workvc:{self.work_sid}")
+            await mark_work_log_studied(self.work_sid, self.subject)
+        else:
+            await record_study(interaction.user, self.subject, self.minutes, self.note, day)
         await interaction.response.edit_message(
             content=f"✅ 📖 **{self.subject}** {study_dur(self.minutes)} を記録しました（{md(day)}）\n{await study_goal_note(self.uid, day)}"
                     + hitokoto_suffix(), view=None)
@@ -9474,6 +9493,256 @@ async def send_study_subjects(interaction):
         + ("\n".join(f"・{r['name']}" for r in rows) if rows else "-# まだありません。英検・資格の本など、授業以外の勉強を足しておくと速い"),
         view=view, ephemeral=True)
 
+# ---- 🖥 作業部屋の時間を「📖 勉強として記録」（自動では数えない＝本人がボタンで選ぶ） ----
+async def work_study_done(sid):
+    async with db.execute("SELECT 1 FROM study_logs WHERE source=?", (f"workvc:{sid}",)) as c:
+        return bool(await c.fetchone())
+
+async def mark_work_log_studied(sid, subject):
+    """#作業ログ🖥 の「おつかれさま」からボタンを外して「📖 ○○ に記録」を添える"""
+    async with db.execute("SELECT msg_id FROM work_sessions WHERE id=?", (int(sid),)) as c:
+        r = await c.fetchone()
+    ch = await get_ch("worklog")
+    if not (r and r["msg_id"] and ch):
+        return
+    try:
+        m = await ch.fetch_message(int(r["msg_id"]))
+        await m.edit(content=m.content + f"\n-# 📖 勉強として記録しました（{subject}）", view=None)
+    except Exception:
+        pass
+
+async def work_session_total(r):
+    """セッションの合計秒（0時をまたいで split_session で分かれた続きも、つながっている分だけ足す）"""
+    total, end = (r["end_ts"] or r["start_ts"]) - r["start_ts"], r["end_ts"]
+    for _ in range(3):
+        if not end:
+            break
+        async with db.execute("SELECT * FROM work_sessions WHERE user_id=? AND start_ts=? AND id<>?", (r["user_id"], end, r["id"])) as c:
+            nxt = await c.fetchone()
+        if not nxt or not nxt["end_ts"]:
+            break
+        total += nxt["end_ts"] - nxt["start_ts"]
+        end = nxt["end_ts"]
+    return int(total)
+
+class WorkStudyButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_wstudy:(?P<sid>\d+)"):
+    def __init__(self, sid):
+        super().__init__(discord.ui.Button(label="📖 勉強として記録", style=discord.ButtonStyle.secondary, custom_id=f"sk_wstudy:{sid}"))
+        self.sid = int(sid)
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["sid"])
+
+    async def callback(self, interaction):
+        async with db.execute("SELECT * FROM work_sessions WHERE id=?", (self.sid,)) as c:
+            r = await c.fetchone()
+        if not r or r["user_id"] != str(interaction.user.id):
+            await interaction.response.send_message("作業した本人だけが押せます。", ephemeral=True)
+            return
+        if await work_study_done(self.sid):
+            await interaction.response.send_message("この作業はもう勉強として記録済みです。", ephemeral=True)
+            return
+        mins = max(1, await work_session_total(r) // 60)
+        await ensure_user(interaction.user)
+        v = StudyEntryView(interaction.user.id, await study_subject_options(interaction.user.id), minutes=mins, fixed_day=r["day"], work_sid=self.sid)
+        await interaction.response.send_message(v.summary(), view=v, ephemeral=True)
+
+# ---- ⏱ 勉強タイマー（▶開始・⏹終了で記録。5時間で打ち切り・超えたら声かけ） ----
+STUDY_TIMER_MAX = 300
+
+async def study_timer_of(uid):
+    async with db.execute("SELECT * FROM study_timers WHERE user_id=?", (str(uid),)) as c:
+        return await c.fetchone()
+
+class StudyTimerStartView(discord.ui.View):
+    """教材をえらんで ▶ スタート（_StudySubjectSelect・_StudyNewSubjectModal を記録画面と共用）"""
+    def __init__(self, uid, subjects):
+        super().__init__(timeout=900)
+        self.uid, self.subjects = str(uid), subjects
+        self.subject = subjects[0] if subjects else None
+        self._build()
+
+    def _build(self):
+        self.clear_items()
+        self.add_item(_StudySubjectSelect(self))
+        b = discord.ui.Button(label="▶ スタート", style=discord.ButtonStyle.success, row=1)
+        b.callback = self._start
+        self.add_item(b)
+
+    def summary(self):
+        return f"⏱ **勉強タイマー**\n📘 {self.subject or '（教材をえらんでね）'}\n-# ▶ で計測開始。終わったら同じ ⏱ ボタンから ⏹（{STUDY_TIMER_MAX // 60}時間で打ち切り）"
+
+    async def refresh(self, interaction):
+        self._build()
+        await interaction.response.edit_message(content=self.summary(), view=self)
+
+    async def _start(self, interaction):
+        if not self.subject:
+            await interaction.response.send_message("⚠️ 先に教材をえらんでね。", ephemeral=True)
+            return
+        now = now_jst()
+        await db.execute("INSERT OR REPLACE INTO study_timers(user_id,subject,start_ts,warned) VALUES(?,?,?,0)",
+                         (self.uid, self.subject, int(now.timestamp())))
+        await db.commit()
+        await interaction.response.edit_message(
+            content=f"⏱ スタート！ **{self.subject}**（{hhmm(now)}〜）\n-# 終わったら #勉強記録📖 の ⏱ タイマー → ⏹ 終了して記録", view=None)
+
+class StudyTimerRunView(discord.ui.View):
+    def __init__(self, uid):
+        super().__init__(timeout=900)
+        self.uid = str(uid)
+
+    @discord.ui.button(label="⏹ 終了して記録", style=discord.ButtonStyle.success)
+    async def stop_btn(self, interaction, button):
+        t = await study_timer_of(self.uid)
+        if not t:
+            await interaction.response.edit_message(content="タイマーは動いていません。", view=None)
+            return
+        start = datetime.fromtimestamp(t["start_ts"], JST)
+        mins = int((now_jst() - start).total_seconds() // 60)
+        await db.execute("DELETE FROM study_timers WHERE user_id=?", (self.uid,))
+        await db.commit()
+        if mins < 1:
+            await interaction.response.edit_message(content="⏱ 1分未満だったので記録しませんでした。", view=None)
+            return
+        capped = mins > STUDY_TIMER_MAX
+        mins = min(mins, STUDY_TIMER_MAX)
+        day = day_str(start)
+        await record_study(interaction.user, t["subject"], mins, None, day, source="timer")
+        await interaction.response.edit_message(
+            content=f"✅ ⏱ **{t['subject']}** {study_dur(mins)} を記録しました（{hhmm(start)}〜）\n{await study_goal_note(self.uid, day)}"
+                    + (f"\n-# {STUDY_TIMER_MAX // 60}時間で打ち切りました。違ったら 📋 今日の記録 で取り消して ✏️ から入れ直してね" if capped else "")
+                    + hitokoto_suffix(), view=None)
+
+    @discord.ui.button(label="✖ 記録せずにやめる", style=discord.ButtonStyle.secondary)
+    async def cancel_btn(self, interaction, button):
+        await db.execute("DELETE FROM study_timers WHERE user_id=?", (self.uid,))
+        await db.commit()
+        await interaction.response.edit_message(content="⏱ タイマーを止めました（記録はしていません）。", view=None)
+
+async def open_study_timer(interaction):
+    await ensure_user(interaction.user)
+    t = await study_timer_of(interaction.user.id)
+    if t:
+        start = datetime.fromtimestamp(t["start_ts"], JST)
+        el = int((now_jst() - start).total_seconds() // 60)
+        await interaction.response.send_message(f"⏱ **{t['subject']}** 計測中　**{study_dur(el)}**（{hhmm(start)}〜）",
+                                                view=StudyTimerRunView(interaction.user.id), ephemeral=True)
+        return
+    v = StudyTimerStartView(interaction.user.id, await study_subject_options(interaction.user.id))
+    await interaction.response.send_message(v.summary(), view=v, ephemeral=True)
+
+async def study_timer_warn(now=None):
+    """5時間をこえて動いているタイマーの人へ、#勉強記録📖 で1回だけ声かけ"""
+    now = now or now_jst()
+    lim = int(now.timestamp()) - STUDY_TIMER_MAX * 60
+    async with db.execute("SELECT * FROM study_timers WHERE warned=0 AND start_ts<?", (lim,)) as c:
+        rows = await c.fetchall()
+    ch = await get_ch("benkyou") if rows else None
+    for r in rows:
+        await db.execute("UPDATE study_timers SET warned=1 WHERE user_id=?", (r["user_id"],))
+        await db.commit()
+        if ch:
+            await ch.send(f"⏱ <@{r['user_id']}> タイマー（{r['subject']}）が{STUDY_TIMER_MAX // 60}時間をこえています。"
+                          "止め忘れなら ⏱ タイマー → ⏹ で（記録は5時間まで）")
+    if rows and ch:
+        await bump_panel("benkyou")
+    return len(rows)
+
+# ---- 📊 自分の勉強（直近7日の積み上げ棒＋直近30日の教材別。画像は本人にだけ） ----
+async def study_chart_data(uid, today):
+    t = date.fromisoformat(today)
+    d30 = (t - timedelta(days=29)).isoformat()
+    async with db.execute("SELECT day, subject, SUM(minutes) AS m FROM study_logs WHERE user_id=? AND day BETWEEN ? AND ? GROUP BY day, subject",
+                          (str(uid), d30, today)) as c:
+        rows = await c.fetchall()
+    per_day, totals = {}, {}
+    for r in rows:
+        per_day.setdefault(r["day"], {})[r["subject"]] = r["m"]
+        totals[r["subject"]] = totals.get(r["subject"], 0) + r["m"]
+    days7 = [(t - timedelta(days=6 - i)).isoformat() for i in range(7)]
+    return days7, per_day, sorted(totals.items(), key=lambda x: -x[1])
+
+def render_study_chart(name, today, days7, per_day, totals):
+    try:
+        from PIL import Image as PImage, ImageDraw, ImageFont
+    except Exception:
+        return None
+    f = _find_cjk_font()
+    if not f:
+        return None
+    fb = _find_cjk_font_bold() or f
+    ef = _find_emoji_font()
+    F = lambda s, bold=False: ImageFont.truetype(fb if bold else f, s)
+    E = lambda s: ImageFont.truetype(ef, s) if ef else None
+    W, H, pad = 1080, 1240, 60
+    img = PImage.new("RGB", (W, H), CARD_CREAM)
+    d = ImageDraw.Draw(img)
+    top6 = [s for s, _ in totals[:6]]
+    color = {s: CARD_SERIES[i % len(CARD_SERIES)] for i, s in enumerate(top6)}
+    other = CARD_MUTED
+    w7 = sum(sum(per_day.get(x, {}).values()) for x in days7)
+    m30 = sum(m for _, m in totals)
+    _draw_mixed(d, pad, 44, f"📊 {_plain_name(name, 10)} さんの勉強", F(50, True), E(50), CARD_INK)
+    d.text((pad + 4, 116), f"直近7日 {study_dur(w7)}　／　直近30日 {study_dur(m30)}", font=F(28), fill=CARD_MUTED)
+    # 直近7日：積み上げ棒
+    _draw_mixed(d, pad, 190, "🗓 直近7日", F(30, True), E(30), CARD_INK)
+    by, bh = 260, 360
+    peak = max([sum(per_day.get(x, {}).values()) for x in days7] + [60])
+    cw = (W - pad * 2) / 7
+    d.line([pad, by + bh, W - pad, by + bh], fill=CARD_LINE, width=2)
+    for i, x in enumerate(days7):
+        cx = pad + cw * i + cw / 2
+        y = by + bh
+        segs = sorted(per_day.get(x, {}).items(), key=lambda kv: top6.index(kv[0]) if kv[0] in top6 else 99)
+        tot = sum(m for _, m in segs)
+        for s, m in segs:
+            h = bh * m / peak
+            d.rectangle([cx - cw * 0.3, y - h, cx + cw * 0.3, y], fill=color.get(s, other))
+            y -= h
+        if tot:
+            d.text((cx, y - 8), study_dur(tot), font=F(20, True), fill=CARD_INK, anchor="mb")
+        dd = date.fromisoformat(x)
+        d.text((cx, by + bh + 12), f"{dd.month}/{dd.day}", font=F(22, x == today), fill=CARD_INK if x == today else CARD_MUTED, anchor="ma")
+        d.text((cx, by + bh + 40), DAY_CHARS[dd.weekday()], font=F(18), fill=CARD_MUTED, anchor="ma")
+    # 直近30日：教材別
+    sy = by + bh + 100
+    _draw_mixed(d, pad, sy, "📘 直近30日の教材", F(30, True), E(30), CARD_INK)
+    rows = totals[:6] + ([("ほか", sum(m for _, m in totals[6:]))] if len(totals) > 6 else [])
+    if not rows:
+        d.text((pad, sy + 70), "まだ記録がありません。✏️ から記録してみよう", font=F(26), fill=CARD_MUTED)
+    lw, bx = 300, pad + 300 + 16
+    bw = W - pad - bx - 150
+    top_m = rows[0][1] if rows else 1
+    for i, (s, m) in enumerate(rows):
+        yy = sy + 64 + i * 62
+        t = s
+        while d.textlength(t, font=F(26)) > lw and len(t) > 2:
+            t = t[:-2] + "…"
+        d.text((pad, yy + 20), t, font=F(26), fill=CARD_INK, anchor="lm")
+        d.rounded_rectangle([bx, yy + 6, bx + bw, yy + 34], radius=12, fill=CARD_TRACK)
+        d.rounded_rectangle([bx, yy + 6, bx + max(16, int(bw * m / top_m)), yy + 34], radius=12, fill=color.get(s, other))
+        d.text((W - pad, yy + 20), study_dur(m), font=F(26, True), fill=CARD_INK, anchor="rm")
+    d.line([pad, H - 90, W - pad, H - 90], fill=CARD_LINE, width=2)
+    d.text((pad, H - 70), "最低限生活リズムサークル", font=F(26, True), fill=CARD_INK)
+    d.text((W - pad, H - 64), f"{md(today)} 時点", font=F(22), fill=CARD_MUTED, anchor="ra")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+async def send_study_chart(interaction):
+    await ensure_user(interaction.user)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    today = day_str(now_jst())
+    days7, per_day, totals = await study_chart_data(interaction.user.id, today)
+    buf = await asyncio.to_thread(render_study_chart, interaction.user.display_name, today, days7, per_day, totals)
+    if not buf:
+        await interaction.followup.send("グラフを作れませんでした。", ephemeral=True)
+        return
+    await interaction.followup.send(file=discord.File(buf, filename="study.png"), ephemeral=True)
+
 class StudyPanelView(discord.ui.View):
     """#勉強記録📖 のパネル"""
     def __init__(self):
@@ -9483,11 +9752,19 @@ class StudyPanelView(discord.ui.View):
     async def add_btn(self, interaction, button):
         await open_study_entry(interaction)
 
-    @discord.ui.button(label="📋 今日の記録", style=discord.ButtonStyle.secondary, custom_id="sk_study_today")
+    @discord.ui.button(label="⏱ タイマー", style=discord.ButtonStyle.primary, custom_id="sk_study_timer")
+    async def timer_btn(self, interaction, button):
+        await open_study_timer(interaction)
+
+    @discord.ui.button(label="📋 今日の記録", style=discord.ButtonStyle.secondary, custom_id="sk_study_today", row=1)
     async def today_btn(self, interaction, button):
         await send_study_today(interaction)
 
-    @discord.ui.button(label="📚 教材", style=discord.ButtonStyle.secondary, custom_id="sk_study_subj")
+    @discord.ui.button(label="📊 自分の記録", style=discord.ButtonStyle.secondary, custom_id="sk_study_chart", row=1)
+    async def chart_btn(self, interaction, button):
+        await send_study_chart(interaction)
+
+    @discord.ui.button(label="📚 教材", style=discord.ButtonStyle.secondary, custom_id="sk_study_subj", row=1)
     async def subj_btn(self, interaction, button):
         await send_study_subjects(interaction)
 
@@ -10934,8 +11211,10 @@ async def work_close(uid, name, end_ts=None):
             if total < WORK_MIN_LOG_SEC:
                 await m.delete()   # ちょい入室はログに残さない（時間は記録済み）
             else:
+                view = discord.ui.View(timeout=None)
+                view.add_item(WorkStudyButton(row["id"]))   # 勉強だった人は本人が押して記録（自動では数えない）
                 await m.edit(content=f"🖥 **{name}** 作業おつかれさま！ **{fmt_work(total)}**"
-                             + (f"：{row['note']}" if row["note"] else "") + hitokoto_suffix(), view=None)
+                             + (f"：{row['note']}" if row["note"] else "") + hitokoto_suffix(), view=view)
         except Exception:
             pass
     if total >= 60 and GAKUSHU_SECRET and WORK_TO_GAKUSHU:
@@ -11820,7 +12099,11 @@ async def personal_stats(uid, d1, d2):
     achieved = sum(1 for v in ach.values() if v)
     async with db.execute("SELECT COUNT(*) AS n FROM efforts WHERE user_id=? AND day BETWEEN ? AND ?", (uid, d1, d2)) as c:
         n_efforts = (await c.fetchone())["n"]
+    async with db.execute("SELECT subject, SUM(minutes) AS m FROM study_logs WHERE user_id=? AND day BETWEEN ? AND ? GROUP BY subject ORDER BY m DESC",
+                          (uid, d1, d2)) as c:
+        study_subj = [(r["subject"], r["m"]) for r in await c.fetchall()]
     return {
+        "study_min": sum(m for _, m in study_subj), "study_subj": study_subj,
         "per_day": per_day,
         "wake_avg": (sum(wakes) / len(wakes)) if wakes else None,
         "sleep_avg": (sum(sleeps) / len(sleeps)) if sleeps else None,
@@ -11999,7 +12282,7 @@ def render_shiori_card(name, st):
         ("◎", "達成率", f"{round(st['rate'])}%" if st["rate"] is not None else "—",
          f"{st['achieved']}/{st['judged']}日" if st["judged"] else ""),
         ("🔥", "最長連続", f"{st['best_run']}日", "お休みは切れない"),
-        ("🖥", "作業部屋", hm(st["work_sec"]), ""),
+        ("📖", "勉強", study_dur(st["study_min"]) if st.get("study_min") else "—", f"作業部屋 {hm(st['work_sec'])}"),
         ("👏", "もらった拍手", f"{st['claps']}", "ごはん・えらい"),
     ]
     gap, ty, th = 24, 280, 170
@@ -12345,6 +12628,8 @@ async def watashi_command(interaction, kikan: str = "今週", csv: bool = False)
         f"🧹 家事：{sum(cur['chores'].values())} 回（{ch_txt}）",
         f"🍚 食事報告：{cur['meals']} 回　🛁 入浴：{cur['baths']} 日　🪥 歯磨き：{cur['teeth']} 回",
         f"🏃 ラジオ体操：{cur['radio']} 回　😴 二度寝：{cur['nizone']} 回　🌟 えらい報告：{cur['efforts']} 件",
+        f"📖 勉強：{study_dur(cur['study_min'])}" + delta(cur["study_min"], prev and prev["study_min"], "分")
+        + ("（" + "／".join(f"{s} {study_dur(m)}" for s, m in cur["study_subj"][:3]) + "）" if cur["study_subj"] else ""),
     ]
     emb.add_field(name="🧾 内訳", value="\n".join(naiyaku), inline=False)
     ins = personal_insights(cur, prev)
