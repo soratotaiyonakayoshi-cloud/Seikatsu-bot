@@ -571,6 +571,10 @@ class SeikatsuBot(discord.Client):
         self.add_dynamic_items(DoneButton, SkipButton, MealFixButton, PraiseButton, GroupPraiseButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
                                MemoDoneButton, MemoCarryButton, MemoDropButton, WorkNoteButton, GoodsResetButton)
         self.add_view(EraiView())
+        registered = {type(v) for v in self.persistent_views}
+        for V in VIEW_FACTORY.values():   # /setup で置くパネルは漏れなく登録（新しいパネルの登録忘れ＝ボタンが反応しない を防ぐ）
+            if V not in registered:
+                self.add_view(V())
         # コマンドの同期はグローバルではなくサーバー単位で行う（即時反映）。on_ready 参照。
 
 bot = SeikatsuBot()

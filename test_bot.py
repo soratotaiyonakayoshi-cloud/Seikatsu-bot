@@ -48,6 +48,16 @@ check("設定パネル: 項目セレクトは14項目", len(B.SaiteiSelect().opt
 for V in (B.WakeView, B.MealView, B.ChoreView, B.BathView, B.KadaiPanelView, B.GoodsPanelView, B.MusicPanelView, B.YoteiPanelView):
     B.bot.add_view(V())   # custom_id が欠けていればここで例外
 check("永続ビュー8種 登録OK", True, True)
+import asyncio as _aio, types as _types
+_real_db_init = B.db_init
+async def _noop():
+    pass
+B.db_init = _noop
+_fake = _types.SimpleNamespace(persistent_views=[], add_view=lambda v: _fake.persistent_views.append(v), add_dynamic_items=lambda *a: None)
+_aio.run(B.SeikatsuBot.setup_hook(_fake))   # 起動時の登録処理をそのまま走らせる
+B.db_init = _real_db_init
+check("起動時に全パネルのボタンを登録（新しいパネルも漏れない）",
+      sorted(k for k, V in B.VIEW_FACTORY.items() if V not in {type(v) for v in _fake.persistent_views}), [])
 check("予定パネル: 10ボタン", {i.custom_id for i in B.YoteiPanelView().children},
       {"sk_today", "sk_tomorrow", "sk_upcoming", "sk_univ", "sk_mine", "sk_time", "sk_exam", "sk_timeline", "sk_cal0"})
 check("予定パネル: 行割り（今日・明日・今後が1段目）",
