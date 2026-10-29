@@ -73,7 +73,7 @@ CH = {
     "roles": ("ロール🏷", "リアクションで学部・学年・生活形態のロールを付け外し。"),
     "wake": ("起床🌅", "☀️ 起きたら・🌙 寝る前に押す。😴 二度寝・🏭 今夜は夜勤 もここから。"),
     "meal": ("ごはん🍚", "🍚 食べたら押す（写真を投げるだけでもOK）。🧊 冷蔵庫で食品の期限メモ。"),
-    "chore": ("家事🧹", "やった家事を押す。洗濯は工程ごとに。「n日に1回」の家事は毎晩20時にここでお知らせ。"),
+    "chore": ("家事🧹", "やった家事を押す。洗濯は工程ごとに。「n日に1回」の家事は毎朝6:30にここでお知らせ。"),
     "erai": ("えらい🌟", "🌟 今日がんばったことを報告して褒め合う場所（判定なし）。"),
     "yarukoto": ("やること📌", "📌 やることを宣言して見守ってもらう場所。📝 自分の項目のチェックもここから。"),
     "worklog": ("作業ログ🖥", f"🔊{WORK_VC_NAME} に入ると作業時間を計測。🎶 音楽の操作はこのパネルから。"),
@@ -2957,10 +2957,10 @@ def actionable_misses(misses):
     """事前リマインドで知らせる価値のある（今からでも間に合う）未達だけ残す"""
     return [m for m in misses if not m.startswith(PREJUDGE_SKIP)]
 
-KAJI_REMIND_BEFORE_H = int(os.getenv("KAJI_REMIND_BEFORE_H", "3"))   # 判定の何時間前に家事リマインドを出すか（0で無効）
+KAJI_REMIND_TIME = os.getenv("KAJI_REMIND_TIME", "06:30")   # 家事リマインドの時刻（空で無効）
 
 async def kaji_due_lines(day):
-    """今日やる日なのにまだの家事がある人の一覧行（お休み・設定初日の人は除く）"""
+    """今日やる日でまだの家事がある人の一覧行（お休み・設定初日の人は除く）"""
     async with db.execute("SELECT * FROM users") as c:
         users = await c.fetchall()
     async with db.execute("SELECT user_id FROM off_days WHERE day=?", (day,)) as c:
@@ -2993,7 +2993,7 @@ async def kaji_tomorrow_lines(day):
     return lines
 
 async def kaji_remind(day):
-    """判定の数時間前に #家事🧹 で、明日やる日の家事（前日のお知らせ）と、今日やる日なのにまだの家事を1通で（1日1回）"""
+    """朝に #家事🧹 で、今日やる日の家事と、明日やる日の家事（前日のお知らせ）を1通で（1日1回）"""
     ch = await get_ch("chore")
     if not ch:
         return 0
@@ -3002,10 +3002,10 @@ async def kaji_remind(day):
     if not tomorrow_lines and not today_lines:
         return 0
     parts = []
+    if today_lines:
+        parts.append(f"☀️ **今日やる日の家事**（{JUDGE_HOUR}:00 に判定）\n" + "\n".join(today_lines))
     if tomorrow_lines:
         parts.append("🗓 **明日やる日の家事**（洗剤・ごみ袋の準備などはお早めに）\n" + "\n".join(tomorrow_lines))
-    if today_lines:
-        parts.append(f"⚠️ **今日やる日なのに、まだの家事**（{JUDGE_HOUR}:00 に判定・まだ間に合います）\n" + "\n".join(today_lines))
     await ch.send("🧹 **家事のお知らせ**\n" + "\n\n".join(parts)[:1850] + "\n-# やったら 🧹 のボタンで記録してね")
     await bump_panel("chore")
     return len(tomorrow_lines) + len(today_lines)
@@ -3114,11 +3114,11 @@ async def judge_loop():
         await update_work_vc_status(now)   # VCサブタイトル（勉強会の開始/終了の切替もここで拾う）
     except Exception as e:
         print(f"VCステータスエラー: {e!r}", flush=True)
-    kh = JUDGE_HOUR - KAJI_REMIND_BEFORE_H
-    if KAJI_REMIND_BEFORE_H > 0 and kh >= 0 and now.hour == kh and await meta_get("last_kaji_remind_day") != day:
+    if KAJI_REMIND_TIME and KAJI_REMIND_TIME <= hhmm(now).zfill(5) and now.hour < JUDGE_HOUR \
+            and await meta_get("last_kaji_remind_day") != day:   # 朝6:30（再起動で過ぎていたら気づいた時点で）
         await meta_set("last_kaji_remind_day", day)
         try:
-            await kaji_remind(day)   # 🧹 n日に1回の家事：今日やる日なのにまだの人へ
+            await kaji_remind(day)   # 🧹 n日に1回の家事：今日やる日・明日やる日
         except Exception as e:
             print(f"家事リマインドエラー: {e!r}", flush=True)
     if JUDGE_HOUR >= 1 and now.hour == JUDGE_HOUR - 1 and await meta_get("last_prejudge_day") != day:
@@ -9131,9 +9131,117 @@ class SaiteiSelect(discord.ui.Select):
         _k, label, hint = next(x for x in SAITEI_ITEMS if x[0] == key)
         await interaction.response.send_modal(SaiteiModal(key, label, hint))
 
+# ---- 📊 みんなの最低限（設定の一覧表を1枚の画像に。押した人にだけ表示） ----
+SAITEI_COLS = ([("☀", "起床"), ("😴", "睡眠"), ("🛁", "入浴"), ("🪥", "歯磨き"), ("🍚", "食事"), ("🏃", "体操"), ("📖", "勉強")]
+               + [(e.replace("\ufe0f", ""), lb) for _c, lb, e, _s in KAJI_CATS]   # 家事の列は KAJI_CATS の順（saitei_cells と揃える）
+               + [("🗓", "定休日"), ("📝", "個人")])
+KAJI_COL0 = 7   # ここから len(KAJI_CATS) 列が家事（n日に1回）
+
+def saitei_cells(u, n_custom=0):
+    """一覧表の1行ぶん：列ごとに (本文, 小さい補足 or None)。未設定は ("", None)"""
+    yes = ("○", None)
+    no = ("", None)
+    hs = (u["holiday_shift"] or 0) / 60
+    cells = [
+        (u["wake_deadline"], f"土日+{hs:g}h" if hs else None) if u["wake_deadline"] else no,
+        (f"{u['sleep_min']:g}h", None) if u["sleep_min"] else no,
+        yes if u["bath_daily"] else no,
+        (f"{u['teeth_min']}回", None) if u["teeth_min"] else no,
+        (f"{u['meals_min']}回", None) if u["meals_min"] else no,
+        yes if u["radio_daily"] else no,
+        yes if u["benkyou_min"] else no,
+    ]
+    for col, _lb, _e, _subs in KAJI_CATS:
+        n = u[col] or 0
+        cells.append(("毎日" if n == 1 else f"{n}日", None) if n > 0 else no)
+    cells.append((u["off_weekdays"], None) if u["off_weekdays"] else no)
+    cells.append((f"{n_custom}個", None) if n_custom else no)
+    return cells
+
+def render_saitei_table(rows, today):
+    """rows=[(名前, cells)]。一覧表のPNG（BytesIO）。描けなければ None"""
+    try:
+        from PIL import Image as PImage, ImageDraw, ImageFont
+    except Exception:
+        return None
+    f = _find_cjk_font()
+    if not f or not rows:
+        return None
+    fb = _find_cjk_font_bold() or f
+    ef = _find_emoji_font()
+    F = lambda s, bold=False: ImageFont.truetype(fb if bold else f, s)
+    E = lambda s: ImageFont.truetype(ef, s) if ef else None
+    pad, name_w, col_w, head_h, row_h = 48, 230, 92, 118, 70
+    W = pad * 2 + name_w + col_w * len(SAITEI_COLS)
+    top = 150
+    H = top + head_h + row_h * len(rows) + 90
+    img = PImage.new("RGB", (W, H), CARD_CREAM)
+    d = ImageDraw.Draw(img)
+    _draw_mixed(d, pad, 40, "📊 みんなの最低限", F(52, True), E(52), CARD_INK)
+    d.text((pad + 4, 108), f"{md(today)} 時点・{len(rows)}人　空欄＝設定なし　個人＝自分で足した項目の数", font=F(24), fill=CARD_MUTED)
+    x0 = pad + name_w
+    kx = x0 + col_w * KAJI_COL0   # 家事の列のまとまりを見出しの線で示す
+    d.text((kx + col_w * len(KAJI_CATS) / 2, top - 6), "家事（n日に1回）", font=F(20, True), fill=CARD_MUTED, anchor="ma")
+    d.line([kx + 8, top + 22, kx + col_w * len(KAJI_CATS) - 8, top + 22], fill=CARD_MUTED, width=2)
+    for i, (emo, lb) in enumerate(SAITEI_COLS):
+        cx = x0 + col_w * i + col_w / 2
+        ew = _mixed_w(d, emo, F(36), E(36))
+        _draw_mixed(d, cx - ew / 2, top + 30, emo, F(36), E(36), CARD_INK)
+        d.text((cx, top + 84), lb, font=F(20), fill=CARD_MUTED, anchor="ma")
+    y = top + head_h
+    d.line([pad, y, W - pad, y], fill=CARD_INK, width=2)
+    for r, (name, cells) in enumerate(rows):
+        if r % 2:
+            d.rectangle([pad, y, W - pad, y + row_h], fill="#efe7d7")
+        d.text((pad + 10, y + row_h / 2), _plain_name(name, 7), font=F(28, True), fill=CARD_INK, anchor="lm")
+        for i, (txt, sub) in enumerate(cells):
+            cx = x0 + col_w * i + col_w / 2
+            if not txt:
+                continue
+            fnt = F(26, True)
+            while d.textlength(txt, font=fnt) > col_w - 8 and fnt.size > 16:
+                fnt = F(fnt.size - 2, True)
+            d.text((cx, y + (row_h / 2 - 9 if sub else row_h / 2)), txt, font=fnt,
+                   fill=CARD_ORANGE if txt == "○" else CARD_INK, anchor="mm")
+            if sub:
+                d.text((cx, y + row_h / 2 + 18), sub, font=F(16), fill=CARD_MUTED, anchor="mm")
+        y += row_h
+        d.line([pad, y, W - pad, y], fill=CARD_LINE, width=1)
+    d.text((pad, H - 60), "最低限生活リズムサークル", font=F(24, True), fill=CARD_INK)
+    d.text((W - pad, H - 56), "自分の設定は #設定 の「最低限を設定」から", font=F(20), fill=CARD_MUTED, anchor="ra")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+async def saitei_table_rows():
+    """設定が1つでもある人（定休日・自分の項目だけの人も）を、起床締切の早い順に"""
+    async with db.execute("SELECT * FROM users") as c:
+        users = await c.fetchall()
+    async with db.execute("SELECT user_id, COUNT(*) AS n FROM custom_items GROUP BY user_id") as c:
+        customs = {r["user_id"]: r["n"] for r in await c.fetchall()}
+    picked = [u for u in users if has_any_setting(u) or u["off_weekdays"] or customs.get(u["id"])]
+    picked.sort(key=lambda u: (not u["wake_deadline"], (u["wake_deadline"] or "").zfill(5), u["name"] or ""))
+    return [(u["name"] or "？", saitei_cells(u, customs.get(u["id"], 0))) for u in picked]
+
+async def send_saitei_table(interaction):
+    await ensure_user(interaction.user)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    rows = await saitei_table_rows()
+    buf = render_saitei_table(rows, day_str(now_jst())) if rows else None
+    if not buf:
+        await interaction.followup.send("まだ最低限を設定している人がいません。🛠 から1人目になろう！" if not rows
+                                        else "一覧表を作れませんでした（画像の作成に失敗）。", ephemeral=True)
+        return
+    await interaction.followup.send(f"📊 みんなの最低限（{len(rows)}人）", file=discord.File(buf, filename="saitei_table.png"), ephemeral=True)
+
 class SetteiView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
+
+    @discord.ui.button(label="📊 みんなの最低限", style=discord.ButtonStyle.secondary, custom_id="sk_saitei_table", row=2)
+    async def saitei_table_btn(self, interaction, button):
+        await send_saitei_table(interaction)
 
     @discord.ui.button(label="🏃 ラジオ体操の呼び出し ON/OFF", style=discord.ButtonStyle.secondary, custom_id="sk_radio_toggle", row=1)
     async def radio_toggle(self, interaction, button):   # 毎日押すものではないので #起床🌅 から #設定🔧 へ

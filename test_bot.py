@@ -64,6 +64,16 @@ check("予定パネル: 行割り（今日・明日・今後が1段目）",
       {i.custom_id: i.row for i in B.YoteiPanelView().children},
       {"sk_today": 0, "sk_tomorrow": 0, "sk_upcoming": 0, "sk_univ": 1, "sk_mine": 1, "sk_time": 1, "sk_exam": 1,
        "sk_timeline": 2, "sk_cal0": 2})
+_u = dict(wake_deadline="7:00", holiday_shift=120, sleep_min=6, bath_daily=1, teeth_min=0, meals_min=2, radio_daily=0, benkyou_min=0,
+          kaji_cook=1, kaji_clean=0, kaji_dish=0, kaji_trash=7, kaji_wash=3, off_weekdays="土日")
+_cells = B.saitei_cells(_u, 2)
+_col = {lb: c[0] for (_e, lb), c in zip(B.SAITEI_COLS, _cells)}
+check("最低限の一覧: 列と値が対応（家事の順もずれない）", (len(_cells) == len(B.SAITEI_COLS), _col["起床"], _cells[0][1], _col["睡眠"], _col["入浴"], _col["歯磨き"],
+      _col["料理"], _col["ごみ捨て"], _col["洗濯"], _col["定休日"], _col["個人"]),
+      (True, "7:00", "土日+2h", "6h", "○", "", "毎日", "7日", "3日", "土日", "2個"))
+check("最低限の一覧: 画像PNG生成", B.render_saitei_table([("テスト", _cells)], "2026-10-29").read(8), b"\x89PNG\r\n\x1a\n")
+check("最低限の一覧: #設定🔧 にボタン", any(i.custom_id == "sk_saitei_table" for i in B.SetteiView().children), True)
+check("家事リマインドは朝6:30", B.KAJI_REMIND_TIME, "06:30")
 check("時報: 15時は時刻だけ・23時と0時はひとこと", (B.jiho_text(15), B.jiho_text(23).split("\n")[1], B.jiho_text(0).split("\n")[1]),
       ("🕒 **15時** になりました", "🌙 そろそろ寝てもいいんじゃない？", "🌝今日は夜ふかしさんですか？"))
 check("⏱ 時限の選択肢（昼休み＋1〜6限）", [(n, h, m) for n, h, m in B.TIME_SLOTS][:3], [("昼休み", "12:00", 60), ("1限", "08:45", 90), ("2限", "10:30", 90)])
