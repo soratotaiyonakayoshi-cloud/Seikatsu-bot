@@ -3232,6 +3232,10 @@ async def judge_loop():
                     await post_monthly_iyashi_album(now)   # 🐾 今月のいやしアルバムを #どうぶつ🐄 へ
                 except Exception as e:
                     print(f"いやしアルバムエラー: {e!r}", flush=True)
+                try:
+                    await post_monthly_trip_album(now)   # 🗾 今月のおでかけアルバムをフォーラムへ
+                except Exception as e:
+                    print(f"おでかけアルバムエラー: {e!r}", flush=True)
                 try:   # 📖 個人の月間しおりは本人だけが受け取る形（数字を晒さない）。ここでは案内だけ
                     tch = await get_ch("tsushinbo")
                     if tch:
@@ -9962,7 +9966,7 @@ def render_odekake_map(title, region, counts, personal, photos=None):
     img = PImage.new("RGB", (W, H), CARD_CREAM)
     d = ImageDraw.Draw(img)
     _draw_mixed(d, pad, 34, f"🗾 {_plain_name(title, 14)}", F(48, True), E(48), CARD_INK)
-    d.text((pad + 4, 100), f"{region}　制覇 {done}/{total}" + ("　（色が濃いほど行った人が多い）" if not personal else ""), font=F(26), fill=CARD_MUTED)
+    d.text((pad + 4, 100), f"{region}　制覇 {done}/{total}" + ("　（色が濃いほど行った人が多い）" if not personal and not photos else ""), font=F(26), fill=CARD_MUTED)
     if region == "都内":
         ku = PLACE_GROUPS["都内"][0][1]
         tama = {k: v for k, v in polys.items() if k not in TOKYO_ISLANDS and k not in ku}   # 23区は下に別枠で大きく
@@ -10068,7 +10072,7 @@ class TripPlaceButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_t
 
         async def on_pick(i, region, place):
             await record_trip(i.user.id, region, place, mid, ch_id)
-            await i.response.edit_message(content=f"📍 **{place}** を地図に載せました。{await trip_done_note(i.user.id, region)}", view=None)
+            await i.response.edit_message(content=f"📍 **{place}** を地図に載せました。{await trip_done_note(i.user.id, region, place)}", view=None)
             view = discord.ui.View(timeout=None)
             view.add_item(TripPlaceButton(mid, i.user.id, more=True))
             await bot_msg.edit(content="📍 " + "・".join(await trip_message_places(mid)), view=view)
@@ -10078,9 +10082,19 @@ class TripPlaceButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_t
                 print(f"おでかけタグの更新に失敗: {e!r}", flush=True)
         await interaction.response.send_message("📍 どこに行きましたか？", view=TripPickView(on_pick), ephemeral=True)
 
-async def trip_done_note(uid, region):
+async def trip_others_note(uid, region, place):
+    """同じ場所に行った人のひとこと（いなければ空）"""
+    async with db.execute("SELECT DISTINCT COALESCE(u.name,'？') AS n FROM trips t LEFT JOIN users u ON u.id=t.user_id "
+                          "WHERE t.region=? AND t.place=? AND t.user_id<>? LIMIT 4", (region, place, str(uid))) as c:
+        names = [r["n"] for r in await c.fetchall()]
+    if not names:
+        return ""
+    who = "・".join(names[:3]) + ("さんたち" if len(names) > 3 else "さん")
+    return f"\n👀 {who}もここに行っています（🔍 場所から見る で思い出を読めます）"
+
+async def trip_done_note(uid, region, place=None):
     n = sum(1 for k in await trip_counts(region, uid) if k in _map_polys(region))
-    return f"{region}の制覇 **{n}/{PLACE_TOTAL[region]}**"
+    return f"{region}の制覇 **{n}/{PLACE_TOTAL[region]}**" + (await trip_others_note(uid, region, place) if place else "")
 
 TRIP_PHOTO_DIR = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), "trip_photos")   # 投稿写真の縮小版（思い出カード・地図用。リポジトリには入れない）
 
@@ -10182,25 +10196,30 @@ async def apply_trip_tags(thread):
         await thread.edit(applied_tags=tags)
 
 class TripMapView(discord.ui.View):
-    """🗾 地図の下のボタン：都内／都外の切り替え（じぶんの地図には🗑も）"""
-    def __init__(self, uid, region):
+    """🗾 地図の下のボタン：都内／都外の切り替え・色／写真の切り替え（じぶんの地図には🗑も）"""
+    def __init__(self, uid, region, photo=False):
         super().__init__(timeout=900)
-        self.uid, self.region = uid, region
+        self.uid, self.region, self.photo = uid, region, photo
         for rg in PLACE_GROUPS:
             b = discord.ui.Button(label=("🗼 " if rg == "都内" else "🗾 ") + rg, style=discord.ButtonStyle.primary if rg == region else discord.ButtonStyle.secondary, disabled=rg == region)
             b.callback = self._switch(rg)
             self.add_item(b)
+        b = discord.ui.Button(label="🎨 色で見る" if photo else "🖼 写真で見る", style=discord.ButtonStyle.secondary)
+        b.callback = self._switch(region, not photo)
+        self.add_item(b)
         if uid is not None:
             b = discord.ui.Button(label="🗑 記録を消す", style=discord.ButtonStyle.secondary)
             b.callback = self._delete
             self.add_item(b)
 
-    def _switch(self, rg):
+    def _switch(self, rg, photo=None):
+        photo = self.photo if photo is None else photo
+
         async def cb(interaction):
             await interaction.response.defer()
-            content, buf = await trip_map_payload(interaction.user, self.uid, rg)
+            content, buf = await trip_map_payload(interaction.user, self.uid, rg, photo)
             await interaction.edit_original_response(content=content, attachments=[discord.File(buf, filename="odekake.png")] if buf else [],
-                                                     view=TripMapView(self.uid, rg))
+                                                     view=TripMapView(self.uid, rg, photo))
         return cb
 
     async def _delete(self, interaction):
@@ -10223,11 +10242,33 @@ class TripDelSelect(discord.ui.Select):
         await db.commit()
         await interaction.response.edit_message(content="🗑 消しました。地図は次に開いたときに更新されます。", view=None)
 
-async def trip_map_payload(user, uid, region):
-    """(本文, PNG) を返す。uid=None ならみんなの地図"""
+async def trip_photo_paths(region, uid=None):
+    """{場所: 新しい投稿の縮小版のパス}（uid を渡すとその人の投稿だけ）"""
+    sql = ("SELECT t.place, p.thumb FROM trips t JOIN trip_posts p ON p.thread_id=t.msg_id "
+           "WHERE t.region=? AND p.thumb IS NOT NULL" + (" AND t.user_id=?" if uid is not None else "") + " ORDER BY t.id")
+    async with db.execute(sql, (region, str(uid)) if uid is not None else (region,)) as c:
+        return {r["place"]: r["thumb"] for r in await c.fetchall()}
+
+def _render_photo_map(title, region, counts, personal, paths):
+    """縮小版を開いて写真の地図を描く（ファイルが消えていた場所は色のまま）"""
+    from PIL import Image as PImage
+    photos = {}
+    for place, path in paths.items():
+        try:
+            with PImage.open(path) as im:
+                photos[place] = im.convert("RGB")
+        except Exception:
+            pass
+    return render_odekake_map(title, region, counts, personal, photos=photos or None)
+
+async def trip_map_payload(user, uid, region, photo=False):
+    """(本文, PNG) を返す。uid=None ならみんなの地図。photo=True なら写真で埋める"""
     counts = await trip_counts(region, uid)
     title = f"{user.display_name} さんの地図" if uid is not None else "みんなの地図"
-    buf = await asyncio.to_thread(render_odekake_map, title, region, counts, uid is not None)
+    if photo:
+        buf = await asyncio.to_thread(_render_photo_map, title, region, counts, uid is not None, await trip_photo_paths(region, uid))
+    else:
+        buf = await asyncio.to_thread(render_odekake_map, title, region, counts, uid is not None)
     n = sum(1 for k in counts if k in _map_polys(region))
     return f"{'🙋' if uid is not None else '🗾'} **{title}**（{region}）制覇 {n}/{PLACE_TOTAL[region]}", buf
 
@@ -10245,7 +10286,7 @@ async def send_trip_add(interaction):
 
     async def on_pick(i, region, place):
         await record_trip(i.user.id, region, place)
-        await i.response.edit_message(content=f"📍 **{place}** を地図に載せました。{await trip_done_note(i.user.id, region)}\n-# 続けて入れるなら、もう一度 📍 から", view=None)
+        await i.response.edit_message(content=f"📍 **{place}** を地図に載せました。{await trip_done_note(i.user.id, region, place)}\n-# 続けて入れるなら、もう一度 📍 から", view=None)
     await interaction.response.send_message("📍 行った場所をえらんでください（昔の旅行もOK）", view=TripPickView(on_pick), ephemeral=True)
 
 async def trip_memories(region, place):
@@ -10323,6 +10364,117 @@ async def send_trip_see(interaction):
                                        attachments=[discord.File(buf, filename="memories.png")] if buf else [])
     await interaction.response.send_message("🔍 見たい場所をえらんでください", view=TripPickView(on_pick), ephemeral=True)
 
+async def trip_post_places(thread_id):
+    async with db.execute("SELECT DISTINCT place FROM trips WHERE msg_id=? ORDER BY id", (str(thread_id),)) as c:
+        return [r["place"] for r in await c.fetchall()]
+
+async def trip_gacha_pick(uid):
+    """だれかのおでかけを1つランダムに（できれば他の人の・場所を選んだ投稿）。無ければ None"""
+    base = ("SELECT p.*, COALESCE(u.name,'？') AS uname FROM trip_posts p LEFT JOIN users u ON u.id=p.user_id "
+            "WHERE p.thread_id IN (SELECT msg_id FROM trips WHERE msg_id IS NOT NULL)")
+    for extra, arg in ((" AND p.user_id<>?", (str(uid),)), ("", ())):
+        async with db.execute(base + extra + " ORDER BY RANDOM() LIMIT 1", arg) as c:
+            r = await c.fetchone()
+        if r:
+            return r
+    return None
+
+async def trip_gacha_payload(uid, guild_id):
+    """🎲 の (本文, PNG)。投稿がなければ (案内, None)"""
+    r = await trip_gacha_pick(uid)
+    if not r:
+        return "🎲 まだ思い出がありません。おでかけの写真を投稿して場所を選ぶと、ガチャに入ります！", None
+    places = await trip_post_places(r["thread_id"])
+    label = "・".join(places[:3]) + ("…" if len(places) > 3 else "")
+    item = {"day": r["day"], "uname": r["uname"], "thread_id": r["thread_id"], "title": r["title"], "body": r["body"], "thumb": r["thumb"]}
+    buf = await asyncio.to_thread(render_trip_card, label, [item])
+    return f"🎲 **{r['uname']}** さんの思い出：[投稿を開く](https://discord.com/channels/{guild_id}/{r['thread_id']})", buf
+
+class TripGachaView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=900)
+
+    @discord.ui.button(label="🎲 もう1回", style=discord.ButtonStyle.primary)
+    async def again(self, interaction, button):
+        await interaction.response.defer()
+        content, buf = await trip_gacha_payload(interaction.user.id, interaction.guild_id)
+        await interaction.edit_original_response(content=content, attachments=[discord.File(buf, filename="memory.png")] if buf else [], view=self)
+
+async def send_trip_gacha(interaction):
+    await ensure_user(interaction.user)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    content, buf = await trip_gacha_payload(interaction.user.id, interaction.guild_id)
+    kwargs = {"file": discord.File(buf, filename="memory.png"), "view": TripGachaView()} if buf else {}
+    await interaction.followup.send(content, ephemeral=True, **kwargs)
+
+async def trip_album_items(d1, d2):
+    """期間のおでかけ（写真つき・場所を選んだもの・新しい順に最大9件）"""
+    async with db.execute("SELECT p.*, COALESCE(u.name,'？') AS uname FROM trip_posts p LEFT JOIN users u ON u.id=p.user_id "
+                          "WHERE p.day BETWEEN ? AND ? AND p.thumb IS NOT NULL ORDER BY p.ts DESC LIMIT 9", (d1, d2)) as c:
+        rows = await c.fetchall()
+    out = []
+    for r in rows:
+        places = await trip_post_places(r["thread_id"])
+        out.append({"uname": r["uname"], "title": r["title"], "body": r["body"], "thumb": r["thumb"], "place": "・".join(places[:2])})
+    return out
+
+def render_trip_album(month, items):
+    """🗾 月末のおでかけアルバム：写真・タイトル・場所・本文を3列で。描けなければ None"""
+    try:
+        from PIL import Image as PImage, ImageDraw, ImageFont, ImageOps
+    except Exception:
+        return None
+    f = _find_cjk_font()
+    if not f or not items:
+        return None
+    fb = _find_cjk_font_bold() or f
+    ef = _find_emoji_font()
+    F = lambda s, bold=False: ImageFont.truetype(fb if bold else f, s)
+    E = lambda s: ImageFont.truetype(ef, s) if ef else None
+    W, pad, gap, cols = 1200, 40, 24, 3
+    cw = (W - pad * 2 - gap * (cols - 1)) // cols
+    ph, ch = int(cw * .72), int(cw * .72) + 190
+    rows = (len(items) + cols - 1) // cols
+    H = 130 + rows * (ch + gap) + 60
+    img = PImage.new("RGB", (W, H), CARD_CREAM)
+    d = ImageDraw.Draw(img)
+    _draw_mixed(d, pad, 36, f"🗾 {month}月のおでかけアルバム", F(50, True), E(50), CARD_INK)
+    for i, it in enumerate(items):
+        x = pad + (i % cols) * (cw + gap)
+        y = 130 + (i // cols) * (ch + gap)
+        try:
+            im = ImageOps.fit(PImage.open(it["thumb"]).convert("RGB"), (cw, ph))
+            mask = PImage.new("L", (cw, ph), 0)
+            ImageDraw.Draw(mask).rounded_rectangle([0, 0, cw, ph], radius=14, fill=255)
+            img.paste(im, (x, y), mask)
+        except Exception:
+            d.rounded_rectangle([x, y, x + cw, y + ph], radius=14, fill=CARD_TRACK)
+        d.text((x + 2, y + ph + 10), _plain_name(it["title"] or "おでかけ", 15), font=F(27, True), fill=CARD_INK)
+        d.text((x + 2, y + ph + 50), f"{_plain_name(it['uname'], 8)}" + (f"・{it['place']}" if it["place"] else ""), font=F(20), fill=CARD_MUTED)
+        body = _plain_name((it["body"] or "").replace("\n", " "), 80) if it["body"] else ""
+        for j, line in enumerate(_wrap_px(d, body, F(21), None, cw - 4)[:3] if body else []):
+            d.text((x + 2, y + ph + 84 + j * 30), line, font=F(21), fill=CARD_INK)
+    d.text((W - pad, H - 44), "最低限生活リズムサークル", font=F(22, True), fill=CARD_MUTED, anchor="ra")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+async def post_monthly_trip_album(now=None):
+    """月末におでかけフォーラムへ今月のアルバムを投稿（写真つきの投稿がない月は何もしない）"""
+    now = now or now_jst()
+    fid = await meta_get("ch_odekake_forum")
+    forum = bot.get_channel(int(fid)) if fid else None
+    if not forum:
+        return False
+    items = await trip_album_items(day_str(now.replace(day=1)), day_str(now))
+    buf = await asyncio.to_thread(render_trip_album, now.month, items)
+    if not buf:
+        return False
+    await forum.create_thread(name=f"🗾 {now.month}月のおでかけアルバム", content="今月のおでかけ、おつかれさま！来月はどこへ行く？",
+                              file=discord.File(buf, filename="odekake_album.png"))
+    return True
+
 class OdekakePanelView(discord.ui.View):
     """#おでかけ🗾 のパネル"""
     def __init__(self):
@@ -10344,6 +10496,10 @@ class OdekakePanelView(discord.ui.View):
     async def see_btn(self, interaction, button):
         await send_trip_see(interaction)
 
+    @discord.ui.button(label="🎲 思い出ガチャ", style=discord.ButtonStyle.secondary, custom_id="sk_trip_gacha", row=1)
+    async def gacha_btn(self, interaction, button):
+        await send_trip_gacha(interaction)
+
 ODEKAKE_FORUM_NAME = "おでかけ🗾"
 ODEKAKE_TAGS = [("🗼", "都内")] + [("🗾", lb.split("（")[0]) for lb, _ns in PLACE_GROUPS["都外"]]
 ODEKAKE_TOPIC = ("おでかけの写真と、そこで何をしたかを共有する場所。写真を貼ってタイトルをつけ、思い出を書いて投稿してね。\n"
@@ -10355,16 +10511,19 @@ async def ensure_odekake_forum(guild, cat):
                                 layout=discord.ForumLayoutType.gallery_view)
     if not forum:
         return None
+    text = ("📷 おでかけの投稿で選んだ場所が、地図に載っていきます。\n"
+            "🗾 みんなの地図／🙋 じぶんの地図／📍 写真なしで記録／🔍 場所ごとの思い出／🎲 思い出ガチャ")
     pid = await meta_get("odekake_panel_thread")
     exists = False
     if pid:
         try:
-            exists = bool(guild.get_thread(int(pid)) or await guild.fetch_channel(int(pid)))
+            th = guild.get_thread(int(pid)) or await guild.fetch_channel(int(pid))
+            await (await th.fetch_message(th.id)).edit(content=text, view=OdekakePanelView())   # ボタンが増えても /setup で最新に
+            exists = True
         except Exception:
             exists = False
     if not exists:
-        made = await forum.create_thread(name="🗾 地図はここから", content="📷 おでかけの投稿で選んだ場所が、地図に載っていきます。\n"
-                                         "🗾 みんなの地図／🙋 じぶんの地図／📍 写真なしで記録／🔍 場所ごとの思い出", view=OdekakePanelView())
+        made = await forum.create_thread(name="🗾 地図はここから", content=text, view=OdekakePanelView())
         await made.thread.edit(pinned=True)
         await meta_set("odekake_panel_thread", made.thread.id)
     return forum

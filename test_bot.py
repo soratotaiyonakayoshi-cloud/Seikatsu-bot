@@ -1831,7 +1831,7 @@ async def main():
     check("おでかけ: じぶんの地図が開く", _i.followup.sent[0].startswith("🙋"), True)
     _i = _press(M(71, "旅人A")); await B.send_trip_map(_i, False, "都外")
     check("おでかけ: みんなの地図が開く", _i.followup.sent[0].startswith("🗾"), True)
-    check("おでかけ: パネル", [c.custom_id for c in B.OdekakePanelView().children], ["sk_trip_all", "sk_trip_mine", "sk_trip_add", "sk_trip_see"])
+    check("おでかけ: パネル", [c.custom_id for c in B.OdekakePanelView().children], ["sk_trip_all", "sk_trip_mine", "sk_trip_add", "sk_trip_see", "sk_trip_gacha"])
     check("おでかけ: テキストチャンネルは作らない（フォーラムへ）", "odekake" in B.CH, False)
     check("おでかけ: タグは都内＋7地方", [n for _e, n in B.ODEKAKE_TAGS], ["都内", "北海道・東北", "関東", "中部", "近畿", "中国", "四国", "九州・沖縄"])
     check("おでかけ: 場所→タグ", (B.trip_tag_name("都内", "府中市"), B.trip_tag_name("都外", "神奈川県"), B.trip_tag_name("都外", "沖縄県")), ("都内", "関東", "九州・沖縄"))
@@ -1879,6 +1879,42 @@ async def main():
     check("🔍 場所から見る: カードとリンクが出る", ("府中のお祭り" in _bq.response.edited[0]["content"], len(_bq.response.edited[0]["attachments"])), (True, 1))
     await B.db.execute("UPDATE trip_posts SET body='x' WHERE thread_id='900001'")
     await B.on_raw_message_edit(_NS2(message_id=900001, data={"content": "書き直した"}))
+    # 🖼 写真の地図・👀 同じ場所の人・🎲 ガチャ・🗓 月末アルバム（投稿 900001 が残っている間に）
+    check("写真の地図: 場所→縮小版", (await B.trip_photo_paths("都内"))["府中市"], _tp["thumb"])
+    _c, _bf = await B.trip_map_payload(M(71, "旅人A"), None, "都内", True)
+    check("写真の地図: PNG", _bf.read(4), b"\x89PNG")
+    _bx = _press(M(71, "旅人A"))
+    _mv = B.TripMapView(None, "都内")
+    check("地図のボタン: 都内・都外・写真", [c.label for c in _mv.children], ["🗼 都内", "🗾 都外", "🖼 写真で見る"])
+    await [c for c in _mv.children if "写真" in c.label][0].callback(_bx)
+    check("地図のボタン: 写真に切り替えると色に戻すボタン", [c.label for c in _bx.response.edited[0]["view"].children][-1], "🎨 色で見る")
+    check("👀 同じ場所の人: 自分以外を出す", "旅人B" in await B.trip_others_note(71, "都内", "府中市"), True)
+    check("👀 同じ場所の人: だれもいなければ空", await B.trip_others_note(71, "都外", "北海道"), "")
+    _g = await B.trip_gacha_pick(72)
+    check("🎲 ガチャ: 他の人の投稿を引く", (_g["thread_id"], _g["title"]), ("900001", "府中のお祭り"))
+    _g = await B.trip_gacha_pick(71)
+    check("🎲 ガチャ: 自分の投稿しかなければ自分の", _g["thread_id"], "900001")
+    _i = _press(M(72, "旅人B")); _i.guild_id = 1; await B.send_trip_gacha(_i)
+    check("🎲 ガチャ: パネルから開ける", "府中" in _i.followup.sent[0] or "思い出" in _i.followup.sent[0], True)
+    _bgv = B.TripGachaView()
+    _i = _press(M(72, "旅人B")); _i.guild_id = 1; await _bgv.again.callback(_i)
+    check("🎲 ガチャ: もう1回で更新", len(_i.response.edited[0]["attachments"]), 1)
+    _today = B.day_str(B.now_jst())
+    _items = await B.trip_album_items(_today, _today)
+    check("🗓 アルバム: 今月の投稿と場所", (len(_items), _items[0]["title"], _items[0]["place"]), (1, "府中のお祭り", "府中市"))
+    check("🗓 アルバム: PNG", B.render_trip_album(11, _items * 4).read(4), b"\x89PNG")
+    check("🗓 アルバム: 投稿がなければ描かない", B.render_trip_album(11, []), None)
+    _fm = []
+
+    async def _ct(**k):
+        _fm.append(k)
+    _forum = _NS2(create_thread=_ct)
+    await B.meta_set("ch_odekake_forum", 12345)
+    _gc = B.bot.get_channel
+    B.bot.get_channel = lambda i: _forum
+    check("🗓 アルバム: 月末にフォーラムへ投稿", (await B.post_monthly_trip_album(B.now_jst()), "アルバム" in _fm[0]["name"]), (True, True))
+    B.bot.get_channel = _gc
+    await B.db.execute("DELETE FROM meta WHERE key='ch_odekake_forum'"); await B.db.commit()
     check("おでかけ投稿: 本文の編集を反映", (await (await B.db.execute("SELECT body FROM trip_posts WHERE thread_id='900001'")).fetchone())["body"], "書き直した")
     _tpath = _tp["thumb"]
     check("おでかけ投稿: 消すと記録と縮小版も消える", (await B.remove_trip_post(900001), B.os.path.exists(_tpath), await B.trip_message_places(900001)), (True, False, []))
