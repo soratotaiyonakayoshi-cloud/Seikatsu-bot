@@ -1919,6 +1919,32 @@ async def main():
     _tpath = _tp["thumb"]
     check("おでかけ投稿: 消すと記録と縮小版も消える", (await B.remove_trip_post(900001), B.os.path.exists(_tpath), await B.trip_message_places(900001)), (True, False, []))
     check("起動時に おでかけのパネルも登録", B.OdekakePanelView in {type(v) for v in _fake.persistent_views}, True)
+    # 固定投稿（使い方）：初回は作って固定、2回目以降は本文を更新（増やさない）
+    _pinned, _made = [], []
+
+    async def _th_edit(**k):
+        _pinned.append(k)
+    _edited = []
+
+    async def _msg_edit(**k):
+        _edited.append(k)
+
+    async def _fetch_m(i):
+        return _NS2(edit=_msg_edit)
+    _gth = _NS2(id=777, name="古い名前", edit=_th_edit, fetch_message=_fetch_m)
+
+    async def _create(name=None, content=None, **k):
+        _made.append((name, content, k))
+        return _NS2(thread=_gth)
+    _fm2 = _NS2(create_thread=_create)
+    _gld = _NS2(get_thread=lambda i: _gth, fetch_channel=None)
+    await B.db.execute("DELETE FROM meta WHERE key='cinema_guide_thread'"); await B.db.commit()
+    await B._ensure_pinned_post(_gld, _fm2, "cinema_guide_thread", B.CINEMA_GUIDE_TITLE, B.CINEMA_GUIDE)
+    check("固定投稿: 初回は作って固定", (len(_made), _made[0][0], _pinned[0]), (1, B.CINEMA_GUIDE_TITLE, {"pinned": True}))
+    await B._ensure_pinned_post(_gld, _fm2, "cinema_guide_thread", B.CINEMA_GUIDE_TITLE, B.CINEMA_GUIDE)
+    check("固定投稿: 2回目は更新だけ（増えない）・名前も直す", (len(_made), _edited[0]["content"] == B.CINEMA_GUIDE, _pinned[-1]), (1, True, {"name": B.CINEMA_GUIDE_TITLE}))
+    await B.db.execute("DELETE FROM meta WHERE key='cinema_guide_thread'"); await B.db.commit()
+    check("固定投稿: 文字数は上限内", (len(B.ODEKAKE_GUIDE) < 2000, len(B.CINEMA_GUIDE) < 2000, len(B.ODEKAKE_GUIDE_TITLE) <= 100), (True, True, True))
     check("NOKOシネマズ: 名前とタグ", (B.CINEMA_CH_NAME, "ネタバレあり" in [n for _e, n in B.CINEMA_TAGS]), ("NOKOシネマズ", True))
     # 構文チェック：押した人への返事より前に遅い処理（投稿・VC接続・外部通信・画像づくり）をしていないか
     check("返事より前に遅い処理をしている箇所がない", _late_reply_handlers(open(B.__file__, encoding="utf-8").read()), [])

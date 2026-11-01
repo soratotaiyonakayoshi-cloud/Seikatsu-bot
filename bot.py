@@ -10505,27 +10505,48 @@ ODEKAKE_TAGS = [("🗼", "都内")] + [("🗾", lb.split("（")[0]) for lb, _ns 
 ODEKAKE_TOPIC = ("おでかけの写真と、そこで何をしたかを共有する場所。写真を貼ってタイトルをつけ、思い出を書いて投稿してね。\n"
                  "投稿すると Bot が 📍 を出すので、場所を選ぶと地図にも載ります。地図は上に固定した投稿から。")
 
+ODEKAKE_GUIDE_TITLE = "🗾 使い方と地図はここから"
+ODEKAKE_GUIDE = ("おでかけの写真と、そこで何をしたかを共有する場所です。行った場所は地図にも載ります。\n\n"
+                 "**投稿のしかた**\n"
+                 "1. 写真を貼って、タイトルと思い出を書いて投稿する\n"
+                 "2. Botが出す「📍」を押して、場所を選ぶ（投稿した本人だけが選べます）\n"
+                 "3. 地図に載って、タグも自動でつく\n"
+                 "-# 何か所も回ったときは「📍 もう1か所」で足せます。投稿を消すと、地図の記録も一緒に消えます\n\n"
+                 "**下のボタン**\n"
+                 "🗾 みんなの地図：行った人が多い場所ほど色が濃くなります\n"
+                 "🙋 じぶんの地図：自分が行った場所だけに色がつきます（🗑 で記録を消せます）\n"
+                 "📍 写真なしで記録：昔行った場所も入れられます\n"
+                 "🔍 場所から見る：その場所の写真と思い出が読めます\n"
+                 "🎲 思い出ガチャ：誰かの思い出が1つ出てきます\n"
+                 "-# 地図は「都内」と「都外」の2枚で、🖼 を押すと写真でも見られます。月末には、その月のおでかけアルバムが届きます")
+
+async def _ensure_pinned_post(guild, forum, meta_key, title, text, view=None):
+    """フォーラムの固定投稿（使い方など）を用意。/setup のたびに本文とボタンを最新にする（フォーラムで固定できるのは1つだけ）"""
+    pid = await meta_get(meta_key)
+    if pid:
+        try:
+            th = guild.get_thread(int(pid)) or await guild.fetch_channel(int(pid))
+        except discord.NotFound:
+            th = None   # 手で消された→作り直す
+        if th:
+            kwargs = {"view": view} if view else {}
+            await (await th.fetch_message(th.id)).edit(content=text, **kwargs)
+            if th.name != title:
+                await th.edit(name=title)
+            return th
+    kwargs = {"view": view} if view else {}
+    made = await forum.create_thread(name=title, content=text, **kwargs)
+    await made.thread.edit(pinned=True)
+    await meta_set(meta_key, made.thread.id)
+    return made.thread
+
 async def ensure_odekake_forum(guild, cat):
     """おでかけフォーラム（ギャラリー表示）と、地図のボタンを置く固定投稿を用意"""
     forum = await _ensure_forum(guild, cat, "odekake_forum", ODEKAKE_FORUM_NAME, ODEKAKE_TAGS, ODEKAKE_TOPIC,
                                 layout=discord.ForumLayoutType.gallery_view)
     if not forum:
         return None
-    text = ("📷 おでかけの投稿で選んだ場所が、地図に載っていきます。\n"
-            "🗾 みんなの地図／🙋 じぶんの地図／📍 写真なしで記録／🔍 場所ごとの思い出／🎲 思い出ガチャ")
-    pid = await meta_get("odekake_panel_thread")
-    exists = False
-    if pid:
-        try:
-            th = guild.get_thread(int(pid)) or await guild.fetch_channel(int(pid))
-            await (await th.fetch_message(th.id)).edit(content=text, view=OdekakePanelView())   # ボタンが増えても /setup で最新に
-            exists = True
-        except Exception:
-            exists = False
-    if not exists:
-        made = await forum.create_thread(name="🗾 地図はここから", content=text, view=OdekakePanelView())
-        await made.thread.edit(pinned=True)
-        await meta_set("odekake_panel_thread", made.thread.id)
+    await _ensure_pinned_post(guild, forum, "odekake_panel_thread", ODEKAKE_GUIDE_TITLE, ODEKAKE_GUIDE, OdekakePanelView())
     return forum
 
 # ---- 📊 みんなの最低限（設定の一覧表を1枚の画像に。押した人にだけ表示） ----
@@ -12183,6 +12204,12 @@ CINEMA_CH_NAME = "NOKOシネマズ"
 CINEMA_TAGS = [("🟢", "ネタバレなし"), ("🔴", "ネタバレあり"), ("🎬", "映画"), ("📺", "ドラマ"), ("🎞", "アニメ"), ("📦", "その他")]
 CINEMA_TOPIC = ("見た映画・ドラマ・アニメの感想を語る場所。1作品につき1スレッドで、まず同じ作品のスレッドがないか探してね。\n"
                 "タグで「ネタバレなし／あり」を選ぶこと。ネタバレなしのスレッドで内容に触れるときは ||こう囲む|| と隠せます。")
+CINEMA_GUIDE_TITLE = "🎬 使い方（はじめに読んでね）"
+CINEMA_GUIDE = ("見た映画・ドラマ・アニメの感想を語る場所です。\n\n"
+                "1. 同じ作品のスレッドがないか探す（あれば、そこに書き込む）\n"
+                "2. なければ、作品名をタイトルにして投稿する\n"
+                "3. タグで「ネタバレなし／あり」と種類を選ぶ\n\n"
+                "-# ネタバレなしのスレッドで内容に触れるときは ||こう囲む|| と隠せます")
 TIPS_CH_NAME = "暮らしのtips📚"
 TIPS_TAGS = [("🍳", "レシピ"), ("🛒", "お得・期間限定"), ("🧹", "家事ハック"), ("💤", "ねむり"), ("🏫", "キャンパス周辺"), ("📦", "その他")]
 TIPS_TOPIC = ("暮らしの知恵をストックする場所。レシピ・お店の期間限定・家事ハックなど、後輩の生活を1つ楽にする投稿を。\n"
@@ -12812,7 +12839,10 @@ async def ensure_tips_forum(guild, cat):
     return await _ensure_forum(guild, cat, "tips", TIPS_CH_NAME, TIPS_TAGS, TIPS_TOPIC)
 
 async def ensure_cinema_forum(guild, cat):
-    return await _ensure_forum(guild, cat, "cinema", CINEMA_CH_NAME, CINEMA_TAGS, CINEMA_TOPIC)
+    forum = await _ensure_forum(guild, cat, "cinema", CINEMA_CH_NAME, CINEMA_TAGS, CINEMA_TOPIC)
+    if forum:
+        await _ensure_pinned_post(guild, forum, "cinema_guide_thread", CINEMA_GUIDE_TITLE, CINEMA_GUIDE)
+    return forum
 
 
 # ============================================================
