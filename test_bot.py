@@ -1908,11 +1908,11 @@ async def main():
 
     async def _ct(**k):
         _fm.append(k)
-    _forum = _NS2(create_thread=_ct)
+    _forum = _NS2(create_thread=_ct, available_tags=[_NS2(name="案内")])
     await B.meta_set("ch_odekake_forum", 12345)
     _gc = B.bot.get_channel
     B.bot.get_channel = lambda i: _forum
-    check("🗓 アルバム: 月末にフォーラムへ投稿", (await B.post_monthly_trip_album(B.now_jst()), "アルバム" in _fm[0]["name"]), (True, True))
+    check("🗓 アルバム: 月末にフォーラムへ投稿", (await B.post_monthly_trip_album(B.now_jst()), "アルバム" in _fm[0]["name"], len(_fm[0]["applied_tags"])), (True, True, 1))
     B.bot.get_channel = _gc
     await B.db.execute("DELETE FROM meta WHERE key='ch_odekake_forum'"); await B.db.commit()
     check("おでかけ投稿: 本文の編集を反映", (await (await B.db.execute("SELECT body FROM trip_posts WHERE thread_id='900001'")).fetchone())["body"], "書き直した")
@@ -1936,11 +1936,28 @@ async def main():
     async def _create(name=None, content=None, **k):
         _made.append((name, content, k))
         return _NS2(thread=_gth)
-    _fm2 = _NS2(create_thread=_create)
+    _tag_new = _NS2(name="案内")
+    _fedits = []
+
+    async def _forum_edit(**k):
+        _fedits.append(k)
+        return _NS2(available_tags=[_tag_new])
+    _fm2 = _NS2(create_thread=_create, available_tags=[], edit=_forum_edit, name="テスト")
     _gld = _NS2(get_thread=lambda i: _gth, fetch_channel=None)
     await B.db.execute("DELETE FROM meta WHERE key='cinema_guide_thread'"); await B.db.commit()
     await B._ensure_pinned_post(_gld, _fm2, "cinema_guide_thread", B.CINEMA_GUIDE_TITLE, B.CINEMA_GUIDE)
     check("固定投稿: 初回は作って固定", (len(_made), _made[0][0], _pinned[0]), (1, B.CINEMA_GUIDE_TITLE, {"pinned": True}))
+    check("固定投稿: タグ必須でも投稿できるよう案内タグをつける", (_made[0][2]["applied_tags"], _fedits[0]["available_tags"][0].name, _fedits[0]["available_tags"][0].moderated), ([_tag_new], "案内", True))
+    _fm3 = _NS2(available_tags=[_tag_new])
+    check("案内タグ: すでにあれば増やさない", await B._notice_tag(_fm3), _tag_new)
+
+    async def _boom_create(**k):
+        raise RuntimeError("40067")
+    _em0 = len(B.SETUP_ERRORS)
+    await B.db.execute("DELETE FROM meta WHERE key='x_thread'"); await B.db.commit()
+    await B._ensure_pinned_post_safe(_gld, _NS2(create_thread=_boom_create, available_tags=[_tag_new], name="テスト"), "x_thread", "t", "c")
+    check("固定投稿: 失敗しても /setup は止めず警告に回す", len(B.SETUP_ERRORS), _em0 + 1)
+    del B.SETUP_ERRORS[_em0:]
     await B._ensure_pinned_post(_gld, _fm2, "cinema_guide_thread", B.CINEMA_GUIDE_TITLE, B.CINEMA_GUIDE)
     check("固定投稿: 2回目は更新だけ（増えない）・名前も直す", (len(_made), _edited[0]["content"] == B.CINEMA_GUIDE, _pinned[-1]), (1, True, {"name": B.CINEMA_GUIDE_TITLE}))
     await B.db.execute("DELETE FROM meta WHERE key='cinema_guide_thread'"); await B.db.commit()

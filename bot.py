@@ -10471,8 +10471,9 @@ async def post_monthly_trip_album(now=None):
     buf = await asyncio.to_thread(render_trip_album, now.month, items)
     if not buf:
         return False
+    tag = await _notice_tag(forum)   # フォーラムが「タグ必須」でも投稿できるように
     await forum.create_thread(name=f"🗾 {now.month}月のおでかけアルバム", content="今月のおでかけ、おつかれさま！来月はどこへ行く？",
-                              file=discord.File(buf, filename="odekake_album.png"))
+                              file=discord.File(buf, filename="odekake_album.png"), **({"applied_tags": [tag]} if tag else {}))
     return True
 
 class OdekakePanelView(discord.ui.View):
@@ -10520,6 +10521,29 @@ ODEKAKE_GUIDE = ("おでかけの写真と、そこで何をしたかを共有�
                  "🎲 思い出ガチャ：誰かの思い出が1つ出てきます\n"
                  "-# 地図は「都内」と「都外」の2枚で、🖼 を押すと写真でも見られます。月末には、その月のおでかけアルバムが届きます")
 
+NOTICE_TAG = "案内"
+
+async def _notice_tag(forum):
+    """Botの投稿（使い方・アルバム）につけるタグ。フォーラムが「タグ必須」でも投稿できるように用意する。
+    管理者専用タグなのでメンバーの投稿画面には出ない。用意できなければ None"""
+    find = lambda f: next((t for t in f.available_tags if t.name == NOTICE_TAG), None)
+    tag = find(forum)
+    if tag:
+        return tag
+    try:
+        new = discord.ForumTag(name=NOTICE_TAG, emoji=discord.PartialEmoji(name="📌"), moderated=True)
+        return find(await forum.edit(available_tags=[*forum.available_tags, new], reason="Botの投稿用タグ"))
+    except Exception as e:
+        print(f"案内タグの追加に失敗: {e!r}", flush=True)
+        return None
+
+async def _ensure_pinned_post_safe(guild, forum, meta_key, title, text, view=None):
+    """固定投稿が作れなくても /setup 全体は止めず、完了メッセージで知らせる"""
+    try:
+        await _ensure_pinned_post(guild, forum, meta_key, title, text, view)
+    except Exception as e:
+        SETUP_ERRORS.append(f"#{forum.name} の固定投稿を用意できませんでした（{e}）")
+
 async def _ensure_pinned_post(guild, forum, meta_key, title, text, view=None):
     """フォーラムの固定投稿（使い方など）を用意。/setup のたびに本文とボタンを最新にする（フォーラムで固定できるのは1つだけ）"""
     pid = await meta_get(meta_key)
@@ -10535,6 +10559,9 @@ async def _ensure_pinned_post(guild, forum, meta_key, title, text, view=None):
                 await th.edit(name=title)
             return th
     kwargs = {"view": view} if view else {}
+    tag = await _notice_tag(forum)
+    if tag:
+        kwargs["applied_tags"] = [tag]
     made = await forum.create_thread(name=title, content=text, **kwargs)
     await made.thread.edit(pinned=True)
     await meta_set(meta_key, made.thread.id)
@@ -10546,7 +10573,7 @@ async def ensure_odekake_forum(guild, cat):
                                 layout=discord.ForumLayoutType.gallery_view)
     if not forum:
         return None
-    await _ensure_pinned_post(guild, forum, "odekake_panel_thread", ODEKAKE_GUIDE_TITLE, ODEKAKE_GUIDE, OdekakePanelView())
+    await _ensure_pinned_post_safe(guild, forum, "odekake_panel_thread", ODEKAKE_GUIDE_TITLE, ODEKAKE_GUIDE, OdekakePanelView())
     return forum
 
 # ---- 📊 みんなの最低限（設定の一覧表を1枚の画像に。押した人にだけ表示） ----
@@ -12841,7 +12868,7 @@ async def ensure_tips_forum(guild, cat):
 async def ensure_cinema_forum(guild, cat):
     forum = await _ensure_forum(guild, cat, "cinema", CINEMA_CH_NAME, CINEMA_TAGS, CINEMA_TOPIC)
     if forum:
-        await _ensure_pinned_post(guild, forum, "cinema_guide_thread", CINEMA_GUIDE_TITLE, CINEMA_GUIDE)
+        await _ensure_pinned_post_safe(guild, forum, "cinema_guide_thread", CINEMA_GUIDE_TITLE, CINEMA_GUIDE)
     return forum
 
 
