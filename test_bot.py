@@ -41,6 +41,89 @@ check("定例曜日: 単発", B.parse_day_chars_input("日"), ["日"])
 check("定例曜日: 複数・週順に整列", B.parse_day_chars_input("木、月"), ["月", "木"])
 check("定例曜日: 不正は None", B.parse_day_chars_input("丑"), None)
 check("定例曜日: 連結表記 土日", B.parse_day_chars_input("土日"), ["土", "日"])
+def _late_reply_handlers(src):
+    """interaction を受ける処理で、最初の返事より前に遅い処理を await している関数名の一覧。
+    OK_NAMES は 呼び出し元で返事済み／条件つきで先に返事していて構文だけでは判定できないもの"""
+    import ast
+    OK_NAMES = {"do_play", "enqueue_lazy", "send_current_lyrics", "record_wake", "do_copy_timetable",
+                "on_app_command_error", "_view_on_error", "on_interaction"}
+    SLOW_ATTR = {"send", "edit", "delete", "fetch_message", "add_reaction", "remove_reaction", "add_roles", "remove_roles",
+                 "fetch_user", "fetch_member", "create_thread", "purge", "fetch_channel", "pin", "connect", "move_to", "disconnect"}
+    tree = ast.parse(src)
+    funcs = {}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.AsyncFunctionDef):
+            funcs.setdefault(n.name, []).append(n)
+
+    def is_direct(c):
+        f = c.func
+        if isinstance(f, ast.Attribute):
+            r = ast.unparse(f.value)
+            if f.attr in SLOW_ATTR:
+                return not (r.endswith("response") or r.endswith("followup") or r == "db")
+            if f.attr in ("get", "post") and r in ("sess", "session"):
+                return True
+            return ast.unparse(f) == "asyncio.to_thread"
+        return False
+
+    def own_calls(fn):   # create_task(...) の中は裏で動くので返事を待たせない
+        out, stack = [], [fn]
+        while stack:
+            x = stack.pop()
+            if isinstance(x, ast.Call) and ast.unparse(x.func).endswith("create_task"):
+                continue
+            if isinstance(x, ast.Call):
+                out.append(x)
+            stack.extend(ast.iter_child_nodes(x))
+        return out
+    slow = {name for name, fns in funcs.items() for fn in fns if any(is_direct(c) for c in own_calls(fn))}
+    changed = True
+    while changed:
+        changed = False
+        for name, fns in funcs.items():
+            if name not in slow and any(isinstance(c.func, ast.Name) and c.func.id in slow for fn in fns for c in own_calls(fn)):
+                slow.add(name)
+                changed = True
+
+    def replies(c):
+        t = ast.unparse(c.func)
+        if t.startswith("interaction.response."):
+            return True
+        return isinstance(c.func, ast.Name) and c.func.id != "ensure_user" and any(isinstance(a, ast.Name) and a.id == "interaction" for a in c.args)
+
+    def scan(stmts, bad):
+        for st in stmts:
+            if isinstance(st, ast.If):
+                r1 = scan(st.body, bad)
+                r2 = scan(st.orelse, bad)
+                if r1 and r2 and st.orelse:
+                    return True
+                continue
+            if isinstance(st, (ast.Try, ast.For, ast.AsyncFor, ast.With, ast.AsyncWith)):
+                if scan(st.body, bad):
+                    return True
+                continue
+            calls = [c for c in ast.walk(st) if isinstance(c, ast.Call)]
+            if any(replies(c) for c in calls):
+                return True
+            for x in ast.walk(st):
+                if isinstance(x, ast.Await) and isinstance(x.value, ast.Call):
+                    c = x.value
+                    if is_direct(c) or (isinstance(c.func, ast.Name) and c.func.id in slow):
+                        bad.append(ast.unparse(c.func))
+        return False
+    out = []
+    for name, fns in funcs.items():
+        if name in OK_NAMES:
+            continue
+        for fn in fns:
+            if "interaction" in [a.arg for a in fn.args.args]:
+                bad = []
+                scan(fn.body, bad)
+                if bad:
+                    out.append(f"{fn.lineno}:{name}:{bad[0]}")
+    return sorted(out)
+
 check("設定パネル: 🛠ボタンあり", any(getattr(i, "custom_id", "") == "sk_saitei" for i in B.SetteiView().children), True)
 check("設定パネル: 項目セレクトは14項目", len(B.SaiteiSelect().options), 14)
 
@@ -1578,7 +1661,11 @@ async def main():
 
     def _press(user):
         from types import SimpleNamespace as _NS
-        return _NS(user=user, response=_Resp(), followup=_Followup(), guild=None, message=None)
+        _r = _Resp()
+
+        async def _edit_orig(**k):
+            _r.edited.append(k)
+        return _NS(user=user, response=_r, followup=_Followup(), guild=None, message=None, edit_original_response=_edit_orig)
     _gb = B.GroupPraiseButton(ids[0])
     _i = _press(M(67, "ほめる人")); await B.ensure_user(_i.user)
     await _gb.callback(_i)
@@ -1641,6 +1728,65 @@ async def main():
     check("🩺 切り分けの1行", B.diag_text(3.4, 0.2, [(0.0, 0), (2.5, 340), (0.1, 3)]),
           "操作から失敗まで 3.4秒・Botに届くまで 0.2秒・直近10秒のループ停止 最大2.5秒・スワップ読み戻し 343回")
     check("🩺 届いた時間が不明でも落ちない", B.diag_text(3.0, None, []), "操作から失敗まで 3.0秒・Botに届くまで 不明・直近10秒のループ停止 最大0.0秒・スワップ読み戻し 0回")
+    # 返事が先：チャンネルへの通信の時点で、押した人への返事（またはdefer）が済んでいること（3秒制限対策）
+    from types import SimpleNamespace as _NS2
+    _seen, _cur = [], {"i": None}
+
+    async def _noop(*a, **k):
+        return None
+
+    class _FakeCh:
+        guild, id = None, 1
+
+        async def send(self, *a, **k):
+            _seen.append(_cur["i"].response.is_done())
+            return _NS2(id=999, add_reaction=_noop, jump_url="x")
+
+        async def fetch_message(self, mid):
+            _seen.append(_cur["i"].response.is_done())
+            return _NS2(id=int(mid), edit=_noop, delete=_noop, guild=None, content="")
+
+    async def _fake_get_ch(key):
+        return _FakeCh()
+    _rg, _rb = B.get_ch, B.bump_panel
+    B.get_ch, B.bump_panel = _fake_get_ch, _noop
+    try:
+        async def _run(label, make_call):
+            _seen.clear()
+            _cur["i"] = _press(M(68, "記録する人"))
+            await make_call(_cur["i"])
+            check(f"返事が先: {label}", (len(_seen) > 0, all(_seen), _cur["i"].response.is_done()), (True, True, True))
+        _em = B.EraiModal(); _em.what._value = "がんばった"
+        await _run("🌟 えらい", _em.on_submit)
+        check("返事が先: 🌟 の返事が届く", _cur["i"].followup.sent[0].startswith("🌟"), True)
+        _mm = B.MemoModal(); _mm.what._value = "買い物"; _mm.until._value = ""
+        await _run("📌 やること宣言", _mm.on_submit)
+        _v2 = B.StudyEntryView(68, ["英語"]); _v2.minutes = 15
+        await _run("📖 勉強の ✅", _v2._commit)
+        check("返事が先: 📖 の画面が更新される", "15分" in _cur["i"].response.edited[0]["content"], True)
+        await B.db.execute("INSERT OR REPLACE INTO study_timers(user_id,subject,start_ts,warned) VALUES('68','数学',?,0)", (int(B.now_jst().timestamp()) - 600,))
+        await B.db.commit()
+        await _run("⏱ タイマーの ⏹", B.StudyTimerRunView(68).stop_btn.callback)
+        _aid = (await (await B.db.execute("SELECT id FROM assignments WHERE title='つまりテスト'")).fetchone())["id"]
+        await _run("課題の取り下げ", lambda i: B.kadai_delete.callback(i, str(_aid)))
+        await B.db.execute("DELETE FROM memos WHERE user_id='68'")
+        _ids2 = []
+        for _t in ("a", "b"):
+            _c = await B.db.execute("INSERT INTO memos(user_id,text,day,ts,msg_id) VALUES('68',?,?,0,'555')", (_t, B.day_str(B.now_jst())))
+            _ids2.append(_c.lastrowid)
+        await B.db.commit()
+        _row = await (await B.db.execute("SELECT * FROM memos WHERE id=?", (_ids2[0],))).fetchone()
+        await _run("📋 やること一覧の ✅", B.MemoListButton(_row).callback)
+    finally:
+        B.get_ch, B.bump_panel = _rg, _rb
+    _i = _press(M(70, "朝の人")); await B.ensure_user(_i.user)
+    await B.record_wake(_i, B.now_jst(), None)
+    check("☀️ 起きた: 先に受け付けて followup で返事", (_i.response.deferred, _i.response.sent, len(_i.followup.sent)), (True, [], 1))
+    _i = _press(M(70, "朝の人")); await _i.response.defer()
+    await B._view_on_error(None, _i, RuntimeError("途中で失敗"), _NS2(custom_id="sk_x"))
+    check("defer後のエラー: 「考え中」のまま止めず返事を出す", "うまく処理できません" in _i.followup.sent[0], True)
+    # 構文チェック：押した人への返事より前に遅い処理（投稿・VC接続・外部通信・画像づくり）をしていないか
+    check("返事より前に遅い処理をしている箇所がない", _late_reply_handlers(open(B.__file__, encoding="utf-8").read()), [])
     # await を含むジェネレータ式（any(... await ...) など）は実行時に TypeError になる。コードに残っていないか構文から確認
     import ast as _ast
     _src = open(B.__file__, encoding="utf-8").read()

@@ -685,6 +685,8 @@ async def post_log(key, text):
 # ------------------------------------------------------------
 async def record_wake(interaction, wake_dt, bed_dt, already_responded=False):
     user = interaction.user
+    if not already_responded:
+        await interaction.response.defer(ephemeral=True)   # 朝の予定に天気の取得が入るので先に受け付ける
     await add_event(user.id, "wake", ts_dt=wake_dt)
     sleep_txt = "睡眠時間 未記録"
     if bed_dt:
@@ -707,10 +709,7 @@ async def record_wake(interaction, wake_dt, bed_dt, already_responded=False):
         msg += "\n" + await mycheck_text(user.id, day_str(wake_dt))
         kwargs["view"] = await MyCheckView.build(user.id, day_str(wake_dt))
     msg += hitokoto_suffix()
-    if already_responded:
-        await interaction.followup.send(msg, **kwargs)
-    else:
-        await interaction.response.send_message(msg, **kwargs)
+    await interaction.followup.send(msg, **kwargs)
     await post_log("wake", f"☀️ **{user.display_name}** {hhmm(wake_dt)} 起床（{sleep_txt}）{late}")
 
 class SleepModal(discord.ui.Modal, title="🌙 昨夜は何時に寝た？"):
@@ -3827,8 +3826,8 @@ async def bgm_start(interaction):
 
 @bgm_grp.command(name="stop", description="BGM・再生をぜんぶ止めてVCから退出")
 async def bgm_stop(interaction):
-    await stop_player()
     await interaction.response.send_message("⏹ 止めました。")
+    await stop_player()
 
 @bgm_grp.command(name="list", description="入っているBGM音源の一覧")
 async def bgm_list(interaction):
@@ -4013,10 +4012,11 @@ class AmbientSelect(discord.ui.Select):
                          min_values=1, max_values=min(5, len(opts)))
 
     async def callback(self, interaction):
+        await interaction.response.defer()   # VC接続は最大20秒かかる
         prefer = interaction.user.voice.channel if getattr(interaction.user, "voice", None) and interaction.user.voice else None
         vc = await ensure_player_vc(prefer)
         if not vc:
-            await interaction.response.edit_message(content="❌ VCに接続できませんでした。どこかのVCに入ってから実行してね。", view=None)
+            await interaction.edit_original_response(content="❌ VCに接続できませんでした。どこかのVCに入ってから実行してね。", view=None)
             return
         _player["vc"] = vc
         names = [os.path.splitext(v)[0] for v in self.values]
@@ -4027,7 +4027,7 @@ class AmbientSelect(discord.ui.Select):
             vc.stop()   # afterコールバックが先頭の環境音を再生する
         else:
             await _play_next()
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content="🌿 環境音をはじめました：**" + "＋".join(names) + "**\n-# 組み合わせを変えるならもう一度 `/ambient`、やめるなら `/skip` か `/stop`", view=None)
 
 async def send_ambient_picker(interaction):
@@ -4095,14 +4095,15 @@ async def shuffle_command(interaction):
 
 @bot.tree.command(name="join", description="BotをVCに呼ぶ（待機・準備だけして再生はしない）")
 async def join_command(interaction):
+    await interaction.response.defer()   # VC接続は最大20秒かかる
     prefer = interaction.user.voice.channel if getattr(interaction.user, "voice", None) and interaction.user.voice else None
     vc = await ensure_player_vc(prefer)
     if not vc:
-        await interaction.response.send_message("❌ VCに接続できませんでした。どこかのVCに入ってから実行してね。", ephemeral=True)
+        await interaction.followup.send("❌ VCに接続できませんでした。どこかのVCに入ってから実行してね。")
         return
     _player["vc"] = vc
     asyncio.create_task(warmup_player("/join"))   # 待機中に解読キャッシュを温めておく
-    await interaction.response.send_message(f"🎧 {vc.channel.mention} で待機します。`/play` でいつでもどうぞ（退出は `/stop`）")
+    await interaction.followup.send(f"🎧 {vc.channel.mention} で待機します。`/play` でいつでもどうぞ（退出は `/stop`）")
 
 @bot.tree.command(name="skip", description="いま流れている曲をスキップ")
 async def skip_command(interaction):
@@ -4115,8 +4116,8 @@ async def skip_command(interaction):
 
 @bot.tree.command(name="stop", description="再生をぜんぶ止めてVCから退出")
 async def stop_command(interaction):
-    await stop_player()
     await interaction.response.send_message("⏹ 停止しました。")
+    await stop_player()
 
 # ------------------------------------------------------------
 #  📂 みんなのプレイリスト＆⭐おすすめ曲（サーバー内プリセット＝URLの自動入力）
@@ -5369,8 +5370,8 @@ class MusicPanelView(discord.ui.View):
 
     @discord.ui.button(label="退出", emoji="⏹", style=discord.ButtonStyle.danger, custom_id="sk_mu_stop", row=1)
     async def b_stop(self, interaction, button):
-        await stop_player()
         await interaction.response.send_message("⏹ ぜんぶ止めてVCから退出しました。", ephemeral=True)
+        await stop_player()
 
     @discord.ui.button(label="みんなのプレイリスト", emoji="📂", style=discord.ButtonStyle.secondary, custom_id="sk_mu_lists", row=2)
     async def b_lists(self, interaction, button):
@@ -6090,16 +6091,17 @@ async def send_timetable(interaction):
     if not rows and not personal:
         await interaction.response.send_message("まだ履修科目がありません。「🎓 履修科目を登録」か `/jikanwari add` からどうぞ！", ephemeral=True)
         return
+    await interaction.response.defer(ephemeral=True)   # 画像づくりで3秒を超えることがある
     buf = await asyncio.to_thread(render_timetable, interaction.user.display_name, rows + personal)
     unslotted = [r["name"] for r in rows
                  if not any(len(s.strip()) >= 2 and s.strip()[0] in DAY_CHARS and s.strip()[1:].isdigit()
                             for s in (r["slots"] or "").split(","))]
     if not buf:
-        await interaction.response.send_message("時限情報のある科目が無いため、時間割を描けませんでした（自由入力の科目には時限がありません）。", ephemeral=True)
+        await interaction.followup.send("時限情報のある科目が無いため、時間割を描けませんでした（自由入力の科目には時限がありません）。", ephemeral=True)
         return
     note = f"\n-# 時限が未登録のため載っていない科目：{', '.join(unslotted)}" if unslotted else ""
-    await interaction.response.send_message("🗓 いまの履修科目から時間割を作りました。" + note,
-                                            file=discord.File(buf, filename="jikanwari.png"), ephemeral=True)
+    await interaction.followup.send("🗓 いまの履修科目から時間割を作りました。" + note,
+                                    file=discord.File(buf, filename="jikanwari.png"), ephemeral=True)
 
 @jikanwari.command(name="hyou", description="履修科目から時間割の画像を書き出す（自分にだけ表示）")
 async def jikanwari_hyou(interaction):
@@ -6164,6 +6166,8 @@ async def do_copy_timetable(interaction, src_uid):
         await interaction.response.send_message(f"**{src_name}** さんはまだ履修科目を登録していません。", ephemeral=True)
         return
     mine = await user_course_rows(me)
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)   # 画像づくりで3秒を超えることがある
     buf = await asyncio.to_thread(render_timetable, interaction.user.display_name, mine)
     view = discord.ui.View(timeout=600)
     view.add_item(CopyTrimSelect(mine))
@@ -6173,10 +6177,7 @@ async def do_copy_timetable(interaction, src_uid):
     kwargs = {"ephemeral": True, "view": view}
     if buf:
         kwargs["file"] = discord.File(buf, filename="jikanwari.png")
-    if interaction.response.is_done():
-        await interaction.followup.send(txt, **kwargs)
-    else:
-        await interaction.response.send_message(txt, **kwargs)
+    await interaction.followup.send(txt, **kwargs)
 
 class CopySrcSelect(discord.ui.Select):
     def __init__(self, cands):
@@ -6401,15 +6402,15 @@ class KadaiDoneSelect(discord.ui.Select):
         for v in self.values:
             await kadai_mark(int(v), uid, False)
         await db.commit()
+        emb = await kadai_list_embed(uid)
+        view = await kadai_list_view(uid)
+        await interaction.response.edit_message(content=f"✅ {len(self.values)} 件を完了にしました{'。ぜんぶ片付いた🎉' if view is None else '！'}",
+                                                embed=emb, view=view or discord.ui.View())
         for v in self.values:
             try:
                 await maybe_celebrate(int(v))
             except Exception as e:
                 print(f"全員提出祝福エラー: {e!r}", flush=True)
-        emb = await kadai_list_embed(uid)
-        view = await kadai_list_view(uid)
-        await interaction.response.edit_message(content=f"✅ {len(self.values)} 件を完了にしました{'。ぜんぶ片付いた🎉' if view is None else '！'}",
-                                                embed=emb, view=view or discord.ui.View())
 
 class KadaiSkipSelect(discord.ui.Select):
     """選択式の課題など、自分は出さないものを外す（リマインド・一覧から消える）"""
@@ -6427,16 +6428,16 @@ class KadaiSkipSelect(discord.ui.Select):
         for v in self.values:
             await kadai_mark(int(v), uid, True)
         await db.commit()
-        for v in self.values:
-            try:
-                await maybe_celebrate(int(v))
-            except Exception as e:
-                print(f"全員提出祝福エラー: {e!r}", flush=True)
         emb = await kadai_list_embed(uid)
         view = await kadai_list_view(uid)
         await interaction.response.edit_message(
             content=f"🚫 {len(self.values)} 件を「提出しない」にしました（リマインドも止まります）。取り消しは下の↩から",
             embed=emb, view=view or discord.ui.View())
+        for v in self.values:
+            try:
+                await maybe_celebrate(int(v))
+            except Exception as e:
+                print(f"全員提出祝福エラー: {e!r}", flush=True)
 
 class KadaiUnskipSelect(discord.ui.Select):
     def __init__(self, rows):
@@ -6480,8 +6481,9 @@ class KigenHenkoModal(discord.ui.Modal):
         if not due:
             await interaction.response.send_message("⚠️ 期限の形式が読めませんでした。例: `10/15` `10/15 17:00`", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True)
         a = await kadai_set_due(self.aid, due, interaction.user.display_name)
-        await interaction.response.send_message(f"🕑 「{a['title']}」の期限を {fmt_due(due)} に変更しました。", ephemeral=True)
+        await interaction.followup.send(f"🕑 「{a['title']}」の期限を {fmt_due(due)} に変更しました。", ephemeral=True)
 
 async def kadai_list_view(uid):
     """課題一覧に添える操作プルダウン（✅チェック＋🕑期限変更）。対象が無ければ None"""
@@ -6709,8 +6711,8 @@ async def kadai_kigen(interaction, kadai_id: str, kigen: str):
     if not due:
         await interaction.response.send_message("⚠️ 期限の形式が読めませんでした。例: `10/15` `10/15 17:00`", ephemeral=True)
         return
-    await kadai_set_due(a["id"], due, interaction.user.display_name)
     await interaction.response.send_message(f"🕑 「{a['title']}」の期限を {fmt_due(due)} に変更しました。", ephemeral=True)
+    await kadai_set_due(a["id"], due, interaction.user.display_name)
 
 @kadai.command(name="delete", description="課題を取り下げる（登録者または同じ科目の履修者）")
 @app_commands.describe(kadai_id="課題")
@@ -6722,11 +6724,11 @@ async def kadai_delete(interaction, kadai_id: str):
         return
     await db.execute("UPDATE assignments SET closed=1 WHERE id=?", (a["id"],))
     await db.commit()
+    await interaction.response.send_message("取り下げました。", ephemeral=True)
     ch = await get_ch("kadai")
     if ch:
         await ch.send(f"🗑 **{a['cname']}**「{a['title']}」は **{interaction.user.display_name}** が取り下げました。")
         await bump_panel("kadai")
-    await interaction.response.send_message("取り下げました。", ephemeral=True)
 
 bot.tree.add_command(kadai)
 
@@ -6959,6 +6961,7 @@ class TeikiAddModal(discord.ui.Modal):
             if not days_list:
                 await interaction.response.send_message("⚠️ 曜日は `日` や `月,木` の形式で入れてください（空欄なら授業の曜日）。", ephemeral=True)
                 return
+        await interaction.response.defer(ephemeral=True)   # 直近ぶんの課題化で投稿が続くことがある
         await db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES(?,?)", (str(user.id), c["code"]))
         await db.execute("INSERT INTO recurring_kadai(code,title,due_time,due_days,created_by,created_at) VALUES(?,?,?,?,?,?)",
                          (c["code"], self.naiyou.value.strip()[:100], hm or None,
@@ -6971,7 +6974,7 @@ class TeikiAddModal(discord.ui.Modal):
             await ch.send(f"🔁 **{user.display_name}** が **{c['name']}** の毎週課題「{self.naiyou.value.strip()}」を登録しました"
                           f"（毎週{days}曜・締切 {hm or '授業開始'}。次の回のぶんから毎週自動で課題になります）")
             await bump_panel("kadai")
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"✅ 毎週課題を登録しました：**{c['name']}**「{self.naiyou.value.strip()}」（毎週{days}曜）"
             + (f"\n直近 {made} 件を課題化しました。" if made else "\n直近の授業日が来たら自動で課題になります。"), ephemeral=True)
 
@@ -7019,12 +7022,12 @@ class TeikiEditModal(discord.ui.Modal):
         course = await get_course(rule["code"])
         label = f"毎週{'・'.join(rule_day_chars(rule, course))}曜・{hm or '授業開始'}"
         note = (f"・生成済み {retimed} 件に反映" if retimed else "") + (f"・旧曜日の {dropped} 件は取り下げ→新曜日で生成し直し" if dropped else "")
+        await interaction.response.send_message(f"✅ 締切を {label} に変更しました{note}。以後の自動生成も新しい設定です。", ephemeral=True)
         ch = await get_ch("kadai")
         if ch:
             await ch.send(f"🕑 **{rule['cname']}** の毎週課題「{rule['title']}」の締切を **{label}** に変更しました"
                           f"（by {interaction.user.display_name}{note}）")
             await bump_panel("kadai")
-        await interaction.response.send_message(f"✅ 締切を {label} に変更しました{note}。以後の自動生成も新しい設定です。", ephemeral=True)
 
 class TeikiRemoveSelect(discord.ui.Select):
     def __init__(self, rules):
@@ -7040,11 +7043,11 @@ class TeikiRemoveSelect(discord.ui.Select):
             return
         await db.execute("UPDATE recurring_kadai SET active=0 WHERE id=?", (r["id"],))
         await db.commit()
+        await interaction.response.edit_message(content=f"🗑 解除しました：{teiki_label(r)}", view=None)
         ch = await get_ch("kadai")
         if ch:
             await ch.send(f"🔁🗑 **{r['cname']}** の毎週課題「{r['title']}」は **{interaction.user.display_name}** が解除しました。")
             await bump_panel("kadai")
-        await interaction.response.edit_message(content=f"🗑 解除しました：{teiki_label(r)}", view=None)
 
 class ExamCourseSelect(discord.ui.Select):
     def __init__(self, rows):
@@ -7082,12 +7085,12 @@ class ExamAddModal(discord.ui.Modal):
                          (c["code"], title, exam_day, str(user.id), int(now_jst().timestamp())))
         await db.commit()
         left = exam_days_left(exam_day)
+        await interaction.response.send_message(f"✅ 登録しました：**{c['name']}**「{title}」{exam_date_str(exam_day)}（あと{left}日）", ephemeral=True)
         ch = await get_ch("kadai")
         if ch:
             await ch.send(f"📝 **{user.display_name}** が **{c['name']}** の試験日を登録しました：「{title}」{exam_date_str(exam_day)}（**あと{left}日**）\n"
                           f"-# 30日前・1週間前・3日前にここでお知らせ。前日の🌙と当日の☀️には本人にだけそっと出ます")
             await bump_panel("kadai")
-        await interaction.response.send_message(f"✅ 登録しました：**{c['name']}**「{title}」{exam_date_str(exam_day)}（あと{left}日）", ephemeral=True)
 
 class ExamRemoveSelect(discord.ui.Select):
     def __init__(self, rows):
@@ -7104,11 +7107,11 @@ class ExamRemoveSelect(discord.ui.Select):
             return
         await db.execute("UPDATE exams SET closed=1 WHERE id=?", (e["id"],))
         await db.commit()
+        await interaction.response.edit_message(content=f"🗑 取り下げました：{e['cname']}「{e['title']}」", view=None)
         ch = await get_ch("kadai")
         if ch:
             await ch.send(f"📝🗑 **{e['cname']}**「{e['title']}」（{exam_date_str(e['exam_day'])}）は **{interaction.user.display_name}** が取り下げました。")
             await bump_panel("kadai")
-        await interaction.response.edit_message(content=f"🗑 取り下げました：{e['cname']}「{e['title']}」", view=None)
 
 class FreeSlotModal(discord.ui.Modal, title="🧩 空きコマの予定"):
     koma = discord.ui.TextInput(label="コマ（例 金3 ／ 金3,金4）", max_length=20)
@@ -9438,15 +9441,16 @@ class StudyEntryView(discord.ui.View):
             await interaction.response.send_message(f"⚠️ まだ選んでいないものがあります：{miss}", ephemeral=True)
             return
         day = self.day()
+        await interaction.response.defer()   # 投稿＋パネルの置き直しで3秒を超えることがある
         if self.work_sid:
             if await work_study_done(self.work_sid):
-                await interaction.response.edit_message(content="この作業はもう勉強として記録済みです。", view=None)
+                await interaction.edit_original_response(content="この作業はもう勉強として記録済みです。", view=None)
                 return
             await record_study(interaction.user, self.subject, self.minutes, self.note, day, source=f"workvc:{self.work_sid}")
             await mark_work_log_studied(self.work_sid, self.subject)
         else:
             await record_study(interaction.user, self.subject, self.minutes, self.note, day)
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=f"✅ 📖 **{self.subject}** {study_dur(self.minutes)} を記録しました（{md(day)}）\n{await study_goal_note(self.uid, day)}"
                     + hitokoto_suffix(), view=None)
 
@@ -9471,13 +9475,13 @@ class StudyDelSelect(discord.ui.Select):
         await db.execute("DELETE FROM study_logs WHERE id=?", (lid,))
         await db.execute("DELETE FROM study_praise WHERE log_id=?", (lid,))
         await db.commit()
+        await interaction.response.edit_message(content=f"🗑 「{r['subject']} {study_dur(r['minutes'])}」を取り消しました。", view=None)
         ch = await get_ch("benkyou")
         if ch and r["msg_id"]:
             try:
                 await (await ch.fetch_message(int(r["msg_id"]))).delete()
             except Exception:
                 pass
-        await interaction.response.edit_message(content=f"🗑 「{r['subject']} {study_dur(r['minutes'])}」を取り消しました。", view=None)
 
 async def send_study_today(interaction):
     """📋 今日の記録（一覧・合計・今週・みんなで暗記！！・取り消し）"""
@@ -9659,8 +9663,9 @@ class StudyTimerRunView(discord.ui.View):
         capped = mins > STUDY_TIMER_MAX
         mins = min(mins, STUDY_TIMER_MAX)
         day = day_str(start)
+        await interaction.response.defer()   # 投稿＋パネルの置き直しで3秒を超えることがある
         await record_study(interaction.user, t["subject"], mins, None, day, source="timer")
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=f"✅ ⏱ **{t['subject']}** {study_dur(mins)} を記録しました（{hhmm(start)}〜）\n{await study_goal_note(self.uid, day)}"
                     + (f"\n-# {STUDY_TIMER_MAX // 60}時間で打ち切りました。違ったら 📋 今日の記録 で取り消して ✏️ から入れ直してね" if capped else "")
                     + hitokoto_suffix(), view=None)
@@ -10438,6 +10443,7 @@ class IntroModal(discord.ui.Modal, title="🙋 自己紹介"):
 
     async def on_submit(self, interaction):
         member = interaction.user
+        await interaction.response.defer(ephemeral=True)   # カードの投稿で3秒を超えることがある
         await ensure_user(member)
         vals = [t.value.strip() for t in self.inputs]
         await db.execute("INSERT INTO intros(user_id,f1,f2,f3,f4,f5,updated_at) VALUES(?,?,?,?,?,?,?) "
@@ -10445,7 +10451,7 @@ class IntroModal(discord.ui.Modal, title="🙋 自己紹介"):
                          (str(member.id), *vals, int(now_jst().timestamp())))
         await db.commit()
         m = await post_intro_card(member)
-        await interaction.response.send_message("✅ 自己紹介を投稿しました！" + (f" → {m.jump_url}" if m else "（#自己紹介🙋 が未設定です。/setup を実行してください）"), ephemeral=True)
+        await interaction.followup.send("✅ 自己紹介を投稿しました！" + (f" → {m.jump_url}" if m else "（#自己紹介🙋 が未設定です。/setup を実行してください）"), ephemeral=True)
 
 async def open_intro_modal(interaction):
     async with db.execute("SELECT * FROM intros WHERE user_id=?", (str(interaction.user.id),)) as c:
@@ -10738,6 +10744,7 @@ class EraiModal(discord.ui.Modal, title="🌟 今日のえらい"):
 
     async def on_submit(self, interaction):
         user = interaction.user
+        await interaction.response.defer(ephemeral=True)   # 投稿＋リアクション＋パネルの置き直しで3秒を超えることがある
         await ensure_user(user)
         now = now_jst()
         text = self.what.value.strip()
@@ -10747,7 +10754,7 @@ class EraiModal(discord.ui.Modal, title="🌟 今日のえらい"):
         await db.commit()
         ch = await get_ch("erai")
         if not ch:
-            await interaction.response.send_message("記録しました（#えらい🌟 が未設定です。/setup を実行してください）", ephemeral=True)
+            await interaction.followup.send("記録しました（#えらい🌟 が未設定です。/setup を実行してください）", ephemeral=True)
             return
         view = discord.ui.View(timeout=None)
         view.add_item(PraiseButton(eid, 0))
@@ -10758,7 +10765,7 @@ class EraiModal(discord.ui.Modal, title="🌟 今日のえらい"):
             await msg.add_reaction(erai_emoji(interaction.guild))
         except Exception:
             pass
-        await interaction.response.send_message("🌟 投稿しました！えらい！", ephemeral=True)
+        await interaction.followup.send("🌟 投稿しました！えらい！", ephemeral=True)
         await bump_panel("erai")
 
 class EraiView(discord.ui.View):
@@ -10960,6 +10967,7 @@ class MemoModal(discord.ui.Modal, title="📌 やることメモ"):
             await interaction.response.send_message("⚠️ 期限が読めませんでした（過ぎた日付も×）。例：`11/3` `11/1-11/3`", ephemeral=True)
             return
         start_day, until_day = span
+        await interaction.response.defer(ephemeral=True)   # 投稿＋パネルの置き直しで3秒を超えることがある
         ids = []
         for t in tasks:
             cur = await db.execute("INSERT INTO memos(user_id,text,day,ts,until_day) VALUES(?,?,?,?,?)",
@@ -10982,7 +10990,7 @@ class MemoModal(discord.ui.Modal, title="📌 やることメモ"):
                     f"期限の日の23時にまだ残っていたら、引き継ぐか聞きます")
         else:
             tail = "終わったら ✅ を。23時に残っていたら引き継ぐか聞きます（放置すると翌朝ひっそり消えます）"
-        await interaction.response.send_message(f"📌 {head}を宣言しました。{tail}" + hitokoto_suffix(), ephemeral=True)
+        await interaction.followup.send(f"📌 {head}を宣言しました。{tail}" + hitokoto_suffix(), ephemeral=True)
         if ch:
             await bump_panel("yarukoto")
 
@@ -10994,11 +11002,11 @@ class MemoListButton(discord.ui.Button):
     async def callback(self, interaction):
         async with db.execute("SELECT * FROM memos WHERE id=? AND user_id=?", (self.memo_id, str(interaction.user.id))) as c:
             row = await c.fetchone()
-        note = ""
+        note, refresh = "", None
         if row and not row["done"]:
             await db.execute("UPDATE memos SET done=1 WHERE id=?", (row["id"],))
             await db.commit()
-            await refresh_memo_message(row["msg_id"])
+            refresh = row["msg_id"]
             note = f"✅ 「{row['text']}」やりきった！\n\n"
         rows = await open_memos(interaction.user.id, day_str(now_jst()))
         if rows:
@@ -11008,6 +11016,8 @@ class MemoListButton(discord.ui.Button):
             await interaction.response.edit_message(content=note + memo_list_text(rows), view=view)
         else:
             await interaction.response.edit_message(content=note + "📌 全部やりきった！えらい！", view=None)
+        if refresh:
+            await refresh_memo_message(refresh)
 
 def memo_list_text(rows):
     return "📌 **今日のやること**（押したら完了）\n" + "\n".join(
@@ -11064,9 +11074,9 @@ class MemoDropButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_me
         await db.execute(f"DELETE FROM memos WHERE user_id=? AND day<=? AND done=0 {keep}", (self.uid, today, today))
         await db.execute("DELETE FROM memo_prompts WHERE user_id=? AND msg_id=?", (self.uid, str(interaction.message.id)))
         await db.commit()
+        await interaction.response.edit_message(content="🗑 消しました。やらない決断もえらい。また明日！", view=None)
         for mid in {r["msg_id"] for r in rows if r["msg_id"]}:
             await refresh_memo_message(mid)   # ✅済みが残っていれば表示更新、空なら宣言ごと削除
-        await interaction.response.edit_message(content="🗑 消しました。やらない決断もえらい。また明日！", view=None)
 
 async def memo_carry_prompts(day):
     """判定後、未完了メモがある人へ引き継ぎ確認（1人1日1回・手動判定でも二重投稿しない）"""
@@ -11184,10 +11194,6 @@ class WorkNoteModal(discord.ui.Modal, title="✍ 何をやる？"):
         note = self.txt.value.strip()[:80]
         await db.execute("UPDATE work_sessions SET note=? WHERE id=?", (note, self.session_id))
         await db.commit()
-        try:
-            await update_work_vc_status()   # 宣言をVCのサブタイトルにも反映
-        except Exception:
-            pass
         now = now_jst()
         memos_txt = "／".join(r["text"] for r in await open_memos(str(interaction.user.id), day_str(now)))
         content = (f"🖥 **{interaction.user.display_name}** さんが作業中：**{note}**"
@@ -11196,6 +11202,10 @@ class WorkNoteModal(discord.ui.Modal, title="✍ 何をやる？"):
             await interaction.response.edit_message(content=content)
         except Exception:
             await interaction.response.send_message("✍ 記録しました。", ephemeral=True)
+        try:
+            await update_work_vc_status()   # 宣言をVCのサブタイトルにも反映
+        except Exception:
+            pass
 
 class WorkNoteButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_work_note:(?P<id>\d+)"):
     def __init__(self, session_id):
@@ -13021,6 +13031,8 @@ async def _view_on_error(self, interaction, error, item):
     try:
         if not interaction.response.is_done():
             await interaction.response.send_message("❌ うまく処理できませんでした。少し待ってからもう一度試してね。", ephemeral=True)
+        else:   # 先に defer した処理の途中で失敗→「考え中…」のまま止めない
+            await interaction.followup.send("❌ うまく処理できませんでした。少し待ってからもう一度試してね。", ephemeral=True)
     except Exception:
         pass
 
