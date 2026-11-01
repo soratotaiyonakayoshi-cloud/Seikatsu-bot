@@ -10055,7 +10055,7 @@ async def trip_message_places(msg_id):
 class TripPlaceButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_trip:(?P<mid>\d+):(?P<uid>\d+)"):
     """写真の投稿に Bot が返信でつけるボタン：場所を選ぶと地図に載る（何か所でもOK）"""
     def __init__(self, mid, uid, more=False):
-        super().__init__(discord.ui.Button(label="📍 もう1か所" if more else "📍 どこ？", style=discord.ButtonStyle.secondary if more else discord.ButtonStyle.primary,
+        super().__init__(discord.ui.Button(label="📍 もう1か所" if more else "📍 場所を選ぶ", style=discord.ButtonStyle.secondary if more else discord.ButtonStyle.primary,
                                            custom_id=f"sk_trip:{mid}:{uid}"))
         self.mid, self.uid = int(mid), str(uid)
 
@@ -10064,6 +10064,7 @@ class TripPlaceButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_t
         return cls(match["mid"], match["uid"])
 
     async def callback(self, interaction):
+        print(f"🗾 📍 が押された（投稿 {self.mid}）", flush=True)
         if str(interaction.user.id) != self.uid:
             await interaction.response.send_message("投稿した本人だけが選べます。", ephemeral=True)
             return
@@ -10071,6 +10072,7 @@ class TripPlaceButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_t
         bot_msg, mid, ch_id = interaction.message, self.mid, interaction.channel_id
 
         async def on_pick(i, region, place):
+            print(f"🗾 場所を記録（投稿 {mid}：{region}／{place}）", flush=True)
             await record_trip(i.user.id, region, place, mid, ch_id)
             await i.response.edit_message(content=f"📍 **{place}** を地図に載せました。{await trip_done_note(i.user.id, region, place)}", view=None)
             view = discord.ui.View(timeout=None)
@@ -10142,7 +10144,7 @@ async def on_trip_thread(thread):
     await save_trip_post(thread.id, thread.owner_id, thread.name, starter)
     view = discord.ui.View(timeout=None)
     view.add_item(TripPlaceButton(thread.id, thread.owner_id))
-    await thread.send("📍 どこに行きましたか？ 選ぶと地図に載ります", view=view, silent=True)
+    await thread.send(f"<@{thread.owner_id}> 📍 どこに行きましたか？ 下のボタンで場所を選ぶと、地図に載ります", view=view)   # 気づけるように本人へ通知
 
 async def remove_trip_post(thread_id):
     """投稿が消されたら、控えと地図の記録と縮小版も消す"""
@@ -10510,7 +10512,7 @@ ODEKAKE_GUIDE_TITLE = "🗾 使い方と地図はここから"
 ODEKAKE_GUIDE = ("おでかけの写真と、そこで何をしたかを共有する場所です。行った場所は地図にも載ります。\n\n"
                  "**投稿のしかた**\n"
                  "1. 写真を貼って、タイトルと思い出を書いて投稿する\n"
-                 "2. Botが出す「📍」を押して、場所を選ぶ（投稿した本人だけが選べます）\n"
+                 "2. 投稿のすぐ下に Bot が出す「📍 場所を選ぶ」を押す（投稿した本人だけが選べます）\n"
                  "3. 地図に載って、タグも自動でつく\n"
                  "-# 何か所も回ったときは「📍 もう1か所」で足せます。投稿を消すと、地図の記録も一緒に消えます\n\n"
                  "**下のボタン**\n"

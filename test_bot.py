@@ -1857,7 +1857,7 @@ async def main():
     B.bot._connection.user = B.bot._connection.user or _NS2(id=1)
     await B.on_trip_thread(_th)
     _tp = await (await B.db.execute("SELECT * FROM trip_posts WHERE thread_id='900001'")).fetchone()
-    check("おでかけ投稿: タイトル・本文を控え、📍を出す", (_tp["title"], _tp["body"].split("\n")[0], len(_posted), "どこに" in _posted[0][0]),
+    check("おでかけ投稿: タイトル・本文を控え、📍を出す", (_tp["title"], _tp["body"].split("\n")[0], len(_posted), "<@71>" in _posted[0][0] and "どこに" in _posted[0][0]),
           ("府中のお祭り", "大國魂神社のお祭りに行ってきた！", 1, True))
     _thumb = _PI.open(_tp["thumb"])
     check("おでかけ投稿: 縮小版は長辺480px", max(_thumb.size), 480)
