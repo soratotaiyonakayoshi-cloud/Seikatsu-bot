@@ -1832,7 +1832,57 @@ async def main():
     _i = _press(M(71, "旅人A")); await B.send_trip_map(_i, False, "都外")
     check("おでかけ: みんなの地図が開く", _i.followup.sent[0].startswith("🗾"), True)
     check("おでかけ: パネル", [c.custom_id for c in B.OdekakePanelView().children], ["sk_trip_all", "sk_trip_mine", "sk_trip_add", "sk_trip_see"])
-    check("おでかけ: チャンネル定義", (B.CH["odekake"][0], B.VIEW_FACTORY.get("odekake") is B.OdekakePanelView), ("おでかけ🗾", True))
+    check("おでかけ: テキストチャンネルは作らない（フォーラムへ）", "odekake" in B.CH, False)
+    check("おでかけ: タグは都内＋7地方", [n for _e, n in B.ODEKAKE_TAGS], ["都内", "北海道・東北", "関東", "中部", "近畿", "中国", "四国", "九州・沖縄"])
+    check("おでかけ: 場所→タグ", (B.trip_tag_name("都内", "府中市"), B.trip_tag_name("都外", "神奈川県"), B.trip_tag_name("都外", "沖縄県")), ("都内", "関東", "九州・沖縄"))
+    # フォーラムへの投稿：写真の縮小版と本文を控えて 📍 を出す
+    from PIL import Image as _PI
+    import io as _io
+    _b = _io.BytesIO(); _PI.new("RGB", (1600, 1200), "#3d8f83").save(_b, "PNG")
+
+    class _Att:
+        content_type = "image/png"
+
+        async def read(self):
+            return _b.getvalue()
+    _starter = _NS2(content="大國魂神社のお祭りに行ってきた！\n屋台がすごかった", attachments=[_Att()])
+    _posted = []
+
+    async def _th_fetch(mid):
+        return _starter
+
+    async def _th_send(c=None, **k):
+        _posted.append((c, k))
+    _th = _NS2(id=900001, owner_id=71, name="府中のお祭り", fetch_message=_th_fetch, send=_th_send)
+    B.bot._connection.user = B.bot._connection.user or _NS2(id=1)
+    await B.on_trip_thread(_th)
+    _tp = await (await B.db.execute("SELECT * FROM trip_posts WHERE thread_id='900001'")).fetchone()
+    check("おでかけ投稿: タイトル・本文を控え、📍を出す", (_tp["title"], _tp["body"].split("\n")[0], len(_posted), "どこに" in _posted[0][0]),
+          ("府中のお祭り", "大國魂神社のお祭りに行ってきた！", 1, True))
+    _thumb = _PI.open(_tp["thumb"])
+    check("おでかけ投稿: 縮小版は長辺480px", max(_thumb.size), 480)
+    _thumb.close()
+    await B.record_trip(71, "都内", "府中市", 900001, 900001)
+    _mem = await B.trip_memories("都内", "府中市")
+    check("思い出: 投稿の本文つき・新しい順", (_mem[0]["title"], _mem[0]["thread_id"], _mem[0]["thumb"] is not None), ("府中のお祭り", "900001", True))
+    check("思い出カード: PNG", B.render_trip_card("府中市", _mem).read(4), b"\x89PNG")
+    _bp = _press(M(71, "旅人A")); _bp.guild_id = 1; _pv2 = {}
+    _o2 = _bp.response.send_message
+
+    async def _cap2(c=None, **k):
+        _pv2.update(k)
+        await _o2(c, **k)
+    _bp.response.send_message = _cap2
+    await B.send_trip_see(_bp)
+    _bq = _press(M(71, "旅人A")); _bq.guild_id = 1
+    await _pv2["view"].on_pick(_bq, "都内", "府中市")
+    check("🔍 場所から見る: カードとリンクが出る", ("府中のお祭り" in _bq.response.edited[0]["content"], len(_bq.response.edited[0]["attachments"])), (True, 1))
+    await B.db.execute("UPDATE trip_posts SET body='x' WHERE thread_id='900001'")
+    await B.on_raw_message_edit(_NS2(message_id=900001, data={"content": "書き直した"}))
+    check("おでかけ投稿: 本文の編集を反映", (await (await B.db.execute("SELECT body FROM trip_posts WHERE thread_id='900001'")).fetchone())["body"], "書き直した")
+    _tpath = _tp["thumb"]
+    check("おでかけ投稿: 消すと記録と縮小版も消える", (await B.remove_trip_post(900001), B.os.path.exists(_tpath), await B.trip_message_places(900001)), (True, False, []))
+    check("起動時に おでかけのパネルも登録", B.OdekakePanelView in {type(v) for v in _fake.persistent_views}, True)
     check("NOKOシネマズ: 名前とタグ", (B.CINEMA_CH_NAME, "ネタバレあり" in [n for _e, n in B.CINEMA_TAGS]), ("NOKOシネマズ", True))
     # 構文チェック：押した人への返事より前に遅い処理（投稿・VC接続・外部通信・画像づくり）をしていないか
     check("返事より前に遅い処理をしている箇所がない", _late_reply_handlers(open(B.__file__, encoding="utf-8").read()), [])
