@@ -10021,9 +10021,10 @@ class _TripGroupSelect(discord.ui.Select):
         super().__init__(placeholder="🗾 どのあたり？", options=opts, row=0)
 
     async def callback(self, interaction):
-        self.view.group = self.values[0]
-        self.view._build()
-        await interaction.response.edit_message(view=self.view)
+        v = self.view   # _build の clear_items で self.view は None になるので先に控える
+        v.group = self.values[0]
+        v._build()
+        await interaction.response.edit_message(view=v)
 
 class _TripPlaceSelect(discord.ui.Select):
     def __init__(self, view_):

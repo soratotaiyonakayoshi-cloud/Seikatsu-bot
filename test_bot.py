@@ -1822,9 +1822,19 @@ async def main():
     _i.response.send_message = _capture
     await _tb.callback(_i)
     _pv = _sent["view"]
-    _pv.group = "都外:6"; _pv._build()
+    # 実際のプルダウンの処理を通す（地方を選ぶと、場所のプルダウンが画面に出ること。選んだ値は discord.py の内部に入れる）
+    import sys as _sys
+    _sel_mod = _sys.modules["discord.ui.select"]
+    _gs = _pv.children[0]
+    _sel_mod.selected_values.set({_gs.custom_id: ["都外:6"]})
+    _i2 = _press(M(71, "旅人A")); await _gs.callback(_i2)
+    _ev = _i2.response.edited[0]["view"]
+    check("おでかけ: 地方を選ぶと場所のプルダウンが出る", (_ev is _pv, "沖縄県" in [o.value for o in _ev.children[1].options]), (True, True))
+    _ps = _pv.children[1]
+    _sel_mod.selected_values.set({_ps.custom_id: ["沖縄県"]})
     _i2 = _press(M(71, "旅人A")); _i2.guild_id = 1
-    await _pv.on_pick(_i2, "都外", "沖縄県")
+    await _ps.callback(_i2)
+    check("おでかけ: 場所を選ぶと完了の表示", "沖縄県" in _i2.response.edited[0]["content"], True)
     check("おでかけ: 選ぶと記録され、返信の文面が更新される", ("沖縄県" in _edits[0]["content"], await B.trip_message_places(113)), (True, ["沖縄県"]))
     check("おでかけ: 地方→場所の2段階", [type(c).__name__ for c in _pv.children], ["_TripGroupSelect", "_TripPlaceSelect"])
     _i = _press(M(71, "旅人A")); await B.send_trip_map(_i, True)
