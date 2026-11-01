@@ -14,6 +14,7 @@ import json
 import os
 import random
 import re
+import math
 import unicodedata
 import zlib
 from datetime import datetime, timezone, timedelta, date
@@ -78,6 +79,7 @@ CH = {
     "benkyou": ("勉強記録📖", "✏️ 勉強したら記録（教材×時間）。仲間の記録には 👏 を。"),
     "yarukoto": ("やること📌", "📌 やることを宣言して見守ってもらう場所。📝 自分の項目のチェックもここから。"),
     "worklog": ("作業ログ🖥", f"🔊{WORK_VC_NAME} に入ると作業時間を計測。🎶 音楽の操作はこのパネルから。"),
+    "odekake": ("おでかけ🗾", "📷 おでかけの写真を貼って場所を選ぶと、地図が埋まっていきます（都内・都外の2枚）。"),
     "animal": ("どうぶつ🐄", "癒しの写真・動画をどうぞ（判定なし）。月末に 🐾 いやしアルバムができます。"),
     "bath": ("おふろ🛁", "🛁 お風呂に入ったら押す。🪥 歯磨きも（1日に何回でも）。"),
     "goods": ("使用期限📦", "「開封からN日で交換」する品のリマインド。📦 開封した日に登録 → 🔄 交換したら押す。"),
@@ -229,6 +231,11 @@ CREATE TABLE IF NOT EXISTS private_events(
 );
 CREATE TABLE IF NOT EXISTS private_event_reminded(event_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(event_id, stage));
 CREATE TABLE IF NOT EXISTS univ_event_reminded(event_id INTEGER NOT NULL, stage TEXT NOT NULL, PRIMARY KEY(event_id, stage));
+CREATE TABLE IF NOT EXISTS trips(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, region TEXT NOT NULL, place TEXT NOT NULL, day TEXT NOT NULL,
+  msg_id TEXT, ch_id TEXT, ts INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_trips_place ON trips(region, place);
 CREATE TABLE IF NOT EXISTS study_logs(
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, day TEXT NOT NULL, subject TEXT NOT NULL,
   minutes INTEGER NOT NULL, note TEXT, source TEXT NOT NULL DEFAULT 'manual', msg_id TEXT, ts INTEGER
@@ -583,7 +590,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(MusicPanelView())
         self.add_view(YoteiPanelView())
         self.add_view(IntroView())
-        self.add_dynamic_items(DoneButton, SkipButton, MealFixButton, PraiseButton, GroupPraiseButton, StudyPraiseButton, WorkStudyButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
+        self.add_dynamic_items(DoneButton, SkipButton, MealFixButton, PraiseButton, GroupPraiseButton, StudyPraiseButton, WorkStudyButton, TripPlaceButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
                                MemoDoneButton, MemoCarryButton, MemoDropButton, WorkNoteButton, GoodsResetButton)
         self.add_view(EraiView())
         registered = {type(v) for v in self.persistent_views}
@@ -1031,6 +1038,14 @@ async def on_message(message):
             await message.add_reaction("🐾")   # 癒しの写真には自動で🐾。週間で一番リアクションを集めた人が癒し賞
         except Exception:
             pass
+        return
+    trip_ch = await meta_get("ch_odekake")
+    if trip_ch and message.channel.id == int(trip_ch):
+        if any((a.content_type or "").startswith(("image/", "video/")) for a in message.attachments):
+            try:
+                await on_trip_photo(message)
+            except Exception as e:
+                print(f"おでかけ写真エラー: {e!r}", flush=True)
         return
     meal_ch = await meta_get("ch_meal")
     if not meal_ch or message.channel.id != int(meal_ch) or not message.attachments:
@@ -9825,6 +9840,337 @@ class StudyPanelView(discord.ui.View):
 
 VIEW_FACTORY["benkyou"] = StudyPanelView
 
+# ============================================================
+#  🗾 #おでかけ：写真を貼って、行った場所で地図を埋める（都内＝区市町村／都外＝道府県の2枚）
+# ============================================================
+MAP_CREDIT = "出典：「国土数値情報（行政区域データ）」（国土交通省）を加工して作成"
+PLACE_GROUPS = {
+    "都内": [
+        ("23区", ["千代田区", "中央区", "港区", "新宿区", "文京区", "台東区", "墨田区", "江東区", "品川区", "目黒区", "大田区", "世田谷区",
+                  "渋谷区", "中野区", "杉並区", "豊島区", "北区", "荒川区", "板橋区", "練馬区", "足立区", "葛飾区", "江戸川区"]),
+        ("多摩の市（八王子・府中・町田など）", ["八王子市", "立川市", "青梅市", "府中市", "昭島市", "町田市", "日野市", "福生市", "多摩市", "稲城市",
+                                               "羽村市", "武蔵村山市", "あきる野市"]),
+        ("多摩の市（武蔵野・小金井・国分寺など）", ["武蔵野市", "三鷹市", "調布市", "小金井市", "小平市", "東村山市", "国分寺市", "国立市", "狛江市",
+                                                   "東大和市", "清瀬市", "東久留米市", "西東京市"]),
+        ("町村・島（奥多摩・大島など）", ["瑞穂町", "日の出町", "檜原村", "奥多摩町", "大島町", "利島村", "新島村", "神津島村", "三宅村", "御蔵島村",
+                                           "八丈町", "青ヶ島村", "小笠原村"]),
+    ],
+    "都外": [
+        ("北海道・東北", ["北海道", "青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県"]),
+        ("関東（東京以外）", ["茨城県", "栃木県", "群馬県", "埼玉県", "千葉県", "神奈川県"]),
+        ("中部", ["新潟県", "富山県", "石川県", "福井県", "山梨県", "長野県", "岐阜県", "静岡県", "愛知県"]),
+        ("近畿", ["三重県", "滋賀県", "京都府", "大阪府", "兵庫県", "奈良県", "和歌山県"]),
+        ("中国", ["鳥取県", "島根県", "岡山県", "広島県", "山口県"]),
+        ("四国", ["徳島県", "香川県", "愛媛県", "高知県"]),
+        ("九州・沖縄", ["福岡県", "佐賀県", "長崎県", "熊本県", "大分県", "宮崎県", "鹿児島県", "沖縄県"]),
+    ],
+}
+TOKYO_ISLANDS = ["大島町", "利島村", "新島村", "神津島村", "三宅村", "御蔵島村", "八丈町", "青ヶ島村", "小笠原村"]
+PLACE_TOTAL = {rg: sum(len(ns) for _, ns in gs) for rg, gs in PLACE_GROUPS.items()}
+_map_cache = {}
+
+def _map_polys(region):
+    """region の {場所名: [外周リング…]}（重いので最初の1回だけ読む）"""
+    if region not in _map_cache:
+        fn = "map_tokyo.json" if region == "都内" else "map_japan.json"
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", fn), encoding="utf-8") as f:
+            _map_cache[region] = json.load(f)
+    return _map_cache[region]
+
+async def trip_counts(region, uid=None):
+    """{場所: 人数}（uid を渡すとその人の {場所: 1}）"""
+    if uid is None:
+        sql, arg = "SELECT place, COUNT(DISTINCT user_id) AS n FROM trips WHERE region=? GROUP BY place", (region,)
+    else:
+        sql, arg = "SELECT place, 1 AS n FROM trips WHERE region=? AND user_id=? GROUP BY place", (region, str(uid))
+    async with db.execute(sql, arg) as c:
+        return {r["place"]: r["n"] for r in await c.fetchall()}
+
+def _map_fill(n, personal):
+    if not n:
+        return "#e6dece"
+    if personal:
+        return CARD_ORANGE
+    return "#f6cf9f" if n == 1 else "#f2a349" if n == 2 else CARD_ORANGE if n <= 4 else "#a84e0c"
+
+def _ring_center(rings):
+    r = max(rings, key=len)
+    return sum(p[0] for p in r) / len(r), sum(p[1] for p in r) / len(r)
+
+def _draw_map_box(img, box, bbox, polys, fill_of, labels=None, F=None, frame=False):
+    """box＝画像上の枠 (x, y, w, h)、bbox＝表示する経緯度 (lon0, lon1, lat0, lat1)。枠の外は切り落とす"""
+    from PIL import Image as PImage, ImageDraw
+    x, y, w, h = box
+    lon0, lon1, lat0, lat1 = bbox
+    kx = math.cos(math.radians((lat0 + lat1) / 2))
+    s = min(w / ((lon1 - lon0) * kx), h / (lat1 - lat0))
+    ox = (w - (lon1 - lon0) * kx * s) / 2
+    oy = (h - (lat1 - lat0) * s) / 2
+    pt = lambda p: (ox + (p[0] - lon0) * kx * s, oy + (lat1 - p[1]) * s)
+    layer = PImage.new("RGB", (w, h), "#fffaf2" if frame else CARD_CREAM)
+    d = ImageDraw.Draw(layer)
+    for name, rings in polys.items():
+        col = fill_of(name)
+        for r in rings:
+            d.polygon([pt(p) for p in r], fill=col, outline="#ffffff")
+    for name, size, ink in (labels or []):
+        if name in polys:
+            d.text(pt(_ring_center(polys[name])), name, font=F(size, True), fill=ink, anchor="mm", stroke_width=2, stroke_fill="#ffffff")
+    img.paste(layer, (x, y))
+    if frame:
+        ImageDraw.Draw(img).rounded_rectangle([x, y, x + w, y + h], radius=6, outline=CARD_LINE, width=2)
+
+def render_odekake_map(title, region, counts, personal):
+    """🗾 地図カード（PNG）。描けなければ None"""
+    try:
+        from PIL import Image as PImage, ImageDraw, ImageFont
+    except Exception:
+        return None
+    f = _find_cjk_font()
+    if not f:
+        return None
+    fb = _find_cjk_font_bold() or f
+    ef = _find_emoji_font()
+    F = lambda s, bold=False: ImageFont.truetype(fb if bold else f, s)
+    E = lambda s: ImageFont.truetype(ef, s) if ef else None
+    polys = _map_polys(region)
+    fill_of = lambda name: _map_fill(counts.get(name, 0), personal)
+    done = sum(1 for k, v in counts.items() if v and k in polys)
+    total = PLACE_TOTAL[region]
+    pad = 44
+    W, H = (1200, 1720) if region == "都内" else (1080, 1270)
+    img = PImage.new("RGB", (W, H), CARD_CREAM)
+    d = ImageDraw.Draw(img)
+    _draw_mixed(d, pad, 34, f"🗾 {_plain_name(title, 14)}", F(48, True), E(48), CARD_INK)
+    d.text((pad + 4, 100), f"{region}　制覇 {done}/{total}" + ("　（色が濃いほど行った人が多い）" if not personal else ""), font=F(26), fill=CARD_MUTED)
+    if region == "都内":
+        ku = PLACE_GROUPS["都内"][0][1]
+        tama = {k: v for k, v in polys.items() if k not in TOKYO_ISLANDS and k not in ku}   # 23区は下に別枠で大きく
+        _draw_map_box(img, (pad, 150, W - pad * 2, 760), (138.92, 139.69, 35.49, 35.91), tama, fill_of, [(k, 15, CARD_INK) for k in tama], F)
+        d.text((pad, 930), "23区", font=F(30, True), fill=CARD_INK)
+        ku_polys = {k: v for k, v in polys.items() if k in ku}
+        _draw_map_box(img, (pad, 970, 700, 650), (139.55, 139.93, 35.51, 35.83), ku_polys, fill_of, [(k, 18, CARD_INK) for k in ku], F, frame=True)
+        ix = pad + 700 + 36
+        d.text((ix, 930), "島", font=F(30, True), fill=CARD_INK)
+        for i, name in enumerate(TOKYO_ISLANDS):
+            yy = 970 + i * 62
+            d.rounded_rectangle([ix, yy, W - pad, yy + 50], radius=12, fill=fill_of(name))
+            d.text((ix + 18, yy + 25), name, font=F(26, True), fill=CARD_INK, anchor="lm")
+    else:
+        shown = {k: v for k, v in polys.items()}
+        fill2 = lambda name: "#c9c1b2" if name == "東京都" else fill_of(name)
+        visited = [(k, 20, CARD_INK) for k in polys if counts.get(k) and k not in ("埼玉県", "千葉県", "神奈川県", "茨城県", "栃木県", "群馬県", "沖縄県")]
+        _draw_map_box(img, (pad, 140, W - pad * 2, 1020), (128.4, 146.2, 30.8, 45.7), {k: v for k, v in shown.items() if k != "沖縄県"}, fill2, visited, F)
+        kanto = ["茨城県", "栃木県", "群馬県", "埼玉県", "千葉県", "神奈川県", "東京都"]
+        d.text((W - pad - 318, 826), "関東", font=F(26, True), fill=CARD_INK)   # 太平洋側の空いている所に置く（本州に重ねない）
+        _draw_map_box(img, (W - pad - 318, 860, 318, 270), (138.35, 141.0, 34.85, 37.0),
+                      {k: v for k, v in shown.items() if k in kanto or k in ("福島県", "新潟県", "長野県", "山梨県", "静岡県")},
+                      lambda n: "#c9c1b2" if n == "東京都" else (fill_of(n) if n in kanto else "#f0eadc"),
+                      [(k, 15, CARD_INK) for k in kanto if counts.get(k) or k == "東京都"], F, frame=True)
+        d.text((pad, 176), "沖縄", font=F(26, True), fill=CARD_INK)
+        _draw_map_box(img, (pad, 210, 260, 190), (126.5, 128.5, 25.9, 27.0), {"沖縄県": polys["沖縄県"]}, fill_of,
+                      [("沖縄県", 20, CARD_INK)] if counts.get("沖縄県") else [], F, frame=True)
+        d.text((W - pad, 1140), "灰色の東京都は「都内」の地図へ", font=F(20), fill=CARD_MUTED, anchor="ra")
+    d.line([pad, H - 72, W - pad, H - 72], fill=CARD_LINE, width=2)
+    d.text((pad, H - 58), "最低限生活リズムサークル", font=F(24, True), fill=CARD_INK)
+    d.text((W - pad, H - 52), MAP_CREDIT, font=F(15), fill=CARD_MUTED, anchor="ra")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+async def record_trip(uid, region, place, msg_id=None, ch_id=None):
+    now = now_jst()
+    await db.execute("INSERT INTO trips(user_id,region,place,day,msg_id,ch_id,ts) VALUES(?,?,?,?,?,?,?)",
+                     (str(uid), region, place, day_str(now), str(msg_id) if msg_id else None, str(ch_id) if ch_id else None, int(now.timestamp())))
+    await db.commit()
+
+def _group_key(region, i):
+    return f"{region}:{i}"
+
+class _TripGroupSelect(discord.ui.Select):
+    def __init__(self, view_):
+        opts = [discord.SelectOption(label=f"{rg}：{lb}"[:100], value=_group_key(rg, i), emoji="🗼" if rg == "都内" else "🗾",
+                                     default=view_.group == _group_key(rg, i))
+                for rg, gs in PLACE_GROUPS.items() for i, (lb, _ns) in enumerate(gs)]
+        super().__init__(placeholder="🗾 どのあたり？", options=opts, row=0)
+
+    async def callback(self, interaction):
+        self.view.group = self.values[0]
+        self.view._build()
+        await interaction.response.edit_message(view=self.view)
+
+class _TripPlaceSelect(discord.ui.Select):
+    def __init__(self, view_):
+        rg, i = view_.group.split(":")
+        self.region = rg
+        names = PLACE_GROUPS[rg][int(i)][1]
+        super().__init__(placeholder="📍 場所をえらぶ", options=[discord.SelectOption(label=n, value=n) for n in names], row=1)
+
+    async def callback(self, interaction):
+        await self.view.on_pick(interaction, self.region, self.values[0])
+
+class TripPickView(discord.ui.View):
+    """地方 → 場所 の2段階（Discordのプルダウンは25件までなので分ける）。選んだら on_pick を呼ぶ"""
+    def __init__(self, on_pick):
+        super().__init__(timeout=600)
+        self.on_pick, self.group = on_pick, None
+        self._build()
+
+    def _build(self):
+        self.clear_items()
+        self.add_item(_TripGroupSelect(self))
+        if self.group:
+            self.add_item(_TripPlaceSelect(self))
+
+async def trip_message_places(msg_id):
+    async with db.execute("SELECT place FROM trips WHERE msg_id=? ORDER BY id", (str(msg_id),)) as c:
+        return [r["place"] for r in await c.fetchall()]
+
+class TripPlaceButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_trip:(?P<mid>\d+):(?P<uid>\d+)"):
+    """写真の投稿に Bot が返信でつけるボタン：場所を選ぶと地図に載る（何か所でもOK）"""
+    def __init__(self, mid, uid, more=False):
+        super().__init__(discord.ui.Button(label="📍 もう1か所" if more else "📍 どこ？", style=discord.ButtonStyle.secondary if more else discord.ButtonStyle.primary,
+                                           custom_id=f"sk_trip:{mid}:{uid}"))
+        self.mid, self.uid = int(mid), str(uid)
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["mid"], match["uid"])
+
+    async def callback(self, interaction):
+        if str(interaction.user.id) != self.uid:
+            await interaction.response.send_message("写真を投稿した本人だけが選べます。", ephemeral=True)
+            return
+        await ensure_user(interaction.user)
+        bot_msg, mid, ch_id = interaction.message, self.mid, interaction.channel_id
+
+        async def on_pick(i, region, place):
+            await record_trip(i.user.id, region, place, mid, ch_id)
+            await i.response.edit_message(content=f"📍 **{place}** を地図に載せました。{await trip_done_note(i.user.id, region)}", view=None)
+            view = discord.ui.View(timeout=None)
+            view.add_item(TripPlaceButton(mid, i.user.id, more=True))
+            await bot_msg.edit(content=f"📍 **{i.user.display_name}** のおでかけ：" + "・".join(await trip_message_places(mid)), view=view)
+        await interaction.response.send_message("📍 どこの写真ですか？", view=TripPickView(on_pick), ephemeral=True)
+
+async def trip_done_note(uid, region):
+    n = sum(1 for k in await trip_counts(region, uid) if k in _map_polys(region))
+    return f"{region}の制覇 **{n}/{PLACE_TOTAL[region]}**"
+
+async def on_trip_photo(message):
+    """#おでかけ🗾 に写真が投稿されたら、場所を選ぶボタンを返信でつける"""
+    view = discord.ui.View(timeout=None)
+    view.add_item(TripPlaceButton(message.id, message.author.id))
+    await message.reply("📍 どこの写真？ 選ぶと地図に載ります", view=view, mention_author=False, silent=True)
+    await bump_panel("odekake")
+
+class TripMapView(discord.ui.View):
+    """🗾 地図の下のボタン：都内／都外の切り替え（じぶんの地図には🗑も）"""
+    def __init__(self, uid, region):
+        super().__init__(timeout=900)
+        self.uid, self.region = uid, region
+        for rg in PLACE_GROUPS:
+            b = discord.ui.Button(label=("🗼 " if rg == "都内" else "🗾 ") + rg, style=discord.ButtonStyle.primary if rg == region else discord.ButtonStyle.secondary, disabled=rg == region)
+            b.callback = self._switch(rg)
+            self.add_item(b)
+        if uid is not None:
+            b = discord.ui.Button(label="🗑 記録を消す", style=discord.ButtonStyle.secondary)
+            b.callback = self._delete
+            self.add_item(b)
+
+    def _switch(self, rg):
+        async def cb(interaction):
+            await interaction.response.defer()
+            content, buf = await trip_map_payload(interaction.user, self.uid, rg)
+            await interaction.edit_original_response(content=content, attachments=[discord.File(buf, filename="odekake.png")] if buf else [],
+                                                     view=TripMapView(self.uid, rg))
+        return cb
+
+    async def _delete(self, interaction):
+        async with db.execute("SELECT * FROM trips WHERE user_id=? ORDER BY id DESC LIMIT 25", (str(interaction.user.id),)) as c:
+            rows = list(await c.fetchall())
+        if not rows:
+            await interaction.response.send_message("消せる記録はありません。", ephemeral=True)
+            return
+        v = discord.ui.View(timeout=300)
+        v.add_item(TripDelSelect(rows))
+        await interaction.response.send_message("🗑 消す記録をえらんでください（写真の投稿は消えません）", view=v, ephemeral=True)
+
+class TripDelSelect(discord.ui.Select):
+    def __init__(self, rows):
+        opts = [discord.SelectOption(label=f"{r['place']}（{md(r['day'])}）"[:100], value=str(r["id"])) for r in rows]
+        super().__init__(placeholder="🗑 消す記録", options=opts)
+
+    async def callback(self, interaction):
+        await db.execute("DELETE FROM trips WHERE id=? AND user_id=?", (int(self.values[0]), str(interaction.user.id)))
+        await db.commit()
+        await interaction.response.edit_message(content="🗑 消しました。地図は次に開いたときに更新されます。", view=None)
+
+async def trip_map_payload(user, uid, region):
+    """(本文, PNG) を返す。uid=None ならみんなの地図"""
+    counts = await trip_counts(region, uid)
+    title = f"{user.display_name} さんの地図" if uid is not None else "みんなの地図"
+    buf = await asyncio.to_thread(render_odekake_map, title, region, counts, uid is not None)
+    n = sum(1 for k in counts if k in _map_polys(region))
+    return f"{'🙋' if uid is not None else '🗾'} **{title}**（{region}）制覇 {n}/{PLACE_TOTAL[region]}", buf
+
+async def send_trip_map(interaction, mine, region="都内"):
+    await ensure_user(interaction.user)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    uid = interaction.user.id if mine else None
+    content, buf = await trip_map_payload(interaction.user, uid, region)
+    kwargs = {"file": discord.File(buf, filename="odekake.png")} if buf else {}
+    await interaction.followup.send(content, view=TripMapView(uid, region), ephemeral=True, **kwargs)
+
+async def send_trip_add(interaction):
+    """📍 写真なしで記録（昔行った場所も）"""
+    await ensure_user(interaction.user)
+
+    async def on_pick(i, region, place):
+        await record_trip(i.user.id, region, place)
+        await i.response.edit_message(content=f"📍 **{place}** を地図に載せました。{await trip_done_note(i.user.id, region)}\n-# 続けて入れるなら、もう一度 📍 から", view=None)
+    await interaction.response.send_message("📍 行った場所をえらんでください（昔の旅行もOK）", view=TripPickView(on_pick), ephemeral=True)
+
+async def send_trip_see(interaction):
+    """🔍 場所から見る：その場所の記録と写真へのリンク"""
+    await ensure_user(interaction.user)
+
+    async def on_pick(i, region, place):
+        async with db.execute("SELECT t.*, u.name AS uname FROM trips t LEFT JOIN users u ON u.id=t.user_id "
+                              "WHERE t.region=? AND t.place=? ORDER BY t.id DESC LIMIT 20", (region, place)) as c:
+            rows = await c.fetchall()
+        lines = [f"🔍 **{place}**（{len(rows)}件）"]
+        for r in rows:
+            link = f"　[写真を見る](https://discord.com/channels/{i.guild_id}/{r['ch_id']}/{r['msg_id']})" if r["msg_id"] and r["ch_id"] else ""
+            lines.append(f"・{md(r['day'])} {r['uname'] or '？'}{link}")
+        if not rows:
+            lines.append("-# まだだれも記録していません。1番乗りのチャンス！")
+        await i.response.edit_message(content="\n".join(lines)[:1900], view=None)
+    await interaction.response.send_message("🔍 見たい場所をえらんでください", view=TripPickView(on_pick), ephemeral=True)
+
+class OdekakePanelView(discord.ui.View):
+    """#おでかけ🗾 のパネル"""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🗾 みんなの地図", style=discord.ButtonStyle.success, custom_id="sk_trip_all")
+    async def all_btn(self, interaction, button):
+        await send_trip_map(interaction, False)
+
+    @discord.ui.button(label="🙋 じぶんの地図", style=discord.ButtonStyle.primary, custom_id="sk_trip_mine")
+    async def mine_btn(self, interaction, button):
+        await send_trip_map(interaction, True)
+
+    @discord.ui.button(label="📍 写真なしで記録", style=discord.ButtonStyle.secondary, custom_id="sk_trip_add", row=1)
+    async def add_btn(self, interaction, button):
+        await send_trip_add(interaction)
+
+    @discord.ui.button(label="🔍 場所から見る", style=discord.ButtonStyle.secondary, custom_id="sk_trip_see", row=1)
+    async def see_btn(self, interaction, button):
+        await send_trip_see(interaction)
+
+VIEW_FACTORY["odekake"] = OdekakePanelView
+
 # ---- 📊 みんなの最低限（設定の一覧表を1枚の画像に。押した人にだけ表示） ----
 SAITEI_COLS = ([("☀", "起床"), ("😴", "睡眠"), ("🛁", "入浴"), ("🪥", "歯磨き"), ("🍚", "食事"), ("🏃", "体操"), ("📖", "勉強")]
                + [(e.replace("\ufe0f", ""), lb) for _c, lb, e, _s in KAJI_CATS]   # 家事の列は KAJI_CATS の順（saitei_cells と揃える）
@@ -10095,6 +10441,8 @@ def tutorial_embeds():
         "#えらい🌟　今日がんばったことを報告して褒め合う\n"
         "#やること📌　📌やること宣言／📝自分の項目のチェック\n"
         "#勉強記録📖　✏️勉強の記録（教材×時間）。最低限の📖はここの時間で判定\n"
+        "#おでかけ🗾　おでかけの写真で地図を埋める（都内・都外）\n"
+        "NOKOシネマズ　映画・ドラマ・アニメの感想フォーラム（作品ごとに1スレッド）\n"
         "#叱責👹　毎晩の判定結果。晒される場所\n"
         "#つうしんぼ📮　週の通信簿と月間表彰\n"
         "#設定🔧　🛠最低限の設定／🏃ラジオ体操の呼び出し・⏰起床リマインドのON/OFF\n"
@@ -11474,6 +11822,10 @@ async def work_award(d1, d2):
 # ============================================================
 #  暮らしのTIPS📚（フォーラム×Bot：投稿を知識ストック化・🔖保存・検索・今日のTIPS）
 # ============================================================
+CINEMA_CH_NAME = "NOKOシネマズ"
+CINEMA_TAGS = [("🟢", "ネタバレなし"), ("🔴", "ネタバレあり"), ("🎬", "映画"), ("📺", "ドラマ"), ("🎞", "アニメ"), ("📦", "その他")]
+CINEMA_TOPIC = ("見た映画・ドラマ・アニメの感想を語る場所。1作品につき1スレッドで、まず同じ作品のスレッドがないか探してね。\n"
+                "タグで「ネタバレなし／あり」を選ぶこと。ネタバレなしのスレッドで内容に触れるときは ||こう囲む|| と隠せます。")
 TIPS_CH_NAME = "暮らしのtips📚"
 TIPS_TAGS = [("🍳", "レシピ"), ("🛒", "お得・期間限定"), ("🧹", "家事ハック"), ("💤", "ねむり"), ("🏫", "キャンパス周辺"), ("📦", "その他")]
 TIPS_TOPIC = ("暮らしの知恵をストックする場所。レシピ・お店の期間限定・家事ハックなど、後輩の生活を1つ楽にする投稿を。\n"
@@ -12072,27 +12424,33 @@ class GoodsPanelView(discord.ui.View):
 
 VIEW_FACTORY["goods"] = GoodsPanelView
 
-async def ensure_tips_forum(guild, cat):
-    """#暮らしのtips📚（フォーラム）を用意。コミュニティ未設定などで作れない場合は案内を出す"""
+async def _ensure_forum(guild, cat, key, name, tag_defs, topic):
+    """フォーラムを用意（保存IDで探すので、手で改名しても作り直さない）。コミュニティ未設定などで作れない場合は案内を出す"""
     tch = None
-    tid0 = await meta_get("ch_tips")
+    tid0 = await meta_get("ch_" + key)
     if tid0:
         tch = guild.get_channel(int(tid0))
+    if tch is None:   # Discord が名前を小文字にすることがあるので大小を区別せずに探す
+        tch = next((c for c in guild.channels if c.name.casefold() == name.casefold()), None)
     if tch is None:
-        tch = discord.utils.get(guild.channels, name=TIPS_CH_NAME)
-    if tch is None:
-        tags = [discord.ForumTag(name=n, emoji=discord.PartialEmoji(name=e)) for e, n in TIPS_TAGS]
+        tags = [discord.ForumTag(name=n, emoji=discord.PartialEmoji(name=e)) for e, n in tag_defs]
         try:
             try:
-                tch = await guild.create_forum(TIPS_CH_NAME, category=cat, topic=TIPS_TOPIC, available_tags=tags, reason="暮らしのTIPS（/setup）")
+                tch = await guild.create_forum(name, category=cat, topic=topic, available_tags=tags, reason=f"{name}（/setup）")
             except TypeError:
-                tch = await guild.create_forum(TIPS_CH_NAME, category=cat, topic=TIPS_TOPIC, reason="暮らしのTIPS（/setup)")
+                tch = await guild.create_forum(name, category=cat, topic=topic, reason=f"{name}（/setup)")
                 await tch.edit(available_tags=tags)
         except Exception as e:
-            SETUP_ERRORS.append(f"#{TIPS_CH_NAME}（フォーラム）を作れませんでした（{e}）。サーバー設定→有効化→「コミュニティ」をONにしてから、もう一度 /setup を実行してください")
+            SETUP_ERRORS.append(f"#{name}（フォーラム）を作れませんでした（{e}）。サーバー設定→有効化→「コミュニティ」をONにしてから、もう一度 /setup を実行してください")
             return None
-    await meta_set("ch_tips", tch.id)
+    await meta_set("ch_" + key, tch.id)
     return tch
+
+async def ensure_tips_forum(guild, cat):
+    return await _ensure_forum(guild, cat, "tips", TIPS_CH_NAME, TIPS_TAGS, TIPS_TOPIC)
+
+async def ensure_cinema_forum(guild, cat):
+    return await _ensure_forum(guild, cat, "cinema", CINEMA_CH_NAME, CINEMA_TAGS, CINEMA_TOPIC)
 
 
 # ============================================================
@@ -12776,6 +13134,7 @@ async def setup_command(interaction):
         role_note = "ロール：" + (f"作成 {', '.join(created)}" if created else "既存を利用") + f"／パネル {n_panels}/3 件 → {rch.mention}\n"
     audio_state = "あり ✅" if os.path.exists(RADIO_MP3) else f"なし ⚠️ VMに {RADIO_MP3} を置いてください"
     tips_ch = await ensure_tips_forum(guild, cat)
+    await ensure_cinema_forum(guild, cat)
     try:
         botlog = await ensure_botlog_channel(guild, cat)
     except Exception as e:

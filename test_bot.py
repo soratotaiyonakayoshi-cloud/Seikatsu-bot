@@ -93,6 +93,8 @@ def _late_reply_handlers(src):
 
     def scan(stmts, bad):
         for st in stmts:
+            if isinstance(st, (ast.AsyncFunctionDef, ast.FunctionDef, ast.ClassDef)):
+                continue   # 定義しただけ（呼ばれるのはあと）
             if isinstance(st, ast.If):
                 r1 = scan(st.body, bad)
                 r2 = scan(st.orelse, bad)
@@ -1785,6 +1787,53 @@ async def main():
     _i = _press(M(70, "朝の人")); await _i.response.defer()
     await B._view_on_error(None, _i, RuntimeError("途中で失敗"), _NS2(custom_id="sk_x"))
     check("defer後のエラー: 「考え中」のまま止めず返事を出す", "うまく処理できません" in _i.followup.sent[0], True)
+    # 🗾 おでかけ
+    check("おでかけ: 選択肢の場所は地図データと一致（都内62・都外46）",
+          ({n for _l, ns in B.PLACE_GROUPS["都内"] for n in ns} == set(B._map_polys("都内")),
+           {n for _l, ns in B.PLACE_GROUPS["都外"] for n in ns} == set(B._map_polys("都外")) - {"東京都"},
+           B.PLACE_TOTAL), (True, True, {"都内": 62, "都外": 46}))
+    check("おでかけ: プルダウンは25件以内", max(len(ns) for gs in B.PLACE_GROUPS.values() for _l, ns in gs) <= 25, True)
+    _u1, _u2 = M(71, "旅人A"), M(72, "旅人B")
+    await B.ensure_user(_u1); await B.ensure_user(_u2)
+    await B.record_trip(71, "都内", "府中市", 111, 222)
+    await B.record_trip(71, "都内", "府中市", 112, 222)
+    await B.record_trip(72, "都内", "府中市")
+    await B.record_trip(72, "都外", "沖縄県")
+    check("おでかけ: みんなの地図は人数で数える（同じ人の2回は1人）", await B.trip_counts("都内"), {"府中市": 2})
+    check("おでかけ: じぶんの地図", (await B.trip_counts("都外", 71), await B.trip_counts("都外", 72)), ({}, {"沖縄県": 1}))
+    check("おでかけ: 投稿についた場所", await B.trip_message_places(111), ["府中市"])
+    for _rg in ("都内", "都外"):
+        check(f"おでかけ: 地図PNG（{_rg}）", B.render_odekake_map("みんなの地図", _rg, await B.trip_counts(_rg), False).read(4), b"\x89PNG")
+    # 写真のボタン：本人だけ選べて、選ぶと記録される
+    _tb = B.TripPlaceButton(113, 71)
+    _i = _press(M(72, "旅人B")); await _tb.callback(_i)
+    check("おでかけ: 投稿した本人だけ選べる", "本人だけ" in _i.response.sent[0], True)
+    _edits = []
+
+    async def _bm_edit(**k):
+        _edits.append(k)
+    _i = _press(M(71, "旅人A")); _i.message = _NS2(edit=_bm_edit); _i.channel_id = 222
+    _sent = {}
+    _orig_send = _i.response.send_message
+
+    async def _capture(content=None, **k):
+        _sent.update(k)
+        await _orig_send(content, **k)
+    _i.response.send_message = _capture
+    await _tb.callback(_i)
+    _pv = _sent["view"]
+    _pv.group = "都外:6"; _pv._build()
+    _i2 = _press(M(71, "旅人A")); _i2.guild_id = 1
+    await _pv.on_pick(_i2, "都外", "沖縄県")
+    check("おでかけ: 選ぶと記録され、返信の文面が更新される", ("沖縄県" in _edits[0]["content"], await B.trip_message_places(113)), (True, ["沖縄県"]))
+    check("おでかけ: 地方→場所の2段階", [type(c).__name__ for c in _pv.children], ["_TripGroupSelect", "_TripPlaceSelect"])
+    _i = _press(M(71, "旅人A")); await B.send_trip_map(_i, True)
+    check("おでかけ: じぶんの地図が開く", _i.followup.sent[0].startswith("🙋"), True)
+    _i = _press(M(71, "旅人A")); await B.send_trip_map(_i, False, "都外")
+    check("おでかけ: みんなの地図が開く", _i.followup.sent[0].startswith("🗾"), True)
+    check("おでかけ: パネル", [c.custom_id for c in B.OdekakePanelView().children], ["sk_trip_all", "sk_trip_mine", "sk_trip_add", "sk_trip_see"])
+    check("おでかけ: チャンネル定義", (B.CH["odekake"][0], B.VIEW_FACTORY.get("odekake") is B.OdekakePanelView), ("おでかけ🗾", True))
+    check("NOKOシネマズ: 名前とタグ", (B.CINEMA_CH_NAME, "ネタバレあり" in [n for _e, n in B.CINEMA_TAGS]), ("NOKOシネマズ", True))
     # 構文チェック：押した人への返事より前に遅い処理（投稿・VC接続・外部通信・画像づくり）をしていないか
     check("返事より前に遅い処理をしている箇所がない", _late_reply_handlers(open(B.__file__, encoding="utf-8").read()), [])
     # await を含むジェネレータ式（any(... await ...) など）は実行時に TypeError になる。コードに残っていないか構文から確認
