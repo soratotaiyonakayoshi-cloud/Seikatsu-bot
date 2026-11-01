@@ -1632,6 +1632,15 @@ async def main():
     check("勉強タイマー: ⏹ で記録される", (_lg2["minutes"], _lg2["source"], await B.study_timer_of(68)), (10, "timer", None))
     _i = _press(_sm); await B.send_saitei_table(_i)
     check("📊 みんなの最低限: 開く（エラーなし）", len(_i.followup.sent), 1)
+    # 課題登録：投稿の前に defer（3秒に間に合わず「登録できたのにエラー表示」になるのを防ぐ）
+    _code = (await (await B.db.execute("SELECT code FROM courses LIMIT 1")).fetchone())["code"]
+    _i = _press(M(68, "記録する人")); await B.kadai_register(_i, _code, "12/25", "つまりテスト", "")
+    check("課題登録: 先に defer して followup で返事", (_i.response.deferred, _i.response.sent, _i.followup.sent[0].startswith("✅ 登録しました")), (True, [], True))
+    _i = _press(M(68, "記録する人")); await B.kadai_register(_i, _code, "よめない", "x", "")
+    check("課題登録: 期限が読めないときはすぐ返事（登録しない）", (_i.response.deferred, "形式" in _i.response.sent[0]), (False, True))
+    check("🩺 切り分けの1行", B.diag_text(3.4, 0.2, [(0.0, 0), (2.5, 340), (0.1, 3)]),
+          "操作から失敗まで 3.4秒・Botに届くまで 0.2秒・直近10秒のループ停止 最大2.5秒・スワップ読み戻し 343回")
+    check("🩺 届いた時間が不明でも落ちない", B.diag_text(3.0, None, []), "操作から失敗まで 3.0秒・Botに届くまで 不明・直近10秒のループ停止 最大0.0秒・スワップ読み戻し 0回")
     # await を含むジェネレータ式（any(... await ...) など）は実行時に TypeError になる。コードに残っていないか構文から確認
     import ast as _ast
     _src = open(B.__file__, encoding="utf-8").read()

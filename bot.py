@@ -1004,6 +1004,7 @@ async def auto_wake(user, hint=""):
 @bot.event
 async def on_interaction(interaction):
     """どのボタン・コマンド操作も「起きている証拠」として押し忘れ救済に使う"""
+    note_interaction_arrival(interaction)
     try:
         if not interaction.guild or interaction.user is None or interaction.user.bot:
             return
@@ -3071,6 +3072,52 @@ async def materialize_weekly_off(day):
         n += cur.rowcount
     await db.commit()
     return n
+
+# ---- 🩺 処理のつまりの計測（「時間内に応答しない」の原因を切り分ける。ログと #bot管理🔒 に出すだけで動作は変えない） ----
+_diag = {"recent": [], "arrivals": {}, "task": None}   # recent＝直近10秒の (停止秒, スワップ読み戻し回数)
+
+def _major_faults():
+    """このプロセスがディスクから読み戻した回数（スワップ。/proc が無い環境では 0）"""
+    try:
+        with open("/proc/self/stat") as f:
+            return int(f.read().rsplit(")", 1)[1].split()[9])
+    except Exception:
+        return 0
+
+async def loop_lag_monitor():
+    """イベントループが止まっていないかを1秒ごとに測る。1秒以上止まったらログへ"""
+    loop = asyncio.get_running_loop()
+    prev = _major_faults()
+    while True:
+        t0 = loop.time()
+        await asyncio.sleep(1)
+        lag = max(0.0, loop.time() - t0 - 1)
+        cur = _major_faults()
+        _diag["recent"] = (_diag["recent"] + [(lag, cur - prev)])[-10:]
+        if lag >= 1:
+            print(f"🩺 イベントループが {lag:.1f} 秒停止（スワップ読み戻し {cur - prev} 回）", flush=True)
+        prev = cur
+
+def note_interaction_arrival(interaction):
+    """操作してからBotに届くまでの秒数を控える（遅ければ Discord・通信側の遅れ）"""
+    age = (discord.utils.utcnow() - interaction.created_at).total_seconds()
+    arr = _diag["arrivals"]
+    arr[interaction.id] = age
+    while len(arr) > 200:
+        arr.pop(next(iter(arr)))
+    if age >= 1.5:
+        print(f"🩺 操作が {age:.1f} 秒遅れて届いた（{(interaction.data or {}).get('custom_id', interaction.type)}）", flush=True)
+
+def diag_text(total, arrived, recent):
+    """切り分け用の1行：届くまで／直近10秒の停止／スワップ読み戻し"""
+    lag = max((x[0] for x in recent), default=0.0)
+    faults = sum(x[1] for x in recent)
+    return (f"操作から失敗まで {total:.1f}秒・Botに届くまで " + (f"{arrived:.1f}秒" if arrived is not None else "不明")
+            + f"・直近10秒のループ停止 最大{lag:.1f}秒・スワップ読み戻し {faults}回")
+
+def interaction_diag_text(interaction):
+    total = (discord.utils.utcnow() - interaction.created_at).total_seconds()
+    return diag_text(total, _diag["arrivals"].get(interaction.id), _diag["recent"])
 
 @tasks.loop(minutes=1)
 async def judge_loop():
@@ -5454,6 +5501,8 @@ async def on_ready():
     asyncio.create_task(warmup_player("起動"))   # 起動直後にPO Token/解読キャッシュを温めておく
     if not judge_loop.is_running():
         judge_loop.start()
+    if not _diag["task"]:
+        _diag["task"] = asyncio.create_task(loop_lag_monitor())
     if not radio_loop.is_running():
         radio_loop.start()
     if not remind_loop.is_running():
@@ -6282,6 +6331,7 @@ async def kadai_register(interaction, code, kigen, naiyou, memo):
         await interaction.response.send_message("⚠️ 期限の形式が読めませんでした。例: `10/15` `10/15 17:00` `10月15日`", ephemeral=True)
         return
     naiyou = (naiyou or "").strip()
+    await interaction.response.defer(ephemeral=True)   # 投稿＋パネルの置き直しで3秒を超えることがある（超えると登録できたのにエラー表示になる）
     await db.execute("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES(?,?)", (str(user.id), c["code"]))
     cur = await db.execute("INSERT INTO assignments(code,title,note,due_ts,created_by,created_at) VALUES(?,?,?,?,?,?)",
                            (c["code"], naiyou[:100], (memo or "").strip()[:300] or None, int(due.timestamp()), str(user.id), int(now_jst().timestamp())))
@@ -6293,7 +6343,7 @@ async def kadai_register(interaction, code, kigen, naiyou, memo):
         await db.execute("UPDATE assignments SET msg_id=? WHERE id=?", (str(msg.id), aid))
         await db.commit()
     n = len(await takers_of(c["code"]))
-    await interaction.response.send_message(f"✅ 登録しました：**{c['name']}**「{naiyou}」 期限 {fmt_due(due)}（履修者 {n} 人に通知。3日前・前日・当日朝にもリマインドします）", ephemeral=True)
+    await interaction.followup.send(f"✅ 登録しました：**{c['name']}**「{naiyou}」 期限 {fmt_due(due)}（履修者 {n} 人に通知。3日前・前日・当日朝にもリマインドします）", ephemeral=True)
 
 @kadai.command(name="list", description="自分の履修科目の課題一覧（期限順・プルダウンで✅）")
 async def kadai_list(interaction):
@@ -9867,7 +9917,7 @@ async def send_saitei_table(interaction):
     await ensure_user(interaction.user)
     await interaction.response.defer(ephemeral=True, thinking=True)
     rows = await saitei_table_rows()
-    buf = render_saitei_table(rows, day_str(now_jst())) if rows else None
+    buf = await asyncio.to_thread(render_saitei_table, rows, day_str(now_jst())) if rows else None
     if not buf:
         await interaction.followup.send("まだ最低限を設定している人がいません。🛠 から1人目になろう！" if not rows
                                         else "一覧表を作れませんでした（画像の作成に失敗）。", ephemeral=True)
@@ -12962,7 +13012,11 @@ async def _view_on_error(self, interaction, error, item):
     """ボタン・セレクト操作で起きたエラーも #bot管理🔒 に（discord.pyの既定はログに出すだけ）"""
     print(f"view error: {error!r}", flush=True)
     label = getattr(item, "custom_id", None) or getattr(item, "label", None) or type(item).__name__
-    await bot_alert(f"⚠️ ボタン/選択 `{label}` でエラー（{interaction.user.display_name}）\n-# {_short_tb(error)}",
+    diag = ""
+    if getattr(error, "code", None) == 10062:   # 3秒に間に合わなかった→原因の切り分け材料を添える
+        diag = "\n-# 🩺 " + interaction_diag_text(interaction)
+        print(diag, flush=True)
+    await bot_alert(f"⚠️ ボタン/選択 `{label}` でエラー（{interaction.user.display_name}）\n-# {_short_tb(error)}{diag}",
                     key=f"view:{type(item).__name__}:{type(error).__name__}", cooldown_h=1)
     try:
         if not interaction.response.is_done():
