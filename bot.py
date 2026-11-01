@@ -10663,7 +10663,11 @@ class GroupPraiseButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk
             await interaction.response.send_message("自分で自分を褒めるのは、心の中でどうぞ 🌟", ephemeral=True)
             return
         await ensure_user(interaction.user)
-        already = any(uid in await _praisers(r["id"]) for r in targets)
+        already = False
+        for r in targets:
+            if uid in await _praisers(r["id"]):
+                already = True
+                break
         for r in targets:
             if already:
                 await db.execute("DELETE FROM effort_praise WHERE effort_id=? AND user_id=?", (r["id"], uid))
@@ -12968,6 +12972,20 @@ async def _view_on_error(self, interaction, error, item):
 
 discord.ui.View.on_error = _view_on_error
 discord.ui.Modal.on_error = lambda self, interaction, error: _view_on_error(self, interaction, error, self)
+
+def _guard_dynamic_item(cls):
+    """動的ボタン（投稿についている👏や✅）の例外は View.on_error を通らず、通知も返事も出ない→同じ処理へ回す"""
+    orig = cls.callback
+
+    async def callback(self, interaction):
+        try:
+            await orig(self, interaction)
+        except Exception as e:
+            await _view_on_error(self, interaction, e, self)
+    cls.callback = callback
+
+for _dyn in discord.ui.DynamicItem.__subclasses__():
+    _guard_dynamic_item(_dyn)
 
 # --- 起動 ---
 if __name__ == "__main__":

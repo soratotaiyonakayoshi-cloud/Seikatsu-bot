@@ -1549,6 +1549,97 @@ async def main():
     content, prs = await B._group_state(grp)
     check("勉強会まとめ: 本文に🔥・分数なし", ("🔥3日連続" in content, "分" in content.split("\n")[1], "📖" in content), (True, False, True))
     check("勉強会まとめ: 1行目に日付", content.split("\n")[0], f"📖 **今夜のミニ勉強会に参加**（{B.md(bk_day)}）")
+    # ボタンを実際に押す（部品だけのテストでは callback の中の不具合を見逃した）
+    class _Resp:
+        def __init__(self):
+            self.sent, self.edited, self.modal, self.deferred = [], [], [], False
+
+        def is_done(self):
+            return bool(self.sent or self.edited or self.modal or self.deferred)
+
+        async def send_message(self, content=None, **k):
+            self.sent.append(content)
+
+        async def edit_message(self, **k):
+            self.edited.append(k)
+
+        async def send_modal(self, m):
+            self.modal.append(m)
+
+        async def defer(self, **k):
+            self.deferred = True
+
+    class _Followup:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, content=None, **k):
+            self.sent.append(content)
+
+    def _press(user):
+        from types import SimpleNamespace as _NS
+        return _NS(user=user, response=_Resp(), followup=_Followup(), guild=None, message=None)
+    _gb = B.GroupPraiseButton(ids[0])
+    _i = _press(M(67, "ほめる人")); await B.ensure_user(_i.user)
+    await _gb.callback(_i)
+    _np = lambda eid: B.db.execute("SELECT COUNT(*) AS n FROM effort_praise WHERE effort_id=? AND user_id='67'", (eid,))
+    _counts = [(await (await _np(x)).fetchone())["n"] for x in ids]
+    check("勉強会まとめ👏: 押すと全員に付き、投稿が更新される", (_counts, len(_i.response.edited), "👏 × 1" in _i.response.edited[0]["content"]), ([1, 1], 1, True))
+    _i = _press(M(67, "ほめる人")); await _gb.callback(_i)
+    check("勉強会まとめ👏: もう一度で取り消し", [(await (await _np(x)).fetchone())["n"] for x in ids], [0, 0])
+    _i = _press(M(61, "参加者")); await _gb.callback(_i)
+    _self_n = await (await B.db.execute("SELECT COUNT(*) AS n FROM effort_praise WHERE effort_id=? AND user_id='61'", (ids[0],))).fetchone()
+    _oth_n = await (await B.db.execute("SELECT COUNT(*) AS n FROM effort_praise WHERE effort_id=? AND user_id='61'", (ids[1],))).fetchone()
+    check("勉強会まとめ👏: 参加者は自分以外だけ褒める", (_self_n["n"], _oth_n["n"]), (0, 1))
+    # 動的ボタンの例外：押した人に返事が出る（「時間内に応答しませんでした」にしない）
+    class _BoomBtn(B.discord.ui.DynamicItem[B.discord.ui.Button], template=r"sk_boom:(?P<x>\d+)"):
+        def __init__(self):
+            super().__init__(B.discord.ui.Button(label="x", custom_id="sk_boom:1"))
+
+        async def callback(self, interaction):
+            raise RuntimeError("boom")
+    B._guard_dynamic_item(_BoomBtn)
+    _i = _press(M(67, "ほめる人")); await _BoomBtn().callback(_i)
+    check("動的ボタンの例外: 押した人に返事が出る", (len(_i.response.sent), "うまく処理できません" in _i.response.sent[0]), (1, True))
+    check("動的ボタン: 全部ガード済み（👏・✅など）", B.PraiseButton.callback.__qualname__.startswith("_guard_dynamic_item"), True)
+    # 勉強記録のボタンも実際に押す
+    _sm = M(68, "記録する人"); _o = M(69, "応援する人"); await B.ensure_user(_sm); await B.ensure_user(_o)
+    _v = B.StudyEntryView(68, ["英語"])
+    _v.minutes = 25
+    _i = _press(_sm); await _v._commit(_i)
+    _lg = await (await B.db.execute("SELECT * FROM study_logs WHERE user_id='68'")).fetchone()
+    check("勉強記録: ✅ で記録される", (_lg["subject"], _lg["minutes"], "25分" in _i.response.edited[0]["content"]), ("英語", 25, True))
+    _sp = B.StudyPraiseButton(_lg["id"])
+    _i = _press(_o); await _sp.callback(_i)
+    check("勉強記録: 👏 で投稿が更新", "👏 × 1" in _i.response.edited[0]["content"], True)
+    _i = _press(_sm); await _sp.callback(_i)
+    check("勉強記録: 自分の記録には押せない", len(_i.response.sent), 1)
+    _i = _press(_sm); await B.send_study_today(_i)
+    check("勉強記録: 📋 今日の記録が開く", _i.followup.sent[0].startswith("📋"), True)
+    _i = _press(_sm); await B.send_study_chart(_i)
+    check("勉強記録: 📊 が開く（エラーなし）", len(_i.followup.sent), 1)
+    _i = _press(_sm); await B.send_study_subjects(_i)
+    check("勉強記録: 📚 が開く", len(_i.response.sent), 1)
+    _i = _press(_sm); await B.open_study_timer(_i)
+    check("勉強タイマー: 未計測なら開始画面", "勉強タイマー" in _i.response.sent[0], True)
+    await B.db.execute("INSERT OR REPLACE INTO study_timers(user_id,subject,start_ts,warned) VALUES('68','数学',?,0)", (int(B.now_jst().timestamp()) - 600,))
+    await B.db.commit()
+    _i = _press(_sm); await B.open_study_timer(_i)
+    check("勉強タイマー: 計測中なら経過を表示", "計測中" in _i.response.sent[0], True)
+    _tv = B.StudyTimerRunView(68)
+    _i = _press(_sm); await _tv.stop_btn.callback(_i)
+    _lg2 = await (await B.db.execute("SELECT subject, minutes, source FROM study_logs WHERE user_id='68' AND subject='数学'")).fetchone()
+    check("勉強タイマー: ⏹ で記録される", (_lg2["minutes"], _lg2["source"], await B.study_timer_of(68)), (10, "timer", None))
+    _i = _press(_sm); await B.send_saitei_table(_i)
+    check("📊 みんなの最低限: 開く（エラーなし）", len(_i.followup.sent), 1)
+    # await を含むジェネレータ式（any(... await ...) など）は実行時に TypeError になる。コードに残っていないか構文から確認
+    import ast as _ast
+    _src = open(B.__file__, encoding="utf-8").read()
+    def _gen_awaits(n):   # いちばん外の for の iterable（for r in await f()）は先に評価されるので問題ない。それ以外の await が NG
+        parts = [n.elt] + n.generators[0].ifs + [x for g in n.generators[1:] for x in (g.iter, *g.ifs)]
+        return any(isinstance(x, _ast.Await) for p in parts for x in _ast.walk(p))
+    _bad = [n.lineno for n in _ast.walk(_ast.parse(_src)) if isinstance(n, _ast.GeneratorExp) and _gen_awaits(n)]
+    check("await入りのジェネレータ式がない", _bad, [])
 
     # 🔊 作業部屋のVCステータス（サブタイトル）
     check("VCステータス: 勉強会中が最優先", await B.work_vc_status_text(datetime(2026, 8, 21, 22, 30, tzinfo=JST)),
