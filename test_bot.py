@@ -1972,6 +1972,37 @@ async def main():
     check("固定投稿: 2回目は更新だけ（増えない）・名前も直す", (len(_made), _edited[0]["content"] == B.CINEMA_GUIDE, _pinned[-1]), (1, True, {"name": B.CINEMA_GUIDE_TITLE}))
     await B.db.execute("DELETE FROM meta WHERE key='cinema_guide_thread'"); await B.db.commit()
     check("固定投稿: 文字数は上限内", (len(B.ODEKAKE_GUIDE) < 2000, len(B.CINEMA_GUIDE) < 2000, len(B.ODEKAKE_GUIDE_TITLE) <= 100), (True, True, True))
+    # 📚 NOKO書店・🎬 共通の棚
+    check("NOKO書店: 名前とタグ", (B.BOOK_CH_NAME, [n for _e, n in B.BOOK_TAGS].count("R15"), "R18" in [n for _e, n in B.BOOK_TAGS], len(B.BOOK_TAGS) + 1 <= 20), ("NOKO書店", 1, False, True))
+    check("NOKO書店: 使い方にR18不可", ("R18作品は投稿できません" in B.BOOK_GUIDE, len(B.BOOK_GUIDE) < 2000, "R18" in B.BOOK_TOPIC, len(B.BOOK_TOPIC) <= 4096), (True, True, True, True))
+    _st = await B.media_toggle(801, 81, "want")
+    await B.media_toggle(801, 82, "done")
+    check("棚: 押すと入る・人数", (_st, await B.media_counts(801)), ("want", (1, 1)))
+    check("棚: 読みたい→読んだは移動", (await B.media_toggle(801, 81, "done"), await B.media_counts(801)), ("done", (0, 2)))
+    check("棚: もう一度押すと取り消し", (await B.media_toggle(801, 81, "done"), await B.media_counts(801)), (None, (0, 1)))
+    _sent3 = []
+
+    async def _send3(c=None, **k):
+        _sent3.append((c, k))
+    _rs, B.asyncio.sleep = B.asyncio.sleep, _noop
+    _mth = _NS2(id=802, owner_id=83, send=_send3)
+    check("棚: 投稿にボタンを添える・二重にしない", (await B.on_media_thread(_mth, "book"), await B.on_media_thread(_mth, "book"), len(_sent3)), (True, False, 1))
+    check("棚: ボタンのラベル", [c.item.label for c in _sent3[0][1]["view"].children], ["🔖 読みたい", "✅ 読んだ"])
+    _bot_th = _NS2(id=803, owner_id=B.bot.user.id, send=_send3)
+    check("棚: Botの投稿には付けない", await B.on_media_thread(_bot_th, "cinema"), False)
+    _cth = _NS2(id=804, owner_id=83, send=_send3)
+    check("棚: 既存の投稿にも付ける（/setup）", (await B.media_backfill(_NS2(threads=[_cth, _mth, _bot_th]), "cinema"), _sent3[-1][0]), (1, "🔖 見たい 0人 ／ ✅ 見た 0人"))
+    B.asyncio.sleep = _rs
+    # ボタンを実際に押す
+    _mb = B.MediaMarkButton("book", "want", 802)
+    _i = _press(M(84, "読む人")); await B.ensure_user(_i.user); await _mb.callback(_i)
+    check("棚: 押すと投稿の人数が更新", (_i.response.edited[0]["content"], len(_i.followup.sent)), ("🔖 読みたい 1人 ／ ✅ 読んだ 0人", 1))
+    check("棚: 他の投稿の種類は混ざらない", ("<#802>" in await B.media_shelf_text("book", 84), "<#802>" in await B.media_shelf_text("cinema", 84)), (True, False))
+    _gi = _press(M(84, "読む人")); await B.MediaGuideView("book").open_shelf(_gi)
+    check("棚: じぶんの本棚が開く", _gi.response.sent[0].startswith("**📚 じぶんの本棚**"), True)
+    check("棚: 固定投稿のボタンはリスタート後も有効", {"sk_shelf_book", "sk_shelf_cinema"} <= {c.custom_id for v in _fake.persistent_views for c in v.children}, True)
+    await B.remove_media_post(802)
+    check("棚: 投稿を消すと記録も消える", (await B.media_counts(802), "<#802>" in await B.media_shelf_text("book", 84)), ((0, 0), False))
     check("NOKOシネマズ: 名前とタグ", (B.CINEMA_CH_NAME, "ネタバレあり" in [n for _e, n in B.CINEMA_TAGS]), ("NOKOシネマズ", True))
     # 構文チェック：押した人への返事より前に遅い処理（投稿・VC接続・外部通信・画像づくり）をしていないか
     check("返事より前に遅い処理をしている箇所がない", _late_reply_handlers(open(B.__file__, encoding="utf-8").read()), [])

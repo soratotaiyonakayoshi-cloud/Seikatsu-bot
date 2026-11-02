@@ -236,6 +236,11 @@ CREATE TABLE IF NOT EXISTS trips(
 );
 CREATE INDEX IF NOT EXISTS idx_trips_place ON trips(region, place);
 CREATE TABLE IF NOT EXISTS trip_posts(thread_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT, body TEXT, thumb TEXT, day TEXT, ts INTEGER);
+CREATE TABLE IF NOT EXISTS media_posts(thread_id TEXT PRIMARY KEY, kind TEXT NOT NULL, user_id TEXT, ts INTEGER);
+CREATE TABLE IF NOT EXISTS media_marks(
+  thread_id TEXT NOT NULL, user_id TEXT NOT NULL, state TEXT NOT NULL, day TEXT, ts INTEGER, PRIMARY KEY(thread_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_media_marks_user ON media_marks(user_id, state);
 CREATE TABLE IF NOT EXISTS study_logs(
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, day TEXT NOT NULL, subject TEXT NOT NULL,
   minutes INTEGER NOT NULL, note TEXT, source TEXT NOT NULL DEFAULT 'manual', msg_id TEXT, ts INTEGER
@@ -590,10 +595,12 @@ class SeikatsuBot(discord.Client):
         self.add_view(MusicPanelView())
         self.add_view(YoteiPanelView())
         self.add_view(IntroView())
-        self.add_dynamic_items(DoneButton, SkipButton, MealFixButton, PraiseButton, GroupPraiseButton, StudyPraiseButton, WorkStudyButton, TripPlaceButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
+        self.add_dynamic_items(DoneButton, SkipButton, MealFixButton, PraiseButton, GroupPraiseButton, StudyPraiseButton, WorkStudyButton, TripPlaceButton, MediaMarkButton, MealPraiseButton, GoalReviewButton, TipSaveButton,
                                MemoDoneButton, MemoCarryButton, MemoDropButton, WorkNoteButton, GoodsResetButton)
         self.add_view(EraiView())
         self.add_view(OdekakePanelView())   # フォーラムの固定投稿に置くパネル（VIEW_FACTORY の外）
+        self.add_view(MediaGuideView("book"))
+        self.add_view(MediaGuideView("cinema"))
         registered = {type(v) for v in self.persistent_views}
         for V in VIEW_FACTORY.values():   # /setup で置くパネルは漏れなく登録（新しいパネルの登録忘れ＝ボタンが反応しない を防ぐ）
             if V not in registered:
@@ -10167,6 +10174,7 @@ async def remove_trip_post(thread_id):
 @bot.event
 async def on_raw_thread_delete(payload):
     await remove_trip_post(payload.thread_id)
+    await remove_media_post(payload.thread_id)
 
 @bot.event
 async def on_raw_message_edit(payload):
@@ -10503,6 +10511,119 @@ class OdekakePanelView(discord.ui.View):
     @discord.ui.button(label="🎲 思い出ガチャ", style=discord.ButtonStyle.secondary, custom_id="sk_trip_gacha", row=1)
     async def gacha_btn(self, interaction, button):
         await send_trip_gacha(interaction)
+
+# ---- 📚 NOKO書店・🎬 NOKOシネマズ共通：🔖 読みたい（見たい）／✅ 読んだ（見た）と、じぶんの棚 ----
+MEDIA_KINDS = {
+    "book": {"key": "ch_books", "want": "読みたい", "done": "読んだ", "shelf": "📚 じぶんの本棚"},
+    "cinema": {"key": "ch_cinema", "want": "見たい", "done": "見た", "shelf": "🎬 じぶんの棚"},
+}
+
+async def media_counts(thread_id):
+    async with db.execute("SELECT state, COUNT(*) AS n FROM media_marks WHERE thread_id=? GROUP BY state", (str(thread_id),)) as c:
+        got = {r["state"]: r["n"] for r in await c.fetchall()}
+    return got.get("want", 0), got.get("done", 0)
+
+async def media_toggle(thread_id, uid, state):
+    """押した状態にする（読みたい→読んだは移動）。同じものをもう一度押すと取り消し。結果の状態 or None を返す"""
+    tid, uid = str(thread_id), str(uid)
+    async with db.execute("SELECT state FROM media_marks WHERE thread_id=? AND user_id=?", (tid, uid)) as c:
+        cur = await c.fetchone()
+    if cur and cur["state"] == state:
+        await db.execute("DELETE FROM media_marks WHERE thread_id=? AND user_id=?", (tid, uid))
+        await db.commit()
+        return None
+    now = now_jst()
+    await db.execute("INSERT OR REPLACE INTO media_marks(thread_id,user_id,state,day,ts) VALUES(?,?,?,?,?)",
+                     (tid, uid, state, day_str(now), int(now.timestamp())))
+    await db.commit()
+    return state
+
+def media_line(kind, want_n, done_n):
+    m = MEDIA_KINDS[kind]
+    return f"🔖 {m['want']} {want_n}人 ／ ✅ {m['done']} {done_n}人"
+
+def media_view(kind, thread_id):
+    v = discord.ui.View(timeout=None)
+    v.add_item(MediaMarkButton(kind, "want", thread_id))
+    v.add_item(MediaMarkButton(kind, "done", thread_id))
+    return v
+
+class MediaMarkButton(discord.ui.DynamicItem[discord.ui.Button], template=r"sk_mark:(?P<kind>book|cinema):(?P<state>want|done):(?P<tid>\d+)"):
+    def __init__(self, kind, state, thread_id):
+        emoji, style = ("🔖", discord.ButtonStyle.secondary) if state == "want" else ("✅", discord.ButtonStyle.success)
+        super().__init__(discord.ui.Button(label=f"{emoji} {MEDIA_KINDS[kind][state]}", style=style, custom_id=f"sk_mark:{kind}:{state}:{thread_id}"))
+        self.kind, self.state, self.thread_id = kind, state, str(thread_id)
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["kind"], match["state"], match["tid"])
+
+    async def callback(self, interaction):
+        await ensure_user(interaction.user)
+        result = await media_toggle(self.thread_id, interaction.user.id, self.state)
+        want_n, done_n = await media_counts(self.thread_id)
+        await interaction.response.edit_message(content=media_line(self.kind, want_n, done_n), view=media_view(self.kind, self.thread_id))
+        m = MEDIA_KINDS[self.kind]
+        note = f"「{m[self.state]}」に入れました。{m['shelf']} から見られます" if result else f"「{m[self.state]}」から外しました"
+        await interaction.followup.send(note, ephemeral=True)
+
+async def on_media_thread(thread, kind):
+    """投稿に 🔖 ✅ を添える（Bot自身の投稿は対象外・1投稿に1回）"""
+    if thread.owner_id == bot.user.id:
+        return False
+    async with db.execute("SELECT 1 FROM media_posts WHERE thread_id=?", (str(thread.id),)) as c:
+        if await c.fetchone():
+            return False
+    await db.execute("INSERT INTO media_posts(thread_id,kind,user_id,ts) VALUES(?,?,?,?)",
+                     (str(thread.id), kind, str(thread.owner_id), int(now_jst().timestamp())))
+    await db.commit()
+    await asyncio.sleep(1)   # 最初の投稿より先に出ないように少し待つ
+    await thread.send(media_line(kind, 0, 0), view=media_view(kind, thread.id), silent=True)
+    return True
+
+async def media_backfill(forum, kind):
+    """機能を入れる前の投稿にも 🔖 ✅ を添える（/setup で実行・今動いているスレッドだけ）"""
+    n = 0
+    for th in list(getattr(forum, "threads", [])):
+        try:
+            if await on_media_thread(th, kind):
+                n += 1
+        except Exception as e:
+            print(f"棚ボタンの追加に失敗（{th.id}）: {e!r}", flush=True)
+    return n
+
+async def remove_media_post(thread_id):
+    await db.execute("DELETE FROM media_posts WHERE thread_id=?", (str(thread_id),))
+    await db.execute("DELETE FROM media_marks WHERE thread_id=?", (str(thread_id),))
+    await db.commit()
+
+async def media_shelf_text(kind, uid):
+    """じぶんの棚の本文。作品名はスレッドのリンクで出す（改題しても最新の名前になる）"""
+    m = MEDIA_KINDS[kind]
+    async with db.execute("SELECT mm.thread_id, mm.state FROM media_marks mm JOIN media_posts p ON p.thread_id=mm.thread_id "
+                          "WHERE mm.user_id=? AND p.kind=? ORDER BY mm.ts DESC", (str(uid), kind)) as c:
+        rows = await c.fetchall()
+    lines = [f"**{m['shelf']}**"]
+    for state, emoji in (("want", "🔖"), ("done", "✅")):
+        items = [r["thread_id"] for r in rows if r["state"] == state]
+        lines.append(f"\n{emoji} **{m[state]}**（{len(items)}）")
+        lines += [f"・<#{t}>" for t in items[:25]] or ["-# まだありません"]
+        if len(items) > 25:
+            lines.append(f"-# ほか {len(items) - 25} 件")
+    return "\n".join(lines)[:1900]
+
+class MediaGuideView(discord.ui.View):
+    """使い方の固定投稿に置く「じぶんの棚」ボタン"""
+    def __init__(self, kind):
+        super().__init__(timeout=None)
+        self.kind = kind
+        b = discord.ui.Button(label=MEDIA_KINDS[kind]["shelf"], style=discord.ButtonStyle.primary, custom_id=f"sk_shelf_{kind}")
+        b.callback = self.open_shelf
+        self.add_item(b)
+
+    async def open_shelf(self, interaction):
+        await ensure_user(interaction.user)
+        await interaction.response.send_message(await media_shelf_text(self.kind, interaction.user.id), ephemeral=True)
 
 ODEKAKE_FORUM_NAME = "おでかけ🗾"
 ODEKAKE_TAGS = [("🗼", "都内")] + [("🗾", lb.split("（")[0]) for lb, _ns in PLACE_GROUPS["都外"]]
@@ -10851,6 +10972,7 @@ def tutorial_embeds():
         "#勉強記録📖　✏️勉強の記録（教材×時間）。最低限の📖はここの時間で判定\n"
         "おでかけ🗾　おでかけの写真と思い出を共有するフォーラム。場所を選ぶと地図にも載る\n"
         "NOKOシネマズ　映画・ドラマ・アニメの感想フォーラム（作品ごとに1スレッド）\n"
+        "NOKO書店　漫画・小説のおすすめと感想のフォーラム（🔖読みたい・✅読んだ）\n"
         "#叱責👹　毎晩の判定結果。晒される場所\n"
         "#つうしんぼ📮　週の通信簿と月間表彰\n"
         "#設定🔧　🛠最低限の設定／🏃ラジオ体操の呼び出し・⏰起床リマインドのON/OFF\n"
@@ -12239,7 +12361,24 @@ CINEMA_GUIDE = ("見た映画・ドラマ・アニメの感想を語る場所で
                 "1. 同じ作品のスレッドがないか探す（あれば、そこに書き込む）\n"
                 "2. なければ、作品名をタイトルにして投稿する\n"
                 "3. タグで「ネタバレなし／あり」と種類を選ぶ\n\n"
+                "投稿の 🔖 見たい ／ ✅ 見た を押すと、下の 🎬 じぶんの棚 に並びます\n"
                 "-# ネタバレなしのスレッドで内容に触れるときは ||こう囲む|| と隠せます")
+BOOK_CH_NAME = "NOKO書店"
+BOOK_TAGS = [("📗", "漫画"), ("📘", "小説"), ("📙", "ライトノベル"), ("🌐", "Web小説"), ("📦", "その他"),
+             ("🔄", "連載中"), ("🏁", "完結"), ("🟢", "ネタバレなし"), ("🔴", "ネタバレあり"), ("🔶", "R15")]
+BOOK_TOPIC = ("漫画・小説のおすすめと感想を語る場所。1作品につき1スレッドで、まず同じ作品のスレッドがないか探してね。\n"
+              "R18作品は投稿できません。中身のページや本文の画像は貼らず、公式のリンクを貼ってね。")
+BOOK_GUIDE_TITLE = "📚 使い方（はじめに読んでね）"
+BOOK_GUIDE = ("漫画・小説のおすすめと感想を語る場所です。\n\n"
+              "1. 同じ作品のスレッドがないか探す（あれば、そこに書き込む）\n"
+              "2. なければ、作品名をタイトルにして投稿する\n"
+              "3. 本文に作者・読める場所のリンク・おすすめポイントを書く\n"
+              "4. タグで媒体（漫画・小説など）と、連載中／完結などを選ぶ\n\n"
+              "投稿の 🔖 読みたい ／ ✅ 読んだ を押すと、下の 📚 じぶんの本棚 に並びます\n\n"
+              "**おねがい**\n"
+              "・R18作品は投稿できません。R15相当のものは R15 タグをつけてください\n"
+              "・中身のページや本文の画像は貼らず、公式のリンクを貼ってください\n"
+              "-# ネタバレなしのスレッドで内容に触れるときは ||こう囲む|| と隠せます")
 TIPS_CH_NAME = "暮らしのtips📚"
 TIPS_TAGS = [("🍳", "レシピ"), ("🛒", "お得・期間限定"), ("🧹", "家事ハック"), ("💤", "ねむり"), ("🏫", "キャンパス周辺"), ("📦", "その他")]
 TIPS_TOPIC = ("暮らしの知恵をストックする場所。レシピ・お店の期間限定・家事ハックなど、後輩の生活を1つ楽にする投稿を。\n"
@@ -12272,6 +12411,11 @@ async def on_thread_create(thread):
     if fid and thread.parent_id == int(fid):
         await on_trip_thread(thread)
         return
+    for kind, m in MEDIA_KINDS.items():
+        mid = await meta_get(m["key"])
+        if mid and thread.parent_id == int(mid):
+            await on_media_thread(thread, kind)
+            return
     tid = await meta_get("ch_tips")
     if not tid or thread.parent_id != int(tid):
         return
@@ -12871,7 +13015,21 @@ async def ensure_tips_forum(guild, cat):
 async def ensure_cinema_forum(guild, cat):
     forum = await _ensure_forum(guild, cat, "cinema", CINEMA_CH_NAME, CINEMA_TAGS, CINEMA_TOPIC)
     if forum:
-        await _ensure_pinned_post_safe(guild, forum, "cinema_guide_thread", CINEMA_GUIDE_TITLE, CINEMA_GUIDE)
+        await _ensure_pinned_post_safe(guild, forum, "cinema_guide_thread", CINEMA_GUIDE_TITLE, CINEMA_GUIDE, MediaGuideView("cinema"))
+        await media_backfill(forum, "cinema")
+    return forum
+
+async def ensure_book_forum(guild, cat):
+    first = not await meta_get("ch_books")
+    forum = await _ensure_forum(guild, cat, "books", BOOK_CH_NAME, BOOK_TAGS, BOOK_TOPIC)
+    if forum:
+        if first:   # タグ必須は作ったときだけ設定する（あとで手で外しても戻さない）
+            try:
+                forum = await forum.edit(require_tag=True)
+            except Exception as e:
+                SETUP_ERRORS.append(f"#{BOOK_CH_NAME} をタグ必須にできませんでした（{e}）")
+        await _ensure_pinned_post_safe(guild, forum, "books_guide_thread", BOOK_GUIDE_TITLE, BOOK_GUIDE, MediaGuideView("book"))
+        await media_backfill(forum, "book")
     return forum
 
 
@@ -13557,6 +13715,7 @@ async def setup_command(interaction):
     audio_state = "あり ✅" if os.path.exists(RADIO_MP3) else f"なし ⚠️ VMに {RADIO_MP3} を置いてください"
     tips_ch = await ensure_tips_forum(guild, cat)
     await ensure_cinema_forum(guild, cat)
+    await ensure_book_forum(guild, cat)
     await ensure_odekake_forum(guild, cat)
     try:
         botlog = await ensure_botlog_channel(guild, cat)
