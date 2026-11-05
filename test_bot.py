@@ -2003,6 +2003,77 @@ async def main():
     check("棚: 固定投稿のボタンはリスタート後も有効", {"sk_shelf_book", "sk_shelf_cinema"} <= {c.custom_id for v in _fake.persistent_views for c in v.children}, True)
     await B.remove_media_post(802)
     check("棚: 投稿を消すと記録も消える", (await B.media_counts(802), "<#802>" in await B.media_shelf_text("book", 84)), ((0, 0), False))
+    # 🎙 講義実況
+    from datetime import datetime as _DT
+    _fri10 = _DT(2026, 11, 6, 10, 31, tzinfo=JST)   # 金2（10:30開始）
+    check("講義実況: 開始直後の時限", (B.lecture_starting_period(_fri10), B.lecture_starting_period(_fri10.replace(hour=11)), B.lecture_current_period(_fri10.replace(hour=11))), (2, None, 2))
+    check("講義実況: 連続コマは最初だけ", (B.course_starts_at("金2,金3", "金", 2), B.course_starts_at("金2,金3", "金", 3), B.course_starts_at("月3,木2", "木", 2), B.course_starts_at(None, "金", 2)), (True, False, True, False))
+    await B.db.execute("INSERT OR REPLACE INTO courses(code,name,nname,teacher,slots) VALUES('LEC1','実況テスト','じっきょう','先生A','金2,金3')")
+    await B.db.execute("INSERT OR REPLACE INTO courses(code,name,nname,teacher,slots) VALUES('LEC2','履修者なし','なし',NULL,'金2')")
+    await B.db.execute("INSERT OR REPLACE INTO courses(code,name,nname,teacher,slots) VALUES('LEC3','別の時限','べつ',NULL,'金3')")
+    _uc_keep = [tuple(r) for r in await (await B.db.execute("SELECT user_id, code FROM user_courses")).fetchall()]   # 他のテストの履修を混ぜない
+    await B.db.execute("DELETE FROM user_courses")
+    await B.db.execute("INSERT INTO user_courses(user_id,code) VALUES('85','LEC1'),('85','LEC3')")
+    await B.db.commit()
+    await B.ensure_user(M(85, "実況する人"))
+    _lmsgs, _lmade, _ldeleted = [], [], []
+    _next = {"id": 5000}
+
+    class _LTh:
+        def __init__(self, tid):
+            self.id, self.last_message_id = tid, tid
+
+        async def send(self, c=None, **k):
+            _next["id"] += 1
+            _lmsgs.append((self.id, c, k))
+            self.last_message_id = _next["id"]
+            return _NS2(id=_next["id"])
+
+        async def fetch_message(self, mid):
+            async def _del():
+                _ldeleted.append(mid)
+            return _NS2(delete=_del)
+    _lthreads = {}
+
+    async def _lcreate(name=None, content=None, **k):
+        _next["id"] += 1
+        th = _LTh(_next["id"])
+        _lthreads[th.id] = th
+        _lmade.append((name, content, k))
+        return _NS2(thread=th)
+    _lf = _NS2(create_thread=_lcreate, available_tags=[_NS2(name="金"), _NS2(name="月")])
+    _gc2, _rb2 = B.bot.get_channel, B.break_on
+    B.bot.get_channel = lambda i: _lf if i == 777001 else _lthreads.get(i)
+    await B.meta_set("ch_lecture", 777001)
+    await B.db.execute("DELETE FROM meta WHERE key='lecture_last_slot'"); await B.db.execute("DELETE FROM lecture_threads"); await B.db.commit()
+    B.break_on = lambda d: True
+    check("講義実況: 長期休暇はお休み", await B.lecture_tick(_fri10), 0)
+    B.break_on = lambda d: False
+    _n1 = await B.lecture_tick(_fri10)
+    check("講義実況: 履修者のいる金2の科目だけ", (_n1, _lmade[0][0], len(_lmade), [t.name for t in _lmade[0][2]["applied_tags"]]), (1, "実況テスト（先生A）", 1, ["金"]))
+    check("講義実況: はじまりの投稿", (_lmsgs[0][1], _lmsgs[0][2]["silent"]), ("🎙 **11/6（金）2限** はじまり", True))
+    check("講義実況: 同じ時限は1回だけ", await B.lecture_tick(_fri10), 0)
+    _fri12 = _DT(2026, 11, 6, 13, 1, tzinfo=JST)   # 金3：連続コマの LEC1 は上げず、LEC3 だけ
+    check("講義実況: 連続コマは上げない", (await B.lecture_tick(_fri12), _lmade[-1][0]), (1, "別の時限"))
+    _d0 = (await (await B.db.execute("SELECT divider_id FROM lecture_threads WHERE code='LEC1'")).fetchone())["divider_id"]
+    await B.db.execute("DELETE FROM meta WHERE key='lecture_last_slot'"); await B.db.commit()
+    await B.lecture_tick(_DT(2026, 11, 13, 10, 31, tzinfo=JST))
+    check("講義実況: 誰も書かなかった区切りは次で消す・スレッドは増えない", (str(_ldeleted[-1]), len(_lmade)), (_d0, 2))
+    _lth = _lthreads[int((await (await B.db.execute("SELECT thread_id FROM lecture_threads WHERE code='LEC1'")).fetchone())["thread_id"])]
+    _lth.last_message_id = 999999   # 誰かが書いた
+    _nd = len(_ldeleted)
+    await B.db.execute("DELETE FROM meta WHERE key='lecture_last_slot'"); await B.db.commit()
+    await B.lecture_tick(_DT(2026, 11, 20, 10, 31, tzinfo=JST))
+    check("講義実況: 書き込みがあった区切りは残す", len(_ldeleted), _nd)
+    _i = _press(M(85, "実況する人")); await B.LectureGuideView().mine_btn.callback(_i)
+    check("講義実況: 履修科目のスレッド", (_i.followup.sent[0].startswith("📚"), _i.followup.sent[0].count("<#")), (True, 2))
+    _i = _press(M(85, "実況する人")); await B.LectureGuideView().now_btn.callback(_i)
+    check("講義実況: いまの授業が開く", len(_i.response.sent), 1)
+    B.bot.get_channel, B.break_on = _gc2, _rb2
+    await B.db.execute("DELETE FROM meta WHERE key='ch_lecture'"); await B.db.execute("DELETE FROM user_courses WHERE user_id='85'")
+    await B.db.executemany("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES(?,?)", _uc_keep)
+    await B.db.commit()
+    check("講義実況: 固定投稿のボタンは再起動後も有効", {"sk_lec_now", "sk_lec_mine"} <= {c.custom_id for v in _fake.persistent_views for c in v.children}, True)
     check("NOKOシネマズ: 名前とタグ", (B.CINEMA_CH_NAME, "ネタバレあり" in [n for _e, n in B.CINEMA_TAGS]), ("NOKOシネマズ", True))
     # 構文チェック：押した人への返事より前に遅い処理（投稿・VC接続・外部通信・画像づくり）をしていないか
     check("返事より前に遅い処理をしている箇所がない", _late_reply_handlers(open(B.__file__, encoding="utf-8").read()), [])

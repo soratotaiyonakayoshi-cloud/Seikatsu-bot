@@ -241,6 +241,7 @@ CREATE TABLE IF NOT EXISTS media_marks(
   thread_id TEXT NOT NULL, user_id TEXT NOT NULL, state TEXT NOT NULL, day TEXT, ts INTEGER, PRIMARY KEY(thread_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_media_marks_user ON media_marks(user_id, state);
+CREATE TABLE IF NOT EXISTS lecture_threads(code TEXT PRIMARY KEY, thread_id TEXT NOT NULL, divider_id TEXT, ts INTEGER);
 CREATE TABLE IF NOT EXISTS study_logs(
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, day TEXT NOT NULL, subject TEXT NOT NULL,
   minutes INTEGER NOT NULL, note TEXT, source TEXT NOT NULL DEFAULT 'manual', msg_id TEXT, ts INTEGER
@@ -600,6 +601,7 @@ class SeikatsuBot(discord.Client):
         self.add_view(EraiView())
         self.add_view(OdekakePanelView())   # フォーラムの固定投稿に置くパネル（VIEW_FACTORY の外）
         self.add_view(MediaGuideView("book"))
+        self.add_view(LectureGuideView())
         self.add_view(MediaGuideView("cinema"))
         registered = {type(v) for v in self.persistent_views}
         for V in VIEW_FACTORY.values():   # /setup で置くパネルは漏れなく登録（新しいパネルの登録忘れ＝ボタンが反応しない を防ぐ）
@@ -3151,6 +3153,10 @@ async def judge_loop():
         await ops_daily(now)   # 🔒 yt-dlpの週1自動更新・DBの外部バックアップ
     except Exception as e:
         await bot_alert(f"⚠️ 定期メンテでエラー：{e!r}"[:500], key="ops_err", cooldown_h=24)
+    try:
+        await lecture_tick(now)   # 🎙 授業の開始時刻に実況スレッドを上げる
+    except Exception as e:
+        print(f"講義実況エラー: {e!r}", flush=True)
     try:
         await study_timer_warn(now)   # ⏱ 止め忘れの勉強タイマー
     except Exception as e:
@@ -10174,6 +10180,8 @@ async def remove_trip_post(thread_id):
 @bot.event
 async def on_raw_thread_delete(payload):
     await remove_trip_post(payload.thread_id)
+    await db.execute("DELETE FROM lecture_threads WHERE thread_id=?", (str(payload.thread_id),))
+    await db.commit()
     await remove_media_post(payload.thread_id)
 
 @bot.event
@@ -10625,6 +10633,168 @@ class MediaGuideView(discord.ui.View):
         await ensure_user(interaction.user)
         await interaction.response.send_message(await media_shelf_text(self.kind, interaction.user.id), ephemeral=True)
 
+# ---- 🎙 講義実況：科目ごとに1スレッド。授業の開始時刻に区切りを投稿して一番上へ（履修者がいる科目だけ） ----
+LECTURE_CH_NAME = "講義実況🎙"
+LECTURE_TAGS = [("📅", ch) for ch in DAY_CHARS[:6]]
+LECTURE_TOPIC = "授業を聞きながら実況する場所。科目ごとに1スレッドで、授業が始まると一番上に上がります。"
+LECTURE_GUIDE_TITLE = "🎙 使い方はここから"
+LECTURE_GUIDE = ("授業を聞きながら、ゆるく実況する場所です。\n\n"
+                 "・スレッドは科目ごとに1つです。Bot が自動で作ります\n"
+                 "・授業の開始時刻に「🎙 はじまり」が投稿され、そのスレッドが一番上に上がります\n"
+                 "・履修登録（#課題📚）している人がいる科目だけが対象です\n"
+                 "・通知がほしい科目は、スレッドの「フォロー」を使ってください\n\n"
+                 "🎙 いまの授業：今の時間の自分の科目へ飛べます\n"
+                 "📚 履修科目のスレッド：自分の科目のスレッドがまとめて出ます\n"
+                 "-# 時間割にない授業（集中講義など）は、普通に投稿してスレッドを作ってOKです")
+LECTURE_MINUTES = 90
+
+def lecture_period_starts(now):
+    """{時限: その日の開始時刻}"""
+    out = {}
+    for pd, hm in PERIOD_START.items():
+        h, m = hm.split(":")
+        out[pd] = now.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
+    return out
+
+def lecture_starting_period(now, window_min=15):
+    """いま開始直後の時限（開始から window_min 分以内。再起動で少し遅れても拾う）。無ければ None"""
+    for pd, st in lecture_period_starts(now).items():
+        if st <= now < st + timedelta(minutes=window_min):
+            return pd
+    return None
+
+def lecture_current_period(now):
+    for pd, st in lecture_period_starts(now).items():
+        if st <= now < st + timedelta(minutes=LECTURE_MINUTES):
+            return pd
+    return None
+
+def course_has_slot(slots, dc, pd):
+    return f"{dc}{pd}" in {x.strip() for x in (slots or "").split(",")}
+
+def course_starts_at(slots, dc, pd):
+    """その時限から始まる授業か（金2・金3の連続コマは金2だけ True）"""
+    return course_has_slot(slots, dc, pd) and not course_has_slot(slots, dc, pd - 1)
+
+def lecture_thread_title(c):
+    return (c["name"] + (f"（{c['teacher']}）" if c["teacher"] else ""))[:100]
+
+async def _lecture_forum():
+    fid = await meta_get("ch_lecture")
+    return bot.get_channel(int(fid)) if fid else None
+
+async def _lecture_thread_of(thread_id):
+    th = bot.get_channel(int(thread_id))
+    if th is not None:
+        return th
+    try:
+        return await bot.fetch_channel(int(thread_id))
+    except discord.NotFound:
+        return None
+
+async def ensure_lecture_thread(forum, c):
+    """科目のスレッド（無ければ作る）。消されていたら作り直す"""
+    async with db.execute("SELECT thread_id FROM lecture_threads WHERE code=?", (c["code"],)) as cur:
+        r = await cur.fetchone()
+    if r:
+        th = await _lecture_thread_of(r["thread_id"])
+        if th is not None:
+            return th
+    days = course_day_chars(c["slots"])
+    tags = [t for t in getattr(forum, "available_tags", []) if t.name in days][:5]
+    head = f"🎙 **{c['name']}** の実況スレッド" + (f"\n-# {c['teacher']}" if c["teacher"] else "") + (f"\n-# {c['slots']}" if c["slots"] else "")
+    made = await forum.create_thread(name=lecture_thread_title(c), content=head, **({"applied_tags": tags} if tags else {}))
+    await db.execute("INSERT OR REPLACE INTO lecture_threads(code,thread_id,divider_id,ts) VALUES(?,?,NULL,?)",
+                     (c["code"], str(made.thread.id), int(now_jst().timestamp())))
+    await db.commit()
+    return made.thread
+
+async def post_lecture_divider(forum, c, now, pd):
+    """🎙 はじまり を投稿して一番上へ。前回の区切りのあと誰も書いていなければ消す（溜まらないように）"""
+    th = await ensure_lecture_thread(forum, c)
+    async with db.execute("SELECT divider_id FROM lecture_threads WHERE code=?", (c["code"],)) as cur:
+        old = (await cur.fetchone())["divider_id"]
+    if old and getattr(th, "last_message_id", None) == int(old):
+        try:
+            await (await th.fetch_message(int(old))).delete()
+        except Exception:
+            pass
+    today = now.date()
+    msg = await th.send(f"🎙 **{md(today.isoformat())}（{DAY_CHARS[today.weekday()]}）{pd}限** はじまり", silent=True)
+    await db.execute("UPDATE lecture_threads SET divider_id=?, ts=? WHERE code=?", (str(msg.id), int(now.timestamp()), c["code"]))
+    await db.commit()
+
+async def lecture_tick(now=None):
+    """授業の開始時刻に、その時限から始まる科目の実況スレッドを上げる（1時限1回・長期休暇はお休み）。投稿した数を返す"""
+    now = now or now_jst()
+    pd = lecture_starting_period(now)
+    if pd is None or break_on(now):
+        return 0
+    slot = f"{day_str(now)}:{pd}"
+    if await meta_get("lecture_last_slot") == slot:
+        return 0
+    forum = await _lecture_forum()
+    if not forum:
+        return 0
+    await meta_set("lecture_last_slot", slot)   # 先に記録して二重投稿を防ぐ
+    dc = DAY_CHARS[now.weekday()]
+    async with db.execute("SELECT DISTINCT c.* FROM courses c JOIN user_courses u ON u.code=c.code") as cur:
+        rows = [r for r in await cur.fetchall() if course_starts_at(r["slots"], dc, pd)]
+    n = 0
+    for c in rows:
+        try:
+            await post_lecture_divider(forum, c, now, pd)
+            n += 1
+        except Exception as e:
+            print(f"講義実況エラー（{c['code']}）: {e!r}", flush=True)
+            await bot_alert(f"⚠️ 講義実況のスレッド更新でエラー：{e!r}"[:400], key="lecture_err", cooldown_h=6)
+    return n
+
+async def lecture_my_rows(uid, thread_only=False):
+    rows = list(await user_course_rows(uid))
+    if not thread_only:
+        return rows
+    out = []
+    for c in rows:
+        async with db.execute("SELECT thread_id FROM lecture_threads WHERE code=?", (c["code"],)) as cur:
+            r = await cur.fetchone()
+        if r:
+            out.append((c, r["thread_id"]))
+    return out
+
+class LectureGuideView(discord.ui.View):
+    """固定投稿のボタン"""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🎙 いまの授業", style=discord.ButtonStyle.primary, custom_id="sk_lec_now")
+    async def now_btn(self, interaction, button):
+        await ensure_user(interaction.user)
+        now = now_jst()
+        pd = lecture_current_period(now)
+        dc = DAY_CHARS[now.weekday()]
+        if pd is None:
+            await interaction.response.send_message("いまは授業の時間ではありません。", ephemeral=True)
+            return
+        hits = [f"・<#{t}>" for c, t in await lecture_my_rows(interaction.user.id, True) if course_has_slot(c["slots"], dc, pd)]
+        await interaction.response.send_message(f"🎙 **{dc}{pd}限** の自分の科目\n" + ("\n".join(hits) if hits else "-# この時間の履修科目はありません（#課題📚 の 🎓 で登録できます）"), ephemeral=True)
+
+    @discord.ui.button(label="📚 履修科目のスレッド", style=discord.ButtonStyle.secondary, custom_id="sk_lec_mine")
+    async def mine_btn(self, interaction, button):
+        await ensure_user(interaction.user)
+        await interaction.response.defer(ephemeral=True)   # まだ無いスレッドはここで作る
+        rows = await lecture_my_rows(interaction.user.id)
+        if not rows:
+            await interaction.followup.send("まだ履修科目がありません。#課題📚 の 🎓 で登録するとスレッドが使えます。", ephemeral=True)
+            return
+        forum = await _lecture_forum()
+        lines = ["📚 **履修科目のスレッド**"]
+        for c in rows[:30]:
+            if forum:
+                th = await ensure_lecture_thread(forum, c)
+                lines.append(f"・<#{th.id}>")
+        await interaction.followup.send("\n".join(lines)[:1900], ephemeral=True)
+
 ODEKAKE_FORUM_NAME = "おでかけ🗾"
 ODEKAKE_TAGS = [("🗼", "都内")] + [("🗾", lb.split("（")[0]) for lb, _ns in PLACE_GROUPS["都外"]]
 ODEKAKE_TOPIC = ("おでかけの写真と、そこで何をしたかを共有する場所。写真を貼ってタイトルをつけ、思い出を書いて投稿してね。\n"
@@ -10973,6 +11143,7 @@ def tutorial_embeds():
         "おでかけ🗾　おでかけの写真と思い出を共有するフォーラム。場所を選ぶと地図にも載る\n"
         "NOKOシネマズ　映画・ドラマ・アニメの感想フォーラム（作品ごとに1スレッド）\n"
         "NOKO書店　漫画・小説のおすすめと感想のフォーラム（🔖読みたい・✅読んだ）\n"
+        "講義実況🎙　科目ごとの実況スレッド。授業が始まると一番上に上がる\n"
         "#叱責👹　毎晩の判定結果。晒される場所\n"
         "#つうしんぼ📮　週の通信簿と月間表彰\n"
         "#設定🔧　🛠最低限の設定／🏃ラジオ体操の呼び出し・⏰起床リマインドのON/OFF\n"
@@ -13019,6 +13190,12 @@ async def ensure_cinema_forum(guild, cat):
         await media_backfill(forum, "cinema")
     return forum
 
+async def ensure_lecture_forum(guild, cat):
+    forum = await _ensure_forum(guild, cat, "lecture", LECTURE_CH_NAME, LECTURE_TAGS, LECTURE_TOPIC)
+    if forum:
+        await _ensure_pinned_post_safe(guild, forum, "lecture_guide_thread", LECTURE_GUIDE_TITLE, LECTURE_GUIDE, LectureGuideView())
+    return forum
+
 async def ensure_book_forum(guild, cat):
     first = not await meta_get("ch_books")
     forum = await _ensure_forum(guild, cat, "books", BOOK_CH_NAME, BOOK_TAGS, BOOK_TOPIC)
@@ -13716,6 +13893,7 @@ async def setup_command(interaction):
     tips_ch = await ensure_tips_forum(guild, cat)
     await ensure_cinema_forum(guild, cat)
     await ensure_book_forum(guild, cat)
+    await ensure_lecture_forum(guild, cat)
     await ensure_odekake_forum(guild, cat)
     try:
         botlog = await ensure_botlog_channel(guild, cat)
