@@ -2069,11 +2069,29 @@ async def main():
     check("講義実況: 履修科目のスレッド", (_i.followup.sent[0].startswith("📚"), _i.followup.sent[0].count("<#")), (True, 2))
     _i = _press(M(85, "実況する人")); await B.LectureGuideView().now_btn.callback(_i)
     check("講義実況: いまの授業が開く", len(_i.response.sent), 1)
+    # 🔔 授業開始の通知：外した科目は上げない（スレッドは残る）・スレッドに設定変更を残す
+    import sys as _sys2
+    _i = _press(M(85, "実況する人")); await B.LectureGuideView().bump_btn.callback(_i)
+    _bsel = _i.response.sent and None
+    _bv = B.LectureBumpSelect(list(await B.user_course_rows(85)), await B.lecture_quiet_codes())
+    check("通知の設定: 最初は全部ON", sorted(o.value for o in _bv.options if o.default), ["LEC1", "LEC3"])
+    _sys2.modules["discord.ui.select"].selected_values.set({_bv.custom_id: ["LEC3"]})   # LEC1 のチェックを外す
+    _nmsg = len(_lmsgs)
+    _i = _press(M(85, "実況する人")); await _bv.callback(_i)
+    check("通知の設定: 外すと 🔕 になり、スレッドにも残る", ("🔕 実況テスト" in _i.response.edited[0]["content"], await B.lecture_quiet_codes(), "止め" in _lmsgs[-1][1], len(_lmsgs) - _nmsg),
+          (True, {"LEC1"}, True, 1))
+    await B.db.execute("DELETE FROM meta WHERE key='lecture_last_slot'"); await B.db.commit()
+    check("通知の設定: 🔕 の科目は授業時間に上げない", await B.lecture_tick(_DT(2026, 11, 27, 10, 31, tzinfo=JST)), 0)
+    _bv2 = B.LectureBumpSelect(list(await B.user_course_rows(85)), await B.lecture_quiet_codes())
+    _sys2.modules["discord.ui.select"].selected_values.set({_bv2.custom_id: ["LEC1", "LEC3"]})
+    _i = _press(M(85, "実況する人")); await _bv2.callback(_i)
+    await B.db.execute("DELETE FROM meta WHERE key='lecture_last_slot'"); await B.db.commit()
+    check("通知の設定: 戻すとまた上がる", (await B.lecture_quiet_codes(), await B.lecture_tick(_DT(2026, 12, 4, 10, 31, tzinfo=JST))), (set(), 1))
     B.bot.get_channel, B.break_on = _gc2, _rb2
     await B.db.execute("DELETE FROM meta WHERE key='ch_lecture'"); await B.db.execute("DELETE FROM user_courses WHERE user_id='85'")
     await B.db.executemany("INSERT OR IGNORE INTO user_courses(user_id,code) VALUES(?,?)", _uc_keep)
     await B.db.commit()
-    check("講義実況: 固定投稿のボタンは再起動後も有効", {"sk_lec_now", "sk_lec_mine"} <= {c.custom_id for v in _fake.persistent_views for c in v.children}, True)
+    check("講義実況: 固定投稿のボタンは再起動後も有効", {"sk_lec_now", "sk_lec_mine", "sk_lec_bump"} <= {c.custom_id for v in _fake.persistent_views for c in v.children}, True)
     check("NOKOシネマズ: 名前とタグ", (B.CINEMA_CH_NAME, "ネタバレあり" in [n for _e, n in B.CINEMA_TAGS]), ("NOKOシネマズ", True))
     # 構文チェック：押した人への返事より前に遅い処理（投稿・VC接続・外部通信・画像づくり）をしていないか
     check("返事より前に遅い処理をしている箇所がない", _late_reply_handlers(open(B.__file__, encoding="utf-8").read()), [])

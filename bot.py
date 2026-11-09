@@ -241,6 +241,7 @@ CREATE TABLE IF NOT EXISTS media_marks(
   thread_id TEXT NOT NULL, user_id TEXT NOT NULL, state TEXT NOT NULL, day TEXT, ts INTEGER, PRIMARY KEY(thread_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_media_marks_user ON media_marks(user_id, state);
+CREATE TABLE IF NOT EXISTS lecture_quiet(code TEXT PRIMARY KEY, user_id TEXT, ts INTEGER);
 CREATE TABLE IF NOT EXISTS lecture_threads(code TEXT PRIMARY KEY, thread_id TEXT NOT NULL, divider_id TEXT, ts INTEGER);
 CREATE TABLE IF NOT EXISTS study_logs(
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, day TEXT NOT NULL, subject TEXT NOT NULL,
@@ -10645,6 +10646,8 @@ LECTURE_GUIDE = ("授業を聞きながら、ゆるく実況する場所です�
                  "・通知がほしい科目は、スレッドの「フォロー」を使ってください\n\n"
                  "🎙 いまの授業：今の時間の自分の科目へ飛べます\n"
                  "📚 履修科目のスレッド：自分の科目のスレッドがまとめて出ます\n"
+                 "🔔 授業開始の通知：実況しない科目（PCを開けない授業など）は、ここで止められます。"
+                 "止めてもスレッドは残るので、その科目の連絡に使えます（履修者みんなに反映）\n"
                  "-# 時間割にない授業（集中講義など）は、普通に投稿してスレッドを作ってOKです")
 LECTURE_MINUTES = 90
 
@@ -10738,7 +10741,8 @@ async def lecture_tick(now=None):
         return 0
     await meta_set("lecture_last_slot", slot)   # 先に記録して二重投稿を防ぐ
     dc = DAY_CHARS[now.weekday()]
-    async with db.execute("SELECT DISTINCT c.* FROM courses c JOIN user_courses u ON u.code=c.code") as cur:
+    async with db.execute("SELECT DISTINCT c.* FROM courses c JOIN user_courses u ON u.code=c.code "
+                          "WHERE c.code NOT IN (SELECT code FROM lecture_quiet)") as cur:   # 🔕 通知を止めた科目は上げない
         rows = [r for r in await cur.fetchall() if course_starts_at(r["slots"], dc, pd)]
     n = 0
     for c in rows:
@@ -10761,6 +10765,45 @@ async def lecture_my_rows(uid, thread_only=False):
         if r:
             out.append((c, r["thread_id"]))
     return out
+
+async def lecture_quiet_codes():
+    async with db.execute("SELECT code FROM lecture_quiet") as c:
+        return {r["code"] for r in await c.fetchall()}
+
+class LectureBumpSelect(discord.ui.Select):
+    """🔔 授業開始の通知：選んだ科目だけ授業時間に上げる（外した科目は 🔕。科目ごとの設定＝履修者みんなに反映）"""
+    def __init__(self, rows, quiet):
+        self.rows = {r["code"]: r for r in rows[:25]}
+        opts = [discord.SelectOption(label=r["name"][:100], value=r["code"], description=(r["slots"] or "時限なし")[:100],
+                                     default=r["code"] not in quiet) for r in rows[:25]]
+        super().__init__(placeholder="🔔 授業開始の通知をする科目（外すと 🔕）", options=opts, min_values=0, max_values=len(opts))
+
+    async def callback(self, interaction):
+        on = set(self.values)
+        quiet = await lecture_quiet_codes()
+        now = int(now_jst().timestamp())
+        changed = []
+        for code, c in self.rows.items():
+            if code in on and code in quiet:
+                await db.execute("DELETE FROM lecture_quiet WHERE code=?", (code,))
+                changed.append((c, True))
+            elif code not in on and code not in quiet:
+                await db.execute("INSERT OR REPLACE INTO lecture_quiet(code,user_id,ts) VALUES(?,?,?)", (code, str(interaction.user.id), now))
+                changed.append((c, False))
+        await db.commit()
+        lines = ["🔔 授業開始の通知を更新しました" if changed else "変更はありません"]
+        lines += [("🔔 " if v else "🔕 ") + c["name"] for c, v in changed]
+        await interaction.response.edit_message(content="\n".join(lines), view=None)
+        for c, v in changed:   # スレッドにも残す（履修者みんなに関わる設定なので）
+            async with db.execute("SELECT thread_id FROM lecture_threads WHERE code=?", (c["code"],)) as cur:
+                r = await cur.fetchone()
+            th = await _lecture_thread_of(r["thread_id"]) if r else None
+            if th is not None:
+                try:
+                    await th.send(f"{'🔔' if v else '🔕'} {interaction.user.display_name} さんが授業開始の通知を{'再開' if v else '止め'}ました"
+                                  + ("" if v else "（授業時間に上がらなくなります。連絡用には引き続き使えます）"), silent=True)
+                except Exception as e:
+                    print(f"講義実況の通知設定の投稿に失敗: {e!r}", flush=True)
 
 class LectureGuideView(discord.ui.View):
     """固定投稿のボタン"""
@@ -10794,6 +10837,20 @@ class LectureGuideView(discord.ui.View):
                 th = await ensure_lecture_thread(forum, c)
                 lines.append(f"・<#{th.id}>")
         await interaction.followup.send("\n".join(lines)[:1900], ephemeral=True)
+
+    @discord.ui.button(label="🔔 授業開始の通知", style=discord.ButtonStyle.secondary, custom_id="sk_lec_bump")
+    async def bump_btn(self, interaction, button):
+        await ensure_user(interaction.user)
+        rows = await lecture_my_rows(interaction.user.id)
+        if not rows:
+            await interaction.response.send_message("まだ履修科目がありません。#課題📚 の 🎓 で登録してください。", ephemeral=True)
+            return
+        quiet = await lecture_quiet_codes()
+        v = discord.ui.View(timeout=600)
+        v.add_item(LectureBumpSelect(rows, quiet))
+        await interaction.response.send_message(
+            "🔔 **授業開始の通知をする科目**を選んでください（チェックを外すと 🔕 になり、授業時間にスレッドが上がりません）\n"
+            "-# 科目ごとの設定なので、履修者みんなに反映されます。止めてもスレッドは残ります", view=v, ephemeral=True)
 
 ODEKAKE_FORUM_NAME = "おでかけ🗾"
 ODEKAKE_TAGS = [("🗼", "都内")] + [("🗾", lb.split("（")[0]) for lb, _ns in PLACE_GROUPS["都外"]]
